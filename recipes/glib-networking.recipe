@@ -12,19 +12,25 @@ class Recipe(recipe.Recipe):
     tarball_checksum = '1f185aaef094123f8e25d8fa55661b3fd71020163a0174adb35a37685cda613b'
 
     meson_options = {'libproxy': 'disabled', 'gnome_proxy': 'disabled',
-                     'gnutls': 'disabled', 'openssl': 'enabled',
+                     'gnutls': 'enabled', 'openssl': 'enabled',
                      # Also build static modules on all platforms
                      'static_modules': 'true'}
-    deps = ['glib']
+    deps = ['glib', 'gnutls']
     # openssl on Linux
     use_system_libs = True
 
     # https://gitlab.gnome.org/GNOME/glib-networking/-/merge_requests/229
     patches = [name + '/0001-Don-t-try-to-use-keychain-CA-certificates-on-iOS.patch']
 
-    files_misc = ['%(libdir)s/gio/modules/libgioopenssl%(mext)s']
+    files_misc = [
+        '%(libdir)s/gio/modules/libgioopenssl%(mext)s',
+        '%(libdir)s/gio/modules/libgiognutls.so'
+    ]
     files_lang = ['glib-networking']
-    files_devel = ['%(libdir)s/gio/modules/libgioopenssl.a']
+    files_devel = [
+        '%(libdir)s/gio/modules/libgioopenssl.a',
+        '%(libdir)s/gio/modules/libgiognutls.a'
+    ]
 
     def prepare(self):
         # Pick system openssl if on Linux and not cross-compiling
