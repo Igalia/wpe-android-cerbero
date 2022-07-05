@@ -1,17 +1,17 @@
-From f0189701327599ed1f3b100492acb646aa2d2388 Mon Sep 17 00:00:00 2001
+From b097fd62290e287753ef64790d853b0c8038894b Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Fernando=20Jim=C3=A9nez=20Moreno?= <ferjmoreno@gmail.com>
 Date: Tue, 25 May 2021 13:56:14 +0200
-Subject: [PATCH xserver 5/9] Android: terminate process
+Subject: [PATCH] Android: terminate process
 
 ---
  .../Launcher/glib/ProcessLauncherGLib.cpp     | 34 ++++++++++++++-----
  1 file changed, 26 insertions(+), 8 deletions(-)
 
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
-index 1b6e0c1415b6..ae6687f59f25 100644
+index 27d513053fab..1ceb33d32323 100644
 --- a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
 +++ b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
-@@ -106,25 +106,29 @@ void ProcessLauncher::launchProcess()
+@@ -74,25 +74,29 @@ void ProcessLauncher::launchProcess()
  {
      IPC::Connection::SocketPair socketPair = IPC::Connection::createPlatformConnection(IPC::Connection::ConnectionOptions::SetCloexecOnServer);
  
@@ -48,7 +48,7 @@ index 1b6e0c1415b6..ae6687f59f25 100644
          jniEnv->DeleteLocalRef(fdArray);
          jniEnv->DeleteLocalRef(jClass);
      }
-@@ -142,7 +146,21 @@ void ProcessLauncher::terminateProcess()
+@@ -110,7 +114,21 @@ void ProcessLauncher::terminateProcess()
          return;
      }
  
@@ -72,5 +72,5 @@ index 1b6e0c1415b6..ae6687f59f25 100644
  
  void ProcessLauncher::platformInvalidate()
 -- 
-2.30.2
+2.37.0
 

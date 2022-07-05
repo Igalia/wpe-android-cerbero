@@ -1,28 +1,29 @@
-From 43d2c8ffac7832fd84b528c6fb37dc19d153f43e Mon Sep 17 00:00:00 2001
+From aaa761d4ada8e01d773a8c077b2f7db9e227cdef Mon Sep 17 00:00:00 2001
 From: Zan Dobersek <zdobersek@igalia.com>
 Date: Mon, 1 Nov 2021 18:54:23 +0100
-Subject: [PATCH xserver 4/9] [PATCH] Android: spawn WPEWebProcess and
- WPENetworkProcess services
+Subject: [PATCH] Android: spawn WPEWebProcess and WPENetworkProcess services
 
 ---
- .../Launcher/glib/ProcessLauncherGLib.cpp     | 122 ++++--------------
- 1 file changed, 25 insertions(+), 97 deletions(-)
+ .../Launcher/glib/ProcessLauncherGLib.cpp     | 129 ++++--------------
+ 1 file changed, 24 insertions(+), 105 deletions(-)
 
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
-index b0d079fdd62f..1b6e0c1415b6 100644
+index 124bfc3f16e8..27d513053fab 100644
 --- a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
 +++ b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
-@@ -42,6 +42,9 @@
- #include <wtf/text/CString.h>
- #include <wtf/text/WTFString.h>
- 
+@@ -31,9 +31,11 @@
+ #include "Connection.h"
+ #include "FlatpakLauncher.h"
+ #include "ProcessExecutablePath.h"
 +#include <dlfcn.h>
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <glib.h>
 +#include <jni.h>
-+
- namespace WebKit {
- 
- #if OS(LINUX)
-@@ -103,99 +106,28 @@ void ProcessLauncher::launchProcess()
+ #include <wtf/FileSystem.h>
+ #include <wtf/RunLoop.h>
+ #include <wtf/UniStdExtras.h>
+@@ -72,108 +74,29 @@ void ProcessLauncher::launchProcess()
  {
      IPC::Connection::SocketPair socketPair = IPC::Connection::createPlatformConnection(IPC::Connection::ConnectionOptions::SetCloexecOnServer);
  
@@ -43,25 +44,6 @@ index b0d079fdd62f..1b6e0c1415b6 100644
 -    default:
 -        ASSERT_NOT_REACHED();
 -        return;
--    }
--
--    realExecutablePath = FileSystem::fileSystemRepresentation(executablePath);
--    GUniquePtr<gchar> processIdentifier(g_strdup_printf("%" PRIu64, m_launchOptions.processIdentifier.toUInt64()));
--    GUniquePtr<gchar> webkitSocket(g_strdup_printf("%d", socketPair.client));
--    unsigned nargs = 4; // size of the argv array for g_spawn_async()
--
--#if ENABLE(DEVELOPER_MODE)
--    Vector<CString> prefixArgs;
--    if (!m_launchOptions.processCmdPrefix.isNull()) {
--        for (auto& arg : m_launchOptions.processCmdPrefix.split(' '))
--            prefixArgs.append(arg.utf8());
--        nargs += prefixArgs.size();
--    }
--
--    bool configureJSCForTesting = false;
--    if (m_launchOptions.processType == ProcessLauncher::ProcessType::Web && m_client && m_client->shouldConfigureJSCForTesting()) {
--        configureJSCForTesting = true;
--        nargs++;
 +    // Android prohibits the forking syscall on non-rooted devices, so we need to
 +    // provide separate services equivalent to WPEWebProcess and WPENetworkProcess
 +    // that are spawned from the Java part.
@@ -84,6 +66,25 @@ index b0d079fdd62f..1b6e0c1415b6 100644
 +        jniEnv->DeleteLocalRef(fdArray);
 +        jniEnv->DeleteLocalRef(jClass);
      }
+ 
+-    realExecutablePath = FileSystem::fileSystemRepresentation(executablePath);
+-    GUniquePtr<gchar> processIdentifier(g_strdup_printf("%" PRIu64, m_launchOptions.processIdentifier.toUInt64()));
+-    GUniquePtr<gchar> webkitSocket(g_strdup_printf("%d", socketPair.client));
+-    unsigned nargs = 4; // size of the argv array for g_spawn_async()
+-
+-#if ENABLE(DEVELOPER_MODE)
+-    Vector<CString> prefixArgs;
+-    if (!m_launchOptions.processCmdPrefix.isNull()) {
+-        for (auto& arg : m_launchOptions.processCmdPrefix.split(' '))
+-            prefixArgs.append(arg.utf8());
+-        nargs += prefixArgs.size();
+-    }
+-
+-    bool configureJSCForTesting = false;
+-    if (m_launchOptions.processType == ProcessLauncher::ProcessType::Web && m_client && m_client->shouldConfigureJSCForTesting()) {
+-        configureJSCForTesting = true;
+-        nargs++;
+-    }
 -#endif
 -
 -    char** argv = g_newa(char*, nargs);
@@ -102,6 +103,9 @@ index b0d079fdd62f..1b6e0c1415b6 100644
 -#endif
 -    argv[i++] = nullptr;
 -
+-    // Warning: do not set a child setup function, because we want GIO to be able to spawn with
+-    // posix_spawn() rather than fork()/exec(), in order to better accomodate applications that use
+-    // a huge amount of memory or address space in the UI process, like Eclipse.
 -    GRefPtr<GSubprocessLauncher> launcher = adoptGRef(g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_INHERIT_FDS));
 -    g_subprocess_launcher_take_fd(launcher.get(), socketPair.client, socketPair.client);
 -
@@ -114,6 +118,11 @@ index b0d079fdd62f..1b6e0c1415b6 100644
 -
 -    if (sandboxEnv)
 -        sandboxEnabled = !strcmp(sandboxEnv, "1");
+-
+-#if !USE(SYSTEM_MALLOC)
+-    if (RUNNING_ON_VALGRIND)
+-        sandboxEnabled = false;
+-#endif
 -
 -    if (sandboxEnabled && isFlatpakSpawnUsable())
 -        process = flatpakSpawn(launcher.get(), m_launchOptions, argv, socketPair.client, &error.outPtr());
@@ -140,10 +149,11 @@ index b0d079fdd62f..1b6e0c1415b6 100644
 -    // Don't expose the parent socket to potential future children.
 -    if (!setCloseOnExec(socketPair.client))
 -        RELEASE_ASSERT_NOT_REACHED();
- 
+-
      // We've finished launching the process, message back to the main run loop.
-     RunLoop::main().dispatch([protectedThis = makeRef(*this), this, serverSocket = socketPair.server] {
-@@ -210,11 +142,7 @@ void ProcessLauncher::terminateProcess()
+     RunLoop::main().dispatch([protectedThis = Ref { *this }, this, serverSocket = socketPair.server] {
+         didFinishLaunchingProcess(m_processIdentifier, serverSocket);
+@@ -187,11 +110,7 @@ void ProcessLauncher::terminateProcess()
          return;
      }
  
@@ -157,5 +167,5 @@ index b0d079fdd62f..1b6e0c1415b6 100644
  
  void ProcessLauncher::platformInvalidate()
 -- 
-2.30.2
+2.37.0
 
