@@ -1,0 +1,86 @@
+From 459c2a1a27b8d2ad7ec248bcf6857e3addeff395 Mon Sep 17 00:00:00 2001
+From: Philippe Normand <philn@igalia.com>
+Date: Fri, 2 Sep 2022 01:18:33 -0700
+Subject: [PATCH 01/25] Merge 254093@main - [GStreamer][MediaStream] Build
+ failing for GStreamer versions < 1.18
+ https://bugs.webkit.org/show_bug.cgi?id=244665
+
+Reviewed by Xabier Rodriguez-Calvar.
+
+gst_element_get_current_running_time() is GStreamer 1.18 API, so for older versions we use a local
+vendored copy of the function.
+
+* Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.cpp:
+(WebCore::webkitGstElementGetCurrentRunningTime):
+* Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.h:
+
+Canonical link: https://commits.webkit.org/254093@main
+
+(cherry picked from commit 3d30410f49ef93a90d8b9c084273abb23dd38b16)
+---
+ .../graphics/gstreamer/GStreamerCommon.cpp    | 30 +++++++++++++++++++
+ .../graphics/gstreamer/GStreamerCommon.h      |  7 +++++
+ 2 files changed, 37 insertions(+)
+
+diff --git a/Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.cpp b/Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.cpp
+index 761a1b18570e..379f983e1312 100644
+--- a/Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.cpp
++++ b/Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.cpp
+@@ -691,6 +691,36 @@ String gstStructureToJSONString(const GstStructure* structure)
+     return value->toJSONString();
+ }
+ 
++#if !GST_CHECK_VERSION(1, 18, 0)
++GstClockTime webkitGstElementGetCurrentRunningTime(GstElement* element)
++{
++    g_return_val_if_fail(GST_IS_ELEMENT(element), GST_CLOCK_TIME_NONE);
++
++    auto baseTime = gst_element_get_base_time(element);
++    if (!GST_CLOCK_TIME_IS_VALID(baseTime)) {
++        GST_DEBUG_OBJECT(element, "Could not determine base time");
++        return GST_CLOCK_TIME_NONE;
++    }
++
++    auto clock = adoptGRef(gst_element_get_clock(element));
++    if (!clock) {
++        GST_DEBUG_OBJECT(element, "Element has no clock");
++        return GST_CLOCK_TIME_NONE;
++    }
++
++    auto clockTime = gst_clock_get_time(clock.get());
++    if (!GST_CLOCK_TIME_IS_VALID(clockTime))
++        return GST_CLOCK_TIME_NONE;
++
++    if (clockTime < baseTime) {
++        GST_DEBUG_OBJECT(element, "Got negative current running time");
++        return GST_CLOCK_TIME_NONE;
++    }
++
++    return clockTime - baseTime;
++}
++#endif
++
+ }
+ 
+ #endif // USE(GSTREAMER)
+diff --git a/Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.h b/Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.h
+index dfdcfbe1240b..e274dccb7915 100644
+--- a/Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.h
++++ b/Source/WebCore/platform/graphics/gstreamer/GStreamerCommon.h
+@@ -363,6 +363,13 @@ using GstObjectLocker = ExternalLocker<void, gstObjectLock, gstObjectUnlock>;
+ using GstPadStreamLocker = ExternalLocker<GstPad, gstPadStreamLock, gstPadStreamUnlock>;
+ using GstStateLocker = ExternalLocker<void, gstStateLock, gstStateUnlock>;
+ 
++// gst_element_get_current_running_time() is GStreamer 1.18 API, so for older versions we use a local
++// vendored copy of the function.
++#if !GST_CHECK_VERSION(1, 18, 0)
++GstClockTime webkitGstElementGetCurrentRunningTime(GstElement*);
++#define gst_element_get_current_running_time webkitGstElementGetCurrentRunningTime
++#endif
++
+ template <typename T>
+ class GstIteratorAdaptor {
+ public:
+-- 
+2.37.3
+

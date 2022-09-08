@@ -1,0 +1,52 @@
+From 4f290b5802a93181899af2c89bc91d28df06d606 Mon Sep 17 00:00:00 2001
+From: Pablo Saavedra <psaavedra@igalia.com>
+Date: Fri, 2 Sep 2022 07:46:05 -0700
+Subject: [PATCH 03/25] Merge 254099@main - [WPE] Kinetic scrolling doesn't
+ work in overflow scrolling https://bugs.webkit.org/show_bug.cgi?id=234433
+
+This extends the fix applied on bug 223133 "[GTK] Kinetic iframe async
+scrolling does not work" [1] to the rest of the ports using nicosia.
+
+For WPE (libwpe), the end of momentum scroll event can scroll contents even if
+with a delta of 0. The explanation is in the implementation of the libwpe
+'handle_axis_event()' API method in /Source/WebKit/UIProcess/API/wpe/WPEView.cpp:
+
+   We treat an axis motion event with a value of zero to be equivalent to a 'stop'
+   event. Motion events with zero motion don't exist naturally,
+   so this allows a backend to express 'stop' events without changing API.
+   The wheel event phase is adjusted accordingly.
+
+[1] https://bugs.webkit.org/show_bug.cgi?id=223133
+
+Reviewed by Carlos Garcia Campos.
+
+* Source/WebCore/page/scrolling/ScrollingTreeScrollingNode.cpp:
+(WebCore::ScrollingTreeScrollingNode::eventCanScrollContents const):
+
+Canonical link: https://commits.webkit.org/254099@main
+
+(cherry picked from commit 431d9f7c6bc7092deb4ed41cbd61d27833e6223c)
+---
+ .../WebCore/page/scrolling/ScrollingTreeScrollingNode.cpp   | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/Source/WebCore/page/scrolling/ScrollingTreeScrollingNode.cpp b/Source/WebCore/page/scrolling/ScrollingTreeScrollingNode.cpp
+index e259957fabf1..210aab1ea938 100644
+--- a/Source/WebCore/page/scrolling/ScrollingTreeScrollingNode.cpp
++++ b/Source/WebCore/page/scrolling/ScrollingTreeScrollingNode.cpp
+@@ -172,10 +172,8 @@ FloatPoint ScrollingTreeScrollingNode::maximumScrollPosition() const
+ 
+ bool ScrollingTreeScrollingNode::eventCanScrollContents(const PlatformWheelEvent& wheelEvent) const
+ {
+-#if PLATFORM(GTK)
+-    // In case of GTK platform the end of momentum scroll events
+-    // always have a delta of 0. More information in the documentation
+-    // of the API gdk_event_is_scroll_stop_event.
++#if PLATFORM(WPE) || PLATFORM(GTK)
++    // In case of GTK and WPE the end of momentum scroll events always have a delta of 0.
+     if (wheelEvent.isEndOfNonMomentumScroll())
+         return true;
+ #endif
+-- 
+2.37.3
+

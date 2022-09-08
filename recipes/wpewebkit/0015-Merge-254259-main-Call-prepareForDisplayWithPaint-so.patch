@@ -1,0 +1,41 @@
+From 3f2585e3eb0c88a6439ecb35d8bcd169f79406d6 Mon Sep 17 00:00:00 2001
+From: Matt Woodrow <mattwoodrow@apple.com>
+Date: Wed, 7 Sep 2022 20:30:34 -0700
+Subject: [PATCH 15/25] Merge 254259@main - Call prepareForDisplayWithPaint so
+ that WebGL buffers get cleared.
+ https://bugs.webkit.org/show_bug.cgi?id=244877
+
+Reviewed by Chris Lord.
+
+WebGLRenderingContextBase needs this to be called, so that paintRenderingResultsToCanvas()
+knows that this is a 'display' and clears the back buffer.
+
+* Source/WebCore/html/OffscreenCanvas.cpp:
+(WebCore::OffscreenCanvas::commitToPlaceholderCanvas):
+
+Canonical link: https://commits.webkit.org/254259@main
+
+(cherry picked from commit 0f38a84a5524ffd5195ccbf73cbdf4b1c9f145fb)
+---
+ Source/WebCore/html/OffscreenCanvas.cpp | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/html/OffscreenCanvas.cpp b/Source/WebCore/html/OffscreenCanvas.cpp
+index d42aac3ae72e..872f7cdf520f 100644
+--- a/Source/WebCore/html/OffscreenCanvas.cpp
++++ b/Source/WebCore/html/OffscreenCanvas.cpp
+@@ -447,8 +447,10 @@ void OffscreenCanvas::commitToPlaceholderCanvas()
+         return;
+ 
+     // FIXME: Transfer texture over if we're using accelerated compositing
+-    if (m_context && (m_context->isWebGL() || m_context->isAccelerated()))
++    if (m_context && (m_context->isWebGL() || m_context->isAccelerated())) {
++        m_context->prepareForDisplayWithPaint();
+         m_context->paintRenderingResultsToCanvas();
++    }
+ 
+     if (m_placeholderData->bufferPipeSource) {
+         if (auto bufferCopy = imageBuffer->clone())
+-- 
+2.37.3
+

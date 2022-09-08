@@ -1,0 +1,49 @@
+From 735a9ad8c088df98a95988cfd2d3f8880d4ed0ee Mon Sep 17 00:00:00 2001
+From: Tyler Wilcock <tyler_w@apple.com>
+Date: Sun, 4 Sep 2022 16:36:05 -0700
+Subject: [PATCH 06/25] Merge 254152@main - AX:
+ AccessibilityObject::replacedNodeNeedsCharacter should not assume it can get
+ an AXObjectCache from the replaced node
+ https://bugs.webkit.org/show_bug.cgi?id=244781 rdar://99369899
+
+Reviewed by Chris Fleizach.
+
+AccessibilityObject::replacedNodeNeedsCharacter erroneously assumes it
+can get a non-null cache from Document::axObjectCache(), but in reality
+there are several ways this method can return a nullptr -- for example,
+if the document doesn't have a living render tree.
+
+With this patch, we null check the cache returned from Document::axObjectCache()
+before trying to use it.
+
+* Source/WebCore/accessibility/AccessibilityObject.cpp:
+(WebCore::AccessibilityObject::replacedNodeNeedsCharacter):
+
+Canonical link: https://commits.webkit.org/254152@main
+
+(cherry picked from commit 11414e0bbcfbf8b525b937d4787515e470ad935d)
+---
+ Source/WebCore/accessibility/AccessibilityObject.cpp | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/Source/WebCore/accessibility/AccessibilityObject.cpp b/Source/WebCore/accessibility/AccessibilityObject.cpp
+index 33fc129cffe1..435e5a9da91a 100644
+--- a/Source/WebCore/accessibility/AccessibilityObject.cpp
++++ b/Source/WebCore/accessibility/AccessibilityObject.cpp
+@@ -1448,9 +1448,10 @@ bool AccessibilityObject::replacedNodeNeedsCharacter(Node* replacedNode)
+         return false;
+ 
+     // create an AX object, but skip it if it is not supposed to be seen
+-    AccessibilityObject* object = replacedNode->renderer()->document().axObjectCache()->getOrCreate(replacedNode);
+-    if (object->accessibilityIsIgnored())
+-        return false;
++    if (auto* cache = replacedNode->renderer()->document().axObjectCache()) {
++        if (auto* axObject = cache->getOrCreate(replacedNode))
++            return !axObject->accessibilityIsIgnored();
++    }
+ 
+     return true;
+ }
+-- 
+2.37.3
+

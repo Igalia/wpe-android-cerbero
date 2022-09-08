@@ -1,0 +1,69 @@
+From 0437fdeadd6e7bac35ea7b1f128071d71ad28d09 Mon Sep 17 00:00:00 2001
+From: Chris Dumez <cdumez@apple.com>
+Date: Wed, 7 Sep 2022 16:14:54 -0700
+Subject: [PATCH 16/25] Merge 254254@main -
+ imported/w3c/web-platform-tests/FileAPI/url/url-reload.window.html is timing
+ out in WebKit https://bugs.webkit.org/show_bug.cgi?id=244864
+
+Reviewed by Geoffrey Garen.
+
+imported/w3c/web-platform-tests/FileAPI/url/url-reload.window.html is timing
+out in WebKit but passing in Gecko.
+
+The test is reloading a frame with a Blob URL after revoking that URL,
+expecting the reload to succeed. To support this, the Document now keeps its
+blob URL alive using a BlobURLHandle.
+
+* LayoutTests/imported/w3c/web-platform-tests/FileAPI/url/url-reload.window-expected.txt:
+* Source/WebCore/dom/Document.cpp:
+(WebCore::Document::setURL):
+* Source/WebCore/dom/Document.h:
+
+Canonical link: https://commits.webkit.org/254254@main
+
+(cherry picked from commit e295563ee5ae3226673799a8ec66672ed6080473)
+---
+ .../FileAPI/url/url-reload.window-expected.txt               | 4 +---
+ Source/WebCore/dom/Document.cpp                              | 5 +++++
+ Source/WebCore/dom/Document.h                                | 2 ++
+ 3 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/Source/WebCore/dom/Document.cpp b/Source/WebCore/dom/Document.cpp
+index 8c47ba0cd4f3..ecc8faa264ac 100644
+--- a/Source/WebCore/dom/Document.cpp
++++ b/Source/WebCore/dom/Document.cpp
+@@ -3490,6 +3490,11 @@ void Document::setURL(const URL& url)
+     if (SecurityOrigin::shouldIgnoreHost(m_url))
+         m_url.setHostAndPort({ });
+ 
++    if (m_url.protocolIsBlob())
++        m_blobURLLifetimeExtension = m_url;
++    else
++        m_blobURLLifetimeExtension.clear();
++
+     m_documentURI = m_url.string();
+     updateBaseURL();
+ }
+diff --git a/Source/WebCore/dom/Document.h b/Source/WebCore/dom/Document.h
+index d4376078d952..e5622a6dab66 100644
+--- a/Source/WebCore/dom/Document.h
++++ b/Source/WebCore/dom/Document.h
+@@ -27,6 +27,7 @@
+ 
+ #pragma once
+ 
++#include "BlobURL.h"
+ #include "CSSPropertyNames.h"
+ #include "CSSRegisteredCustomProperty.h"
+ #include "CanvasBase.h"
+@@ -1833,6 +1834,7 @@ private:
+ 
+     // Document URLs.
+     URL m_url; // Document.URL: The URL from which this document was retrieved.
++    BlobURLHandle m_blobURLLifetimeExtension; // Keep the Document's blob alive so it can be reloaded.
+     URL m_creationURL; // https://html.spec.whatwg.org/multipage/webappapis.html#concept-environment-creation-url.
+     URL m_baseURL; // Node.baseURI: The URL to use when resolving relative URLs.
+     URL m_baseURLOverride; // An alternative base URL that takes precedence over m_baseURL (but not m_baseElementURL).
+-- 
+2.37.3
+

@@ -1,0 +1,40 @@
+From 520c5ec4ad7637026d9276cf9eb02e9ce49cc550 Mon Sep 17 00:00:00 2001
+From: Chris Dumez <cdumez@apple.com>
+Date: Wed, 7 Sep 2022 12:50:04 -0700
+Subject: [PATCH 14/25] Merge 254245@main - X-Frame-Options HTTP headers with
+ an empty value are incorrectly being ignored
+ https://bugs.webkit.org/show_bug.cgi?id=244889
+
+Reviewed by Geoffrey Garen and Brent Fulgham.
+
+X-Frame-Options HTTP headers with an empty value are incorrectly being ignored.
+The issue was that we were using split() instead of splitAllowingEmptyEntries(),
+which was causing us to skip empty header values.
+
+* LayoutTests/imported/w3c/web-platform-tests/x-frame-options/multiple-expected.txt:
+* Source/WebCore/platform/network/HTTPParsers.cpp:
+(WebCore::parseXFrameOptionsHeader):
+
+Canonical link: https://commits.webkit.org/254245@main
+
+(cherry picked from commit 8c97181d75591874ad4312a0d1df22ff5d6a8fa0)
+---
+ Source/WebCore/platform/network/HTTPParsers.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/platform/network/HTTPParsers.cpp b/Source/WebCore/platform/network/HTTPParsers.cpp
+index 8b026cfea292..d7245078330b 100644
+--- a/Source/WebCore/platform/network/HTTPParsers.cpp
++++ b/Source/WebCore/platform/network/HTTPParsers.cpp
+@@ -559,7 +559,7 @@ XFrameOptionsDisposition parseXFrameOptionsHeader(StringView header)
+     if (header.isEmpty())
+         return result;
+ 
+-    for (auto currentHeader : header.split(',')) {
++    for (auto currentHeader : header.splitAllowingEmptyEntries(',')) {
+         currentHeader = currentHeader.stripWhiteSpace();
+         XFrameOptionsDisposition currentValue = XFrameOptionsDisposition::None;
+         if (equalLettersIgnoringASCIICase(currentHeader, "deny"_s))
+-- 
+2.37.3
+

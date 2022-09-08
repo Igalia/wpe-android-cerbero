@@ -1,0 +1,42 @@
+From f1736961e6102713a6c508dc6c021a9365377d78 Mon Sep 17 00:00:00 2001
+From: Michael Catanzaro <mcatanzaro@redhat.com>
+Date: Fri, 2 Sep 2022 16:55:09 -0700
+Subject: [PATCH 04/25] Merge 254121@main - [GLib] Fix build with CMake < 3.17
+ https://bugs.webkit.org/show_bug.cgi?id=244728
+
+Reviewed by Adrian Perez de Castro.
+
+* Source/WebKit/PdfJSGResources.cmake:
+
+Canonical link: https://commits.webkit.org/254121@main
+
+(cherry picked from commit 6be2817af1e115abc5e26cc670cd3d20a27609ae)
+---
+ Source/WebKit/PdfJSGResources.cmake | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebKit/PdfJSGResources.cmake b/Source/WebKit/PdfJSGResources.cmake
+index 7b9d596d8b59..ba2cafa27e3b 100644
+--- a/Source/WebKit/PdfJSGResources.cmake
++++ b/Source/WebKit/PdfJSGResources.cmake
+@@ -5,7 +5,7 @@ macro(WEBKIT_BUILD_PDFJS_GRESOURCES _derived_sources_dir)
+     add_custom_command(
+         OUTPUT ${_derived_sources_dir}/PdfJSGResourceBundle.xml
+         DEPENDS ${TOOLS_DIR}/glib/generate-pdfjs-resource-manifest.py ${PdfJSFiles}
+-        COMMAND ${CMAKE_COMMAND} -E rm -f ${_derived_sources_dir}/PdfJSGResourceBundle.deps
++        COMMAND ${CMAKE_COMMAND} -E remove -f ${_derived_sources_dir}/PdfJSGResourceBundle.deps
+         COMMAND ${PYTHON_EXECUTABLE} ${TOOLS_DIR}/glib/generate-pdfjs-resource-manifest.py --gresource --input=${THIRDPARTY_DIR}/pdfjs --output=${_derived_sources_dir}/PdfJSGResourceBundle.xml
+         VERBATIM
+     )
+@@ -21,7 +21,7 @@ macro(WEBKIT_BUILD_PDFJS_GRESOURCES _derived_sources_dir)
+     add_custom_command(
+         OUTPUT ${_derived_sources_dir}/PdfJSGResourceBundleExtras.xml
+         DEPENDS ${TOOLS_DIR}/glib/generate-pdfjs-resource-manifest.py ${PdfJSExtraFiles}
+-        COMMAND ${CMAKE_COMMAND} -E rm -f ${_derived_sources_dir}/PdfJSGResourceBundleExtras.deps
++        COMMAND ${CMAKE_COMMAND} -E remove -f ${_derived_sources_dir}/PdfJSGResourceBundleExtras.deps
+         COMMAND ${PYTHON_EXECUTABLE} ${TOOLS_DIR}/glib/generate-pdfjs-resource-manifest.py --gresource --input=${WEBCORE_DIR}/Modules/pdfjs-extras --output=${_derived_sources_dir}/PdfJSGResourceBundleExtras.xml
+         VERBATIM
+     )
+-- 
+2.37.3
+

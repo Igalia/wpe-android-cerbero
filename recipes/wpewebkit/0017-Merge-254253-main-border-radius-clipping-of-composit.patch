@@ -1,0 +1,616 @@
+From d335f0f367b5ce7d1a1d040d470e76819c8eb245 Mon Sep 17 00:00:00 2001
+From: Simon Fraser <simon.fraser@apple.com>
+Date: Wed, 7 Sep 2022 16:09:10 -0700
+Subject: [PATCH 17/25] Merge 254253@main - border-radius clipping of
+ composited layers doesn't work https://bugs.webkit.org/show_bug.cgi?id=68196
+ <rdar://10133719>
+
+Reviewed by Alan Bujtas.
+
+In CSS it's possible for clipping (via overflow:scroll, overflow:hidden and the `clip`
+property) to apply to elements that are descendants in containing-block order, but
+siblings in z-order, for example:
+    <div style="position: relative; overflow: hidden">
+      <div style="position: absolute"></div
+    </div>
+If a non-z-order descendant here has a composited layer, we'd fail to take border-radius
+into account when clipping it.
+
+In this layer configuration we fall into the "AncestorClippingStack" code path: the
+descendant layer owns a stack of clips that represent clipping by non-paint-order
+ancestors. Previously, all overflow:hidden clips were simply intersected and represented
+as a single rectangular clipping GraphicsLayer, but when border-radius is present on
+some or all of them, we need to maintain a layer for each, since you can't trivially
+generate a path that is the intersection of rounded rects. Code was added to
+RenderLayerCompositor::computeAncestorClippingStack() to do this.
+
+When an intermediate clip with border radius represents a scrollable elements (i.e.
+scrollable overflow), its corresponding entry in the ancestor clipping stack needs two
+layers; one to apply the clipping, which doesn't scroll with the content, and one that
+applies the scroll offset, so ClippingStackEntry gains a scrollingLayer, which is the
+one handed off to the scrolling tree, and the rounded clip is applied to the clipping
+layer. Logic is added to build the hierarchy of these layers.
+
+When style changes we have to ensure that layers are updated with the new rounded rects;
+notably, style can change on a non-composited RenderLayer (e.g. an overflow:hidden layer
+with border-radius) which requires that non-z-order descendants need to update their
+composited layer geometry; new code in RenderLayerCompositor::layerStyleChanged() takes
+care of this. Tested by
+compositing/clipping/border-radius-with-composited-descendant-dynamic.html
+
+* LayoutTests/compositing/clipping/border-radius-async-overflow-non-stacking.html:
+* LayoutTests/compositing/clipping/border-radius-with-composited-descendant-dynamic-expected.html: Added.
+* LayoutTests/compositing/clipping/border-radius-with-composited-descendant-dynamic.html: Added.
+* LayoutTests/compositing/clipping/border-radius-with-composited-descendant-expected.html: Added.
+* LayoutTests/compositing/clipping/border-radius-with-composited-descendant-nested-expected.html: Added.
+* LayoutTests/compositing/clipping/border-radius-with-composited-descendant-nested.html: Added.
+* LayoutTests/compositing/clipping/border-radius-with-composited-descendant.html: Added.
+* LayoutTests/compositing/layer-creation/clipping-scope/nested-scroller-overlap-expected.txt:
+* LayoutTests/compositing/layer-creation/clipping-scope/overlap-constrained-inside-scroller-expected.txt:
+* LayoutTests/compositing/layer-creation/clipping-scope/scroller-with-negative-z-children-expected.txt:
+* LayoutTests/compositing/overflow/scrolling-content-clip-to-viewport-expected.txt:
+* LayoutTests/compositing/rtl/rtl-scrolling-with-transformed-descendants-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/clipped-layer-in-overflow-clipped-by-scroll-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/clipped-layer-in-overflow-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/clipped-layer-in-overflow-nested-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/layer-for-negative-z-in-scroller-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-clip-to-hidden-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-clip-to-visible-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-gain-clipping-layer-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-in-clipped-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-lose-clipping-layer-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/nested-scrollers-backing-attachment-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/overlapped-overlay-scrollbar-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/overlapped-overlay-scrollbar-inside-hidden-expected.txt:
+* LayoutTests/compositing/scrolling/async-overflow-scrolling/overlapped-overlay-scrollbar-nested-expected.txt:
+* LayoutTests/compositing/shared-backing/overflow-scroll/composited-absolute-in-absolute-in-relative-in-scroller-expected.txt:
+* LayoutTests/compositing/shared-backing/overflow-scroll/previous-sibling-prevents-inclusiveness-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/layer-creation/clipping-scope/nested-scroller-overlap-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/layer-creation/clipping-scope/overlap-constrained-inside-scroller-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/layer-creation/clipping-scope/scroller-with-negative-z-children-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/clipped-layer-in-overflow-clipped-by-scroll-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/clipped-layer-in-overflow-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/clipped-layer-in-overflow-nested-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/layer-for-negative-z-in-scroller-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-clip-to-hidden-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-clip-to-visible-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-gain-clipping-layer-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-in-clipped-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/layer-in-overflow-lose-clipping-layer-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/scrolling/async-overflow-scrolling/nested-scrollers-backing-attachment-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/shared-backing/overflow-scroll/composited-absolute-in-absolute-in-relative-in-scroller-expected.txt:
+* LayoutTests/platform/ios-wk2/compositing/shared-backing/overflow-scroll/previous-sibling-prevents-inclusiveness-expected.txt:
+* Source/WebCore/platform/graphics/RoundedRect.cpp:
+(WebCore::operator<<):
+* Source/WebCore/platform/graphics/RoundedRect.h:
+* Source/WebCore/rendering/LayerAncestorClippingStack.cpp:
+(WebCore::LayerAncestorClippingStack::LayerAncestorClippingStack):
+(WebCore::LayerAncestorClippingStack::firstLayer const):
+(WebCore::LayerAncestorClippingStack::lastLayer const):
+(WebCore::LayerAncestorClippingStack::updateScrollingNodeLayers):
+(WebCore::LayerAncestorClippingStack::updateWithClipData):
+(WebCore::operator<<):
+(WebCore::LayerAncestorClippingStack::firstClippingLayer const): Deleted.
+(WebCore::LayerAncestorClippingStack::lastClippingLayer const): Deleted.
+* Source/WebCore/rendering/LayerAncestorClippingStack.h:
+(WebCore::CompositedClipData::CompositedClipData):
+(WebCore::LayerAncestorClippingStack::ClippingStackEntry::parentForSublayers const):
+(WebCore::LayerAncestorClippingStack::ClippingStackEntry::childForSuperlayers const):
+* Source/WebCore/rendering/RenderLayer.h:
+* Source/WebCore/rendering/RenderLayerBacking.cpp:
+(WebCore::RenderLayerBacking::updateInternalHierarchy):
+(WebCore::RenderLayerBacking::ensureClippingStackLayers):
+(WebCore::RenderLayerBacking::removeClippingStackLayers):
+(WebCore::RenderLayerBacking::connectClippingStackLayers):
+(WebCore::RenderLayerBacking::updateClippingStackLayerGeometry):
+(WebCore::RenderLayerBacking::childForSuperlayers const):
+* Source/WebCore/rendering/RenderLayerCompositor.cpp:
+(WebCore::RenderLayerCompositor::adjustOverflowScrollbarContainerLayers):
+(WebCore::RenderLayerCompositor::layerStyleChanged):
+(WebCore::RenderLayerCompositor::computeAncestorClippingStack const):
+(WebCore::RenderLayerCompositor::parentRelativeScrollableRect const):
+(WebCore::RenderLayerCompositor::updateScrollingNodeForScrollingProxyRole):
+* Source/WebCore/rendering/RenderLayerCompositor.h:
+
+Canonical link: https://commits.webkit.org/254253@main
+
+(cherry picked from commit 97910542b25d8ccbabb97dc9f230461fd4a592e2)
+---
+ ...er-radius-async-overflow-non-stacking.html |   2 +-
+ ...omposited-descendant-dynamic-expected.html |  28 +++
+ ...us-with-composited-descendant-dynamic.html |  45 ++++
+ ...s-with-composited-descendant-expected.html |  27 +++
+ ...composited-descendant-nested-expected.html |  37 ++++
+ ...ius-with-composited-descendant-nested.html |  42 ++++
+ ...der-radius-with-composited-descendant.html |  29 +++
+ .../nested-scroller-overlap-expected.txt      |  70 +++++--
+ ...p-constrained-inside-scroller-expected.txt |  50 +++--
+ ...ller-with-negative-z-children-expected.txt |  50 +++--
+ ...ling-content-clip-to-viewport-expected.txt |  12 +-
+ ...-with-transformed-descendants-expected.txt |  48 +++--
+ ...in-overflow-clipped-by-scroll-expected.txt |  20 +-
+ .../clipped-layer-in-overflow-expected.txt    |  20 +-
+ ...pped-layer-in-overflow-nested-expected.txt |  34 +--
+ ...er-for-negative-z-in-scroller-expected.txt |  10 +-
+ ...er-in-overflow-clip-to-hidden-expected.txt |  20 +-
+ ...r-in-overflow-clip-to-visible-expected.txt |  14 +-
+ .../layer-in-overflow-expected.txt            |  14 +-
+ ...-overflow-gain-clipping-layer-expected.txt |  20 +-
+ .../layer-in-overflow-in-clipped-expected.txt |  14 +-
+ ...-overflow-lose-clipping-layer-expected.txt |  14 +-
+ ...-scrollers-backing-attachment-expected.txt | 164 +++++++++------
+ .../overlapped-overlay-scrollbar-expected.txt |  10 +-
+ ...erlay-scrollbar-inside-hidden-expected.txt |  10 +-
+ ...pped-overlay-scrollbar-nested-expected.txt |  58 ++++--
+ ...olute-in-relative-in-scroller-expected.txt |  10 +-
+ ...ibling-prevents-inclusiveness-expected.txt |  10 +-
+ .../nested-scroller-overlap-expected.txt      |  70 +++++--
+ ...p-constrained-inside-scroller-expected.txt |  50 +++--
+ ...ller-with-negative-z-children-expected.txt |  50 +++--
+ ...in-overflow-clipped-by-scroll-expected.txt |  20 +-
+ .../clipped-layer-in-overflow-expected.txt    |  20 +-
+ ...pped-layer-in-overflow-nested-expected.txt |  34 +--
+ ...er-for-negative-z-in-scroller-expected.txt |  10 +-
+ ...er-in-overflow-clip-to-hidden-expected.txt |  20 +-
+ ...r-in-overflow-clip-to-visible-expected.txt |  14 +-
+ .../layer-in-overflow-expected.txt            |  14 +-
+ ...-overflow-gain-clipping-layer-expected.txt |  20 +-
+ .../layer-in-overflow-in-clipped-expected.txt |  14 +-
+ ...-overflow-lose-clipping-layer-expected.txt |  14 +-
+ ...-scrollers-backing-attachment-expected.txt | 196 ++++++++++--------
+ ...olute-in-relative-in-scroller-expected.txt |  10 +-
+ ...ibling-prevents-inclusiveness-expected.txt |  10 +-
+ .../WebCore/platform/graphics/RoundedRect.cpp |  10 +
+ .../WebCore/platform/graphics/RoundedRect.h   |   2 +
+ .../rendering/LayerAncestorClippingStack.cpp  |  18 +-
+ .../rendering/LayerAncestorClippingStack.h    |  21 +-
+ Source/WebCore/rendering/RenderLayer.h        |   4 +-
+ .../WebCore/rendering/RenderLayerBacking.cpp  |  51 +++--
+ .../rendering/RenderLayerCompositor.cpp       |  70 +++++--
+ .../WebCore/rendering/RenderLayerCompositor.h |   2 +-
+ 52 files changed, 1131 insertions(+), 495 deletions(-)
+ create mode 100644 LayoutTests/compositing/clipping/border-radius-with-composited-descendant-dynamic-expected.html
+ create mode 100644 LayoutTests/compositing/clipping/border-radius-with-composited-descendant-dynamic.html
+ create mode 100644 LayoutTests/compositing/clipping/border-radius-with-composited-descendant-expected.html
+ create mode 100644 LayoutTests/compositing/clipping/border-radius-with-composited-descendant-nested-expected.html
+ create mode 100644 LayoutTests/compositing/clipping/border-radius-with-composited-descendant-nested.html
+ create mode 100644 LayoutTests/compositing/clipping/border-radius-with-composited-descendant.html
+
+diff --git a/Source/WebCore/platform/graphics/RoundedRect.cpp b/Source/WebCore/platform/graphics/RoundedRect.cpp
+index 133e9cd75787..11c7523ec29f 100644
+--- a/Source/WebCore/platform/graphics/RoundedRect.cpp
++++ b/Source/WebCore/platform/graphics/RoundedRect.cpp
+@@ -381,4 +381,14 @@ Region approximateAsRegion(const RoundedRect& roundedRect, unsigned stepLength)
+     return region;
+ }
+ 
++TextStream& operator<<(TextStream& ts, const RoundedRect& roundedRect)
++{
++    ts << roundedRect.rect();
++    ts.dumpProperty("top-left", roundedRect.radii().topLeft());
++    ts.dumpProperty("top-right", roundedRect.radii().topRight());
++    ts.dumpProperty("bottom-left", roundedRect.radii().bottomLeft());
++    ts.dumpProperty("bottom-right", roundedRect.radii().bottomRight());
++    return ts;
++}
++
+ } // namespace WebCore
+diff --git a/Source/WebCore/platform/graphics/RoundedRect.h b/Source/WebCore/platform/graphics/RoundedRect.h
+index 1112b844dfb1..23307a459815 100644
+--- a/Source/WebCore/platform/graphics/RoundedRect.h
++++ b/Source/WebCore/platform/graphics/RoundedRect.h
+@@ -129,6 +129,8 @@ inline bool operator==(const RoundedRect& a, const RoundedRect& b)
+     return a.rect() == b.rect() && a.radii() == b.radii();
+ }
+ 
++WTF::TextStream& operator<<(WTF::TextStream&, const RoundedRect&);
++
+ // Snip away rectangles from corners, roughly one per step length of arc.
+ WEBCORE_EXPORT Region approximateAsRegion(const RoundedRect&, unsigned stepLength = 20);
+ 
+diff --git a/Source/WebCore/rendering/LayerAncestorClippingStack.cpp b/Source/WebCore/rendering/LayerAncestorClippingStack.cpp
+index 7970af825712..be93ee63f308 100644
+--- a/Source/WebCore/rendering/LayerAncestorClippingStack.cpp
++++ b/Source/WebCore/rendering/LayerAncestorClippingStack.cpp
+@@ -34,7 +34,7 @@
+ namespace WebCore {
+ 
+ LayerAncestorClippingStack::LayerAncestorClippingStack(Vector<CompositedClipData>&& clipDataStack)
+-    : m_stack(WTF::map(WTFMove(clipDataStack), [](auto&& clipDataEntry) { return ClippingStackEntry { WTFMove(clipDataEntry), 0, nullptr }; }))
++    : m_stack(WTF::map(WTFMove(clipDataStack), [](auto&& clipDataEntry) { return ClippingStackEntry { WTFMove(clipDataEntry), 0, nullptr, nullptr }; }))
+ {
+ }
+ 
+@@ -84,14 +84,14 @@ void LayerAncestorClippingStack::detachFromScrollingCoordinator(ScrollingCoordin
+     }
+ }
+ 
+-GraphicsLayer* LayerAncestorClippingStack::firstClippingLayer() const
++GraphicsLayer* LayerAncestorClippingStack::firstLayer() const
+ {
+-    return m_stack.first().clippingLayer.get();
++    return m_stack.first().childForSuperlayers();
+ }
+ 
+-GraphicsLayer* LayerAncestorClippingStack::lastClippingLayer() const
++GraphicsLayer* LayerAncestorClippingStack::lastLayer() const
+ {
+-    return m_stack.last().clippingLayer.get();
++    return m_stack.last().parentForSublayers();
+ }
+ 
+ ScrollingNodeID LayerAncestorClippingStack::lastOverflowScrollProxyNodeID() const
+@@ -110,7 +110,7 @@ void LayerAncestorClippingStack::updateScrollingNodeLayers(ScrollingCoordinator&
+         if (!entry.clipData.isOverflowScroll)
+             continue;
+ 
+-        scrollingCoordinator.setNodeLayers(entry.overflowScrollProxyNodeID, { entry.clippingLayer.get() });
++        scrollingCoordinator.setNodeLayers(entry.overflowScrollProxyNodeID, { entry.scrollingLayer.get() });
+     }
+ }
+ 
+@@ -124,7 +124,7 @@ bool LayerAncestorClippingStack::updateWithClipData(ScrollingCoordinator* scroll
+         auto& clipDataEntry = clipDataStack[i];
+         
+         if (i >= stackEntryCount) {
+-            m_stack.append({ WTFMove(clipDataEntry), 0, nullptr });
++            m_stack.append({ WTFMove(clipDataEntry), 0, nullptr, nullptr });
+             stackChanged = true;
+             continue;
+         }
+@@ -170,13 +170,15 @@ Vector<CompositedClipData> LayerAncestorClippingStack::compositedClipData() cons
+ 
+ static TextStream& operator<<(TextStream& ts, const LayerAncestorClippingStack::ClippingStackEntry& entry)
+ {
+-    ts.dumpProperty("layer", entry.clipData.clippingLayer.get());
++    ts.dumpProperty("clippingLayer", entry.clipData.clippingLayer.get());
+     ts.dumpProperty("clip", entry.clipData.clipRect);
+     ts.dumpProperty("isOverflowScroll", entry.clipData.isOverflowScroll);
+     if (entry.overflowScrollProxyNodeID)
+         ts.dumpProperty("overflowScrollProxyNodeID", entry.overflowScrollProxyNodeID);
+     if (entry.clippingLayer)
+         ts.dumpProperty("clippingLayer", entry.clippingLayer->primaryLayerID());
++    if (entry.scrollingLayer)
++        ts.dumpProperty("scrollingLayer", entry.scrollingLayer->primaryLayerID());
+     return ts;
+ }
+ 
+diff --git a/Source/WebCore/rendering/LayerAncestorClippingStack.h b/Source/WebCore/rendering/LayerAncestorClippingStack.h
+index 25bca27a1686..cb4f47617ad7 100644
+--- a/Source/WebCore/rendering/LayerAncestorClippingStack.h
++++ b/Source/WebCore/rendering/LayerAncestorClippingStack.h
+@@ -40,9 +40,9 @@ namespace WebCore {
+ class ScrollingCoordinator;
+ 
+ struct CompositedClipData {
+-    CompositedClipData(RenderLayer* layer, LayoutRect rect, bool isOverflowScrollEntry)
++    CompositedClipData(RenderLayer* layer, const RoundedRect& roundedRect, bool isOverflowScrollEntry)
+         : clippingLayer(layer)
+-        , clipRect(rect)
++        , clipRect(roundedRect)
+         , isOverflowScroll(isOverflowScrollEntry)
+     {
+     }
+@@ -60,7 +60,7 @@ struct CompositedClipData {
+     }
+ 
+     WeakPtr<RenderLayer> clippingLayer; // For scroller entries, the scrolling layer. For other entries, the most-descendant layer that has a clip.
+-    LayoutRect clipRect; // In the coordinate system of the RenderLayer that owns the stack.
++    RoundedRect clipRect; // In the coordinate system of the RenderLayer that owns the stack.
+     bool isOverflowScroll { false };
+ };
+ 
+@@ -85,14 +85,25 @@ public:
+ 
+     void updateScrollingNodeLayers(ScrollingCoordinator&);
+ 
+-    GraphicsLayer* firstClippingLayer() const;
+-    GraphicsLayer* lastClippingLayer() const;
++    GraphicsLayer* firstLayer() const;
++    GraphicsLayer* lastLayer() const;
+     ScrollingNodeID lastOverflowScrollProxyNodeID() const;
+ 
+     struct ClippingStackEntry {
+         CompositedClipData clipData;
+         ScrollingNodeID overflowScrollProxyNodeID { 0 }; // The node for repositioning the scrolling proxy layer.
+         RefPtr<GraphicsLayer> clippingLayer;
++        RefPtr<GraphicsLayer> scrollingLayer; // Only present for scrolling entries.
++
++        GraphicsLayer* parentForSublayers() const
++        {
++            return scrollingLayer ? scrollingLayer.get() : clippingLayer.get();
++        }
++        
++        GraphicsLayer* childForSuperlayers() const
++        {
++            return clippingLayer.get();
++        }
+     };
+ 
+     Vector<ClippingStackEntry>& stack() { return m_stack; }
+diff --git a/Source/WebCore/rendering/RenderLayer.h b/Source/WebCore/rendering/RenderLayer.h
+index 4f8c46085321..2c4e9575f903 100644
+--- a/Source/WebCore/rendering/RenderLayer.h
++++ b/Source/WebCore/rendering/RenderLayer.h
+@@ -1177,7 +1177,7 @@ private:
+ 
+     void setHasCompositingDescendant(bool b)  { m_hasCompositingDescendant = b; }
+     void setHasCompositedNonContainedDescendants(bool value) { m_hasCompositedNonContainedDescendants = value; }
+-    
++
+     void setIndirectCompositingReason(IndirectCompositingReason reason) { m_indirectCompositingReason = static_cast<unsigned>(reason); }
+     bool mustCompositeForIndirectReasons() const { return m_indirectCompositingReason; }
+ 
+@@ -1233,8 +1233,8 @@ private:
+     bool m_has3DTransformedDescendant : 1;  // Set on a stacking context layer that has 3D descendants anywhere
+                                             // in a preserves3D hierarchy. Hint to do 3D-aware hit testing.
+     bool m_hasCompositingDescendant : 1; // In the z-order tree.
++    bool m_hasCompositedNonContainedDescendants : 1; // Set when a layer has a composited descendant in z-order which is not a descendant in containing block order (e.g. opacity layer with an abspos descendant).
+ 
+-    bool m_hasCompositedNonContainedDescendants : 1;
+     bool m_hasCompositedScrollingAncestor : 1; // In the layer-order tree.
+ 
+     bool m_hasFixedContainingBlockAncestor : 1;
+diff --git a/Source/WebCore/rendering/RenderLayerBacking.cpp b/Source/WebCore/rendering/RenderLayerBacking.cpp
+index 8bace0ce8527..8ca033b4d137 100644
+--- a/Source/WebCore/rendering/RenderLayerBacking.cpp
++++ b/Source/WebCore/rendering/RenderLayerBacking.cpp
+@@ -1660,7 +1660,7 @@ void RenderLayerBacking::updateInternalHierarchy()
+     GraphicsLayer* lastClippingLayer = nullptr;
+     if (m_ancestorClippingStack) {
+         connectClippingStackLayers(*m_ancestorClippingStack);
+-        lastClippingLayer = m_ancestorClippingStack->lastClippingLayer();
++        lastClippingLayer = m_ancestorClippingStack->lastLayer();
+     }
+ 
+     if (m_contentsContainmentLayer) {
+@@ -1950,24 +1950,42 @@ void RenderLayerBacking::ensureClippingStackLayers(LayerAncestorClippingStack& c
+             entry.clippingLayer->setMasksToBounds(true);
+             entry.clippingLayer->setPaintingPhase({ });
+         }
++
++        if (entry.clipData.isOverflowScroll) {
++            if (!entry.scrollingLayer)
++                entry.scrollingLayer = createGraphicsLayer("scrolling proxy"_s);
++        } else if (entry.scrollingLayer)
++            GraphicsLayer::unparentAndClear(entry.scrollingLayer);
+     }
+ }
+ 
+ void RenderLayerBacking::removeClippingStackLayers(LayerAncestorClippingStack& clippingStack)
+ {
+-    for (auto& entry : clippingStack.stack())
++    for (auto& entry : clippingStack.stack()) {
+         GraphicsLayer::unparentAndClear(entry.clippingLayer);
++        GraphicsLayer::unparentAndClear(entry.scrollingLayer);
++    }
+ }
+ 
+ void RenderLayerBacking::connectClippingStackLayers(LayerAncestorClippingStack& clippingStack)
+ {
++    auto connectEntryLayers = [](LayerAncestorClippingStack::ClippingStackEntry& entry) {
++        if (entry.scrollingLayer)
++            entry.clippingLayer->setChildren({ Ref { *entry.scrollingLayer } });
++    };
++
+     auto& clippingEntryStack = clippingStack.stack();
+     for (unsigned i = 0; i < clippingEntryStack.size() - 1; ++i) {
+         auto& entry = clippingEntryStack.at(i);
+-        entry.clippingLayer->setChildren({ Ref { *clippingEntryStack.at(i + 1).clippingLayer } });
++        connectEntryLayers(entry);
++
++        auto* entryParentForSublayers = entry.parentForSublayers();
++        auto* childLayer = clippingEntryStack.at(i + 1).childForSuperlayers();
++        entryParentForSublayers->setChildren({ Ref { *childLayer } });
+     }
+ 
+-    clippingEntryStack.last().clippingLayer->removeAllChildren();
++    connectEntryLayers(clippingEntryStack.last());
++    clippingEntryStack.last().parentForSublayers()->removeAllChildren();
+ }
+ 
+ void RenderLayerBacking::updateClippingStackLayerGeometry(LayerAncestorClippingStack& clippingStack, const RenderLayer* compositedAncestor, LayoutRect& parentGraphicsLayerRect)
+@@ -1978,24 +1996,31 @@ void RenderLayerBacking::updateClippingStackLayerGeometry(LayerAncestorClippingS
+ 
+     auto deviceScaleFactor = this->deviceScaleFactor();
+     for (auto& entry : clippingStack.stack()) {
+-        auto clipRect = entry.clipData.clipRect;
++        auto roundedClipRect = entry.clipData.clipRect;
++        auto clipRect = roundedClipRect.rect();
+         LayoutSize clippingOffset = computeOffsetFromAncestorGraphicsLayer(compositedAncestor, clipRect.location() + offsetFromCompositedAncestor, deviceScaleFactor);
+         LayoutRect snappedClippingLayerRect = snappedGraphicsLayer(clippingOffset, clipRect.size(), deviceScaleFactor).m_snappedRect;
+-
+-        entry.clippingLayer->setPosition(toLayoutPoint(snappedClippingLayerRect.location() - lastClipLayerRect.location()));
+-        lastClipLayerRect = snappedClippingLayerRect;
+-
++        
++        auto clippingLayerPosition = toLayoutPoint(snappedClippingLayerRect.location() - lastClipLayerRect.location());
++        entry.clippingLayer->setPosition(clippingLayerPosition);
+         entry.clippingLayer->setSize(snappedClippingLayerRect.size());
+ 
++        clipRect.setLocation({ });
++        roundedClipRect.setRect(clipRect);
++        entry.clippingLayer->setContentsClippingRect(FloatRoundedRect(roundedClipRect));
++        entry.clippingLayer->setContentsRectClipsDescendants(true);
++
++        lastClipLayerRect = snappedClippingLayerRect;
++
+         if (entry.clipData.isOverflowScroll) {
+             ScrollOffset scrollOffset;
+             if (auto* scrollableArea = entry.clipData.clippingLayer ? entry.clipData.clippingLayer->scrollableArea() : nullptr)
+                 scrollOffset = scrollableArea->scrollOffset();
+ 
+-            entry.clippingLayer->setBoundsOrigin(scrollOffset);
++            // scrollingLayer size and position are always 0,0.
++            entry.scrollingLayer->setBoundsOrigin(scrollOffset);
+             lastClipLayerRect.moveBy(-scrollOffset);
+-        } else
+-            entry.clippingLayer->setBoundsOrigin({ });
++        }
+     }
+ 
+     parentGraphicsLayerRect = lastClipLayerRect;
+@@ -3084,7 +3109,7 @@ GraphicsLayer* RenderLayerBacking::parentForSublayers() const
+ GraphicsLayer* RenderLayerBacking::childForSuperlayers() const
+ {
+     if (m_ancestorClippingStack)
+-        return m_ancestorClippingStack->firstClippingLayer();
++        return m_ancestorClippingStack->firstLayer();
+ 
+     if (m_contentsContainmentLayer)
+         return m_contentsContainmentLayer.get();
+diff --git a/Source/WebCore/rendering/RenderLayerCompositor.cpp b/Source/WebCore/rendering/RenderLayerCompositor.cpp
+index ae6588458773..0a9a81ab1549 100644
+--- a/Source/WebCore/rendering/RenderLayerCompositor.cpp
++++ b/Source/WebCore/rendering/RenderLayerCompositor.cpp
+@@ -1512,8 +1512,8 @@ void RenderLayerCompositor::adjustOverflowScrollbarContainerLayers(RenderLayer&
+             overflowBacking->ensureOverflowControlsHostLayerAncestorClippingStack(&stackingContextLayer);
+ 
+         if (auto* overflowControlsAncestorClippingStack = overflowBacking->overflowControlsHostLayerAncestorClippingStack()) {
+-            overflowControlsAncestorClippingStack->lastClippingLayer()->setChildren({ Ref { *overflowContainerLayer } });
+-            overflowContainerLayer = overflowControlsAncestorClippingStack->firstClippingLayer();
++            overflowControlsAncestorClippingStack->lastLayer()->setChildren({ Ref { *overflowContainerLayer } });
++            overflowContainerLayer = overflowControlsAncestorClippingStack->firstLayer();
+         }
+ 
+         auto* lastDescendantGraphicsLayer = lastContainedDescendantBacking->childForSuperlayers();
+@@ -1731,6 +1731,16 @@ void RenderLayerCompositor::layerStyleChanged(StyleDifference diff, RenderLayer&
+         }
+     }
+ 
++    if (diff >= StyleDifference::Repaint && oldStyle) {
++        // This ensures that we update border-radius clips on layers that are descendants in containing-block order but not paint order. This is necessary even when
++        // the current layer is not composited.
++        bool changeAffectsClippingOfNonPaintOrderDescendants = !layer.isStackingContext() && layer.renderer().hasNonVisibleOverflow() && oldStyle->border() != newStyle.border();
++        if (changeAffectsClippingOfNonPaintOrderDescendants) {
++            if (auto* parent = layer.paintOrderParent())
++                parent->setChildrenNeedCompositingGeometryUpdate();
++        }
++    }
++
+     auto* backing = layer.backing();
+     if (!backing)
+         return;
+@@ -2942,11 +2952,14 @@ Vector<CompositedClipData> RenderLayerCompositor::computeAncestorClippingStack(c
+         OptionSet<RenderLayer::ClipRectsOption> options;
+         if (respectClip == RespectOverflowClip)
+             options.add(RenderLayer::ClipRectsOption::RespectOverflowClip);
+-        auto clipRect = clippedLayer.backgroundClipRect(RenderLayer::ClipRectsContext(&clippingRoot, TemporaryClipRects, options)).rect();
++
++        auto backgroundClip = clippedLayer.backgroundClipRect(RenderLayer::ClipRectsContext(&clippingRoot, TemporaryClipRects, options));
++        ASSERT(!backgroundClip.affectedByRadius());
++        auto clipRect = backgroundClip.rect();
+         auto offset = layer.convertToLayerCoords(&clippingRoot, { }, RenderLayer::AdjustForColumns);
+         clipRect.moveBy(-offset);
+ 
+-        CompositedClipData clipData { const_cast<RenderLayer*>(&clippedLayer), clipRect, false };
++        CompositedClipData clipData { const_cast<RenderLayer*>(&clippedLayer), RoundedRect { clipRect }, false };
+         newStack.insert(0, WTFMove(clipData));
+     };
+ 
+@@ -2962,17 +2975,32 @@ Vector<CompositedClipData> RenderLayerCompositor::computeAncestorClippingStack(c
+         }
+ 
+         if (isContainingBlockChain && ancestorLayer.renderer().hasClipOrNonVisibleOverflow()) {
++            auto* box = ancestorLayer.renderBox();
++            if (!box)
++                return AncestorTraversal::Continue;
++
+             if (ancestorLayer.hasCompositedScrollableOverflow()) {
+                 if (haveNonScrollableClippingIntermediateLayer) {
+                     pushNonScrollableClip(*currentClippedLayer, ancestorLayer);
+                     haveNonScrollableClippingIntermediateLayer = false;
+                 }
+ 
+-                auto clipRect = parentRelativeScrollableRect(ancestorLayer, &ancestorLayer);
++                auto clipRoundedRect = parentRelativeScrollableRect(ancestorLayer, &ancestorLayer);
+                 auto offset = layer.convertToLayerCoords(&ancestorLayer, { }, RenderLayer::AdjustForColumns);
+-                clipRect.moveBy(-offset);
++                clipRoundedRect.moveBy(-offset);
+ 
+-                CompositedClipData clipData { const_cast<RenderLayer*>(&ancestorLayer), clipRect, true };
++                CompositedClipData clipData { const_cast<RenderLayer*>(&ancestorLayer), clipRoundedRect, true };
++                newStack.insert(0, WTFMove(clipData));
++                currentClippedLayer = &ancestorLayer;
++            } else if (box->hasNonVisibleOverflow() && box->style().hasBorderRadius()) {
++                auto clipRoundedRect = box->style().getRoundedInnerBorderFor(box->borderBoxRect());
++
++                auto offset = layer.convertToLayerCoords(&ancestorLayer, { }, RenderLayer::AdjustForColumns);
++                auto rect = clipRoundedRect.rect();
++                rect.moveBy(-offset);
++                clipRoundedRect.setRect(rect);
++
++                CompositedClipData clipData { const_cast<RenderLayer*>(&ancestorLayer), clipRoundedRect, false };
+                 newStack.insert(0, WTFMove(clipData));
+                 currentClippedLayer = &ancestorLayer;
+             } else
+@@ -4778,21 +4806,27 @@ ScrollingNodeID RenderLayerCompositor::updateScrollingNodeForViewportConstrained
+     return newNodeID;
+ }
+ 
+-LayoutRect RenderLayerCompositor::parentRelativeScrollableRect(const RenderLayer& layer, const RenderLayer* ancestorLayer) const
++RoundedRect RenderLayerCompositor::parentRelativeScrollableRect(const RenderLayer& layer, const RenderLayer* ancestorLayer) const
+ {
+     // FIXME: ancestorLayer needs to be always non-null, so should become a reference.
+     if (!ancestorLayer) {
+         if (!layer.scrollableArea())
+-            return LayoutRect();
+-        return LayoutRect({ }, LayoutSize(layer.scrollableArea()->visibleSize()));
++            return RoundedRect { LayoutRect { } };
++        return RoundedRect { LayoutRect({ }, LayoutSize(layer.scrollableArea()->visibleSize())) };
+     }
+ 
+-    LayoutRect scrollableRect;
+-    if (is<RenderBox>(layer.renderer()))
+-        scrollableRect = downcast<RenderBox>(layer.renderer()).paddingBoxRect();
++    if (!is<RenderBox>(layer.renderer()))
++        return RoundedRect { LayoutRect { } };
+ 
+-    auto offset = layer.convertToLayerCoords(ancestorLayer, scrollableRect.location()); // FIXME: broken for columns.
+-    scrollableRect.setLocation(offset);
++    auto& box = downcast<RenderBox>(layer.renderer());
++    auto scrollableRect = RoundedRect { box.paddingBoxRect() };
++    if (box.style().hasBorderRadius())
++        scrollableRect = box.style().getRoundedInnerBorderFor(box.borderBoxRect());
++
++    auto offset = layer.convertToLayerCoords(ancestorLayer, scrollableRect.rect().location()); // FIXME: broken for columns.
++    auto rect = scrollableRect.rect();
++    rect.setLocation(offset);
++    scrollableRect.setRect(rect);
+     return scrollableRect;
+ }
+ 
+@@ -4878,12 +4912,12 @@ ScrollingNodeID RenderLayerCompositor::updateScrollingNodeForScrollingProxyRole(
+         }
+         entry.overflowScrollProxyNodeID = nodeID;
+ #if ENABLE(SCROLLING_THREAD)
+-        if (entry.clippingLayer)
+-            entry.clippingLayer->setScrollingNodeID(nodeID);
++        if (entry.scrollingLayer)
++            entry.scrollingLayer->setScrollingNodeID(nodeID);
+ #endif
+ 
+         if (changes & ScrollingNodeChangeFlags::Layer)
+-            scrollingCoordinator->setNodeLayers(entry.overflowScrollProxyNodeID, { entry.clippingLayer.get() });
++            scrollingCoordinator->setNodeLayers(entry.overflowScrollProxyNodeID, { entry.scrollingLayer.get() });
+ 
+         if (changes & ScrollingNodeChangeFlags::LayerGeometry) {
+             ASSERT(entry.clipData.clippingLayer);
+diff --git a/Source/WebCore/rendering/RenderLayerCompositor.h b/Source/WebCore/rendering/RenderLayerCompositor.h
+index f1037ed9750c..55ac61dc755c 100644
+--- a/Source/WebCore/rendering/RenderLayerCompositor.h
++++ b/Source/WebCore/rendering/RenderLayerCompositor.h
+@@ -539,7 +539,7 @@ private:
+     FixedPositionViewportConstraints computeFixedViewportConstraints(RenderLayer&) const;
+     StickyPositionViewportConstraints computeStickyViewportConstraints(RenderLayer&) const;
+ 
+-    LayoutRect parentRelativeScrollableRect(const RenderLayer&, const RenderLayer* ancestorLayer) const;
++    RoundedRect parentRelativeScrollableRect(const RenderLayer&, const RenderLayer* ancestorLayer) const;
+ 
+     // Returns list of layers and their clip rects required to clip the given layer, which include clips in the
+     // containing block chain between the given layer and its composited ancestor.
+-- 
+2.37.3
+

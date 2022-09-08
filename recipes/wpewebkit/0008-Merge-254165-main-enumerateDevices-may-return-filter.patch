@@ -1,0 +1,152 @@
+From 3af6801f2d574e538ae77458927e5748cce97060 Mon Sep 17 00:00:00 2001
+From: Youenn Fablet <youennf@gmail.com>
+Date: Mon, 5 Sep 2022 07:53:38 -0700
+Subject: [PATCH 08/25] Merge 254165@main - enumerateDevices may return
+ filtered devices even if page is capturing
+ https://bugs.webkit.org/show_bug.cgi?id=244713 rdar://problem/99484964
+
+Reviewed by Eric Carlson.
+
+Stop using m_grantedRequests for enumerateDevices since it might be reset to ask for prompting again.
+Instead, manage a HashSet<FrameID> to store whether a particular document can get access to the whole information.
+We still reset this hash set in case we are ordered to stop capture.
+
+* Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.cpp:
+(WebKit::UserMediaPermissionRequestManagerProxy::grantRequest):
+(WebKit::UserMediaPermissionRequestManagerProxy::resetAccess):
+(WebKit::UserMediaPermissionRequestManagerProxy::searchForGrantedRequest const):
+(WebKit::UserMediaPermissionRequestManagerProxy::updateStoredRequests):
+(WebKit::UserMediaPermissionRequestManagerProxy::processUserMediaPermissionInvalidRequest):
+(WebKit::UserMediaPermissionRequestManagerProxy::shouldChangeDeniedToPromptForCamera const):
+(WebKit::UserMediaPermissionRequestManagerProxy::shouldChangeDeniedToPromptForMicrophone const):
+(WebKit::UserMediaPermissionRequestManagerProxy::wasGrantedVideoOrAudioAccess):
+(WebKit::UserMediaPermissionRequestManagerProxy::enumerateMediaDevicesForFrame):
+(WebKit::UserMediaPermissionRequestManagerProxy::captureStateChanged):
+(WebKit::UserMediaPermissionRequestManagerProxy::watchdogTimerFired):
+* Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.h:
+* Tools/TestWebKitAPI/Tests/WebKit/GetUserMedia.mm:
+* Tools/TestWebKitAPI/Tests/WebKit/getUserMedia.html:
+
+Canonical link: https://commits.webkit.org/254165@main
+
+(cherry picked from commit 3142453d3762d579cda8a4f04041598e31e584ab)
+---
+ ...UserMediaPermissionRequestManagerProxy.cpp | 35 ++++++++-----------
+ .../UserMediaPermissionRequestManagerProxy.h  |  3 +-
+ .../Tests/WebKit/GetUserMedia.mm              | 34 ++++++++++++++++++
+ .../Tests/WebKit/getUserMedia.html            | 11 ++++++
+ 4 files changed, 61 insertions(+), 22 deletions(-)
+
+diff --git a/Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.cpp b/Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.cpp
+index 95b64ed61a87..6fc07e599db9 100644
+--- a/Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.cpp
++++ b/Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.cpp
+@@ -243,6 +243,7 @@ void UserMediaPermissionRequestManagerProxy::grantRequest(UserMediaPermissionReq
+             callback(true);
+         });
+         m_grantedRequests.append(request);
++        m_grantedFrames.add(request.frameID());
+         return;
+     }
+ 
+@@ -311,13 +312,17 @@ void UserMediaPermissionRequestManagerProxy::finishGrantingRequest(UserMediaPerm
+ 
+ void UserMediaPermissionRequestManagerProxy::resetAccess(std::optional<FrameIdentifier> frameID)
+ {
++    ALWAYS_LOG(LOGIDENTIFIER, frameID ? frameID->toUInt64() : 0);
++
+     if (frameID) {
+-        ALWAYS_LOG(LOGIDENTIFIER, frameID ? frameID->loggingString() : String { });
+         m_grantedRequests.removeAllMatching([frameID](const auto& grantedRequest) {
+             return grantedRequest->mainFrameID() == frameID;
+         });
+-    } else
++        m_grantedFrames.remove(*frameID);
++    } else {
+         m_grantedRequests.clear();
++        m_grantedFrames.clear();
++    }
+     m_pregrantedRequests.clear();
+     m_deniedRequests.clear();
+     m_hasFilteredDeviceList = false;
+@@ -390,8 +395,10 @@ bool UserMediaPermissionRequestManagerProxy::wasRequestDenied(const UserMediaPer
+ 
+ void UserMediaPermissionRequestManagerProxy::updateStoredRequests(UserMediaPermissionRequestProxy& request)
+ {
+-    if (request.requestType() == MediaStreamRequest::Type::UserMedia)
++    if (request.requestType() == MediaStreamRequest::Type::UserMedia) {
+         m_grantedRequests.append(request);
++        m_grantedFrames.add(request.frameID());
++    }
+ 
+     m_deniedRequests.removeAllMatching([&request](auto& deniedRequest) {
+         if (!isMatchingDeniedRequest(request, deniedRequest))
+@@ -559,7 +566,7 @@ void UserMediaPermissionRequestManagerProxy::platformValidateUserMediaRequestCon
+ void UserMediaPermissionRequestManagerProxy::processUserMediaPermissionInvalidRequest(const String& invalidConstraint)
+ {
+     ALWAYS_LOG(LOGIDENTIFIER, m_currentUserMediaRequest->userMediaID().toUInt64());
+-    bool filterConstraint = !m_currentUserMediaRequest->hasPersistentAccess() && !wasGrantedVideoOrAudioAccess(m_currentUserMediaRequest->frameID(), m_currentUserMediaRequest->userMediaDocumentSecurityOrigin(), m_currentUserMediaRequest->topLevelDocumentSecurityOrigin());
++    bool filterConstraint = !m_currentUserMediaRequest->hasPersistentAccess() && !wasGrantedVideoOrAudioAccess(m_currentUserMediaRequest->frameID());
+ 
+     denyRequest(*m_currentUserMediaRequest, UserMediaPermissionRequestProxy::UserMediaAccessDenialReason::InvalidConstraint, filterConstraint ? String { } : invalidConstraint);
+ }
+@@ -733,23 +740,9 @@ void UserMediaPermissionRequestManagerProxy::getUserMediaPermissionInfo(FrameIde
+     m_page.uiClient().checkUserMediaPermissionForOrigin(m_page, *webFrame, userMediaOrigin.get(), topLevelOrigin.get(), request.get());
+ }
+ 
+-bool UserMediaPermissionRequestManagerProxy::wasGrantedVideoOrAudioAccess(FrameIdentifier frameID, const SecurityOrigin& userMediaDocumentOrigin, const SecurityOrigin& topLevelDocumentOrigin)
++bool UserMediaPermissionRequestManagerProxy::wasGrantedVideoOrAudioAccess(FrameIdentifier frameID)
+ {
+-    for (const auto& grantedRequest : m_grantedRequests) {
+-        if (grantedRequest->requiresDisplayCapture())
+-            continue;
+-        if (!grantedRequest->userMediaDocumentSecurityOrigin().isSameSchemeHostPort(userMediaDocumentOrigin))
+-            continue;
+-        if (!grantedRequest->topLevelDocumentSecurityOrigin().isSameSchemeHostPort(topLevelDocumentOrigin))
+-            continue;
+-        if (grantedRequest->frameID() != frameID)
+-            continue;
+-
+-        if (grantedRequest->requiresVideoCapture() || grantedRequest->requiresAudioCapture())
+-            return true;
+-    }
+-
+-    return false;
++    return m_grantedFrames.contains(frameID);
+ }
+ 
+ static inline bool haveMicrophoneDevice(const Vector<WebCore::CaptureDevice>& devices, const String& deviceID)
+@@ -859,7 +852,7 @@ void UserMediaPermissionRequestManagerProxy::enumerateMediaDevicesForFrame(Frame
+ 
+             syncWithWebCorePrefs();
+ 
+-            bool revealIdsAndLabels = originHasPersistentAccess || wasGrantedVideoOrAudioAccess(frameID, userMediaDocumentOrigin.get(), topLevelDocumentOrigin.get());
++            bool revealIdsAndLabels = originHasPersistentAccess || wasGrantedVideoOrAudioAccess(frameID);
+ 
+             callCompletionHandler.release();
+             computeFilteredDeviceList(revealIdsAndLabels, [completionHandler = WTFMove(completionHandler), deviceIDHashSalt = WTFMove(deviceIDHashSalt)] (auto&& devices) mutable {
+diff --git a/Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.h b/Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.h
+index 4e4052db124a..903edb43333a 100644
+--- a/Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.h
++++ b/Source/WebKit/UIProcess/UserMediaPermissionRequestManagerProxy.h
+@@ -144,7 +144,7 @@ private:
+ 
+     RequestAction getRequestAction(const UserMediaPermissionRequestProxy&);
+ 
+-    bool wasGrantedVideoOrAudioAccess(WebCore::FrameIdentifier, const WebCore::SecurityOrigin& userMediaDocumentOrigin, const WebCore::SecurityOrigin& topLevelDocumentOrigin);
++    bool wasGrantedVideoOrAudioAccess(WebCore::FrameIdentifier);
+ 
+     void computeFilteredDeviceList(bool revealIdsAndLabels, CompletionHandler<void(Vector<WebCore::CaptureDevice>&&)>&&);
+     void platformGetMediaStreamDevices(CompletionHandler<void(Vector<WebCore::CaptureDevice>&&)>&&);
+@@ -194,6 +194,7 @@ private:
+ #endif
+     uint64_t m_hasPendingCapture { 0 };
+     std::optional<bool> m_mockDevicesEnabledOverride;
++    HashSet<WebCore::FrameIdentifier> m_grantedFrames;
+ };
+ 
+ String convertEnumerationToString(UserMediaPermissionRequestManagerProxy::RequestAction);
+ 
+-- 
+2.37.3
+

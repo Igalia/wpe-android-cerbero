@@ -1,0 +1,60 @@
+From 28a89facb87206b6a2148565e81b4d1cd4024710 Mon Sep 17 00:00:00 2001
+From: Carlos Garcia Campos <cgarcia@igalia.com>
+Date: Wed, 7 Sep 2022 07:57:13 -0700
+Subject: [PATCH 13/25] Merge 254232@main - [WPE][GTK] web-process-terminated
+ signal not emitted for first web view when bubblewrap sandbox is enabled
+ https://bugs.webkit.org/show_bug.cgi?id=221489
+
+Reviewed by Michael Catanzaro.
+
+We run all subprocesses with G_SUBPROCESS_FLAGS_INHERIT_FDS. Since
+xdg-dbus-proxy is spawned right before the first web process, but after
+the socketpair for the web process has been called, it's inheriting the
+connected socket. When the first web process dies, the connection is
+still connected from the UI process to the xdg-dbus-proxy process, and
+hup signal is not emitted. I think we don't need to use
+G_SUBPROCESS_FLAGS_INHERIT_FDS, because we are already using
+g_subprocess_launcher_take_fd() to transfer the fds we want.
+
+* Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp:
+(WebKit::ProcessLauncher::launchProcess):
+* Source/WebKit/UIProcess/Launcher/glib/XDGDBusProxy.cpp:
+(WebKit::XDGDBusProxy::launch const):
+
+Canonical link: https://commits.webkit.org/254232@main
+
+(cherry picked from commit 63e2970f0f1bfa8e5ecf59cb029566c7d0bc78e2)
+---
+ Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp | 2 +-
+ Source/WebKit/UIProcess/Launcher/glib/XDGDBusProxy.cpp        | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
+index e3fa7ffb7a8c..59bc39ae7df4 100644
+--- a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
++++ b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
+@@ -130,7 +130,7 @@ void ProcessLauncher::launchProcess()
+     // Warning: do not set a child setup function, because we want GIO to be able to spawn with
+     // posix_spawn() rather than fork()/exec(), in order to better accommodate applications that use
+     // a huge amount of memory or address space in the UI process, like Eclipse.
+-    GRefPtr<GSubprocessLauncher> launcher = adoptGRef(g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_INHERIT_FDS));
++    GRefPtr<GSubprocessLauncher> launcher = adoptGRef(g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_NONE));
+     g_subprocess_launcher_take_fd(launcher.get(), socketPair.client, socketPair.client);
+ 
+     GUniqueOutPtr<GError> error;
+diff --git a/Source/WebKit/UIProcess/Launcher/glib/XDGDBusProxy.cpp b/Source/WebKit/UIProcess/Launcher/glib/XDGDBusProxy.cpp
+index a150069b7869..c8ac9b6661d8 100644
+--- a/Source/WebKit/UIProcess/Launcher/glib/XDGDBusProxy.cpp
++++ b/Source/WebKit/UIProcess/Launcher/glib/XDGDBusProxy.cpp
+@@ -192,7 +192,7 @@ int XDGDBusProxy::launch(bool allowPortals) const
+     // Warning: do not set a child setup function, because we want GIO to be able to spawn with
+     // posix_spawn() rather than fork()/exec(), in order to better accomodate applications that use
+     // a huge amount of memory or address space in the UI process, like Eclipse.
+-    GRefPtr<GSubprocessLauncher> launcher = adoptGRef(g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_INHERIT_FDS));
++    GRefPtr<GSubprocessLauncher> launcher = adoptGRef(g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_NONE));
+     g_subprocess_launcher_take_fd(launcher.get(), proxyFd, proxyFd);
+     g_subprocess_launcher_take_fd(launcher.get(), syncFds[1], syncFds[1]);
+ 
+-- 
+2.37.3
+

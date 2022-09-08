@@ -1,0 +1,41 @@
+From ee50a959b2b4004073eed2e7fc2a801a703df956 Mon Sep 17 00:00:00 2001
+From: Pablo Saavedra <psaavedra@igalia.com>
+Date: Fri, 2 Sep 2022 07:41:46 -0700
+Subject: [PATCH 02/25] Merge 254097@main - [GLIB] WheelEvent (phase=ended) has
+ to be relayed to the scrollingTree if user scroll is in progress
+ https://bugs.webkit.org/show_bug.cgi?id=244635
+
+... allow the scrollingTree to finish with an possible kinetic animation
+being calculated if that is the case.
+
+Reviewed by Adrian Perez de Castro.
+
+* Source/WebKit/WebProcess/WebPage/EventDispatcher.cpp:
+(WebKit::EventDispatcher::internalWheelEvent):
+
+Canonical link: https://commits.webkit.org/254097@main
+
+(cherry picked from commit a1f7dcfc9842ecb6d5d73df41036fc985edb9589)
+---
+ Source/WebKit/WebProcess/WebPage/EventDispatcher.cpp | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebKit/WebProcess/WebPage/EventDispatcher.cpp b/Source/WebKit/WebProcess/WebPage/EventDispatcher.cpp
+index fcf62c05608e..dd8a1c7d318d 100644
+--- a/Source/WebKit/WebProcess/WebPage/EventDispatcher.cpp
++++ b/Source/WebKit/WebProcess/WebPage/EventDispatcher.cpp
+@@ -133,8 +133,9 @@ void EventDispatcher::internalWheelEvent(PageIdentifier pageID, const WebWheelEv
+         bool useMainThreadForScrolling = processingSteps.contains(WheelEventProcessingSteps::MainThreadForScrolling);
+ 
+ #if !PLATFORM(COCOA)
+-        // Deliver continuing scroll gestures directly to the scrolling thread.
+-        if (platformWheelEvent.phase() == PlatformWheelEventPhase::Changed && scrollingTree->isUserScrollInProgressAtEventLocation(platformWheelEvent))
++        // Deliver continuing scroll gestures directly to the scrolling thread until the end.
++        if ((platformWheelEvent.phase() == PlatformWheelEventPhase::Changed || platformWheelEvent.phase() == PlatformWheelEventPhase::Ended)
++            && scrollingTree->isUserScrollInProgressAtEventLocation(platformWheelEvent))
+             useMainThreadForScrolling = false;
+ #endif
+ 
+-- 
+2.37.3
+

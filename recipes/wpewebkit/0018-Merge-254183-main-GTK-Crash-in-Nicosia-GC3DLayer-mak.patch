@@ -1,0 +1,214 @@
+From 1c695e2b52c95b5b8451bacff96cb3acd1239b20 Mon Sep 17 00:00:00 2001
+From: Carlos Garcia Campos <cgarcia@igalia.com>
+Date: Tue, 6 Sep 2022 02:15:58 -0700
+Subject: [PATCH 18/25] Merge 254183@main - [GTK] Crash in
+ Nicosia::GC3DLayer::makeContextCurrent, failure to play fullscreen video due
+ to failure in EGL display creation
+ https://bugs.webkit.org/show_bug.cgi?id=201507
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reviewed by Žan Doberšek.
+
+NicosiaGCGLLayer assumes the creation of the GL context can't fail and
+we end up crashing when that happens for whatever reason.
+
+* Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.cpp:
+(Nicosia::GCGLLayer::create): Create the GL context and return nullptr
+if it fails, otherwise pass it to the constructor.
+(Nicosia::GCGLLayer::GCGLLayer): Receive the GL context as parameter too.
+* Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.h:
+* Source/WebCore/platform/graphics/opengl/GraphicsContextGLOpenGL.cpp:
+(WebCore::GraphicsContextGLOpenGL::GraphicsContextGLOpenGL): Do not
+initialize the context here, move it to initialize().
+(WebCore::GraphicsContextGLOpenGL::~GraphicsContextGLOpenGL): Return
+early if makeContextCurrent() returns false.
+(WebCore::GraphicsContextGLOpenGL::initialize): Move initialization
+here, returning false if context creation or making the context current fails.
+(WebCore::GraphicsContextGLOpenGL::makeContextCurrent): Null check m_nicosiaLayer.
+
+Canonical link: https://commits.webkit.org/254183@main
+
+(cherry picked from commit b7d555805988f56bc97e9ae21014a35a463b1987)
+---
+ .../nicosia/texmap/NicosiaGCGLLayer.cpp       |  11 +-
+ .../nicosia/texmap/NicosiaGCGLLayer.h         |   3 +-
+ .../opengl/GraphicsContextGLOpenGL.cpp        | 100 +++++++++---------
+ 3 files changed, 63 insertions(+), 51 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.cpp b/Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.cpp
+index aa2b1e67d90b..35843b33b097 100644
+--- a/Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.cpp
++++ b/Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.cpp
+@@ -43,11 +43,18 @@ namespace Nicosia {
+ 
+ using namespace WebCore;
+ 
+-GCGLLayer::GCGLLayer(GraphicsContextGLOpenGL& context)
++std::unique_ptr<GCGLLayer> GCGLLayer::create(WebCore::GraphicsContextGLOpenGL& context)
++{
++    if (auto glContext = GLContext::createOffscreenContext(&PlatformDisplay::sharedDisplayForCompositing()))
++        return makeUnique<GCGLLayer>(context, WTFMove(glContext));
++    return nullptr;
++}
++
++GCGLLayer::GCGLLayer(GraphicsContextGLOpenGL& context, std::unique_ptr<WebCore::GLContext>&& glContext)
+     : m_context(context)
++    , m_glContext(WTFMove(glContext))
+     , m_contentLayer(Nicosia::ContentLayer::create(Nicosia::ContentLayerTextureMapperImpl::createFactory(*this)))
+ {
+-    m_glContext = GLContext::createOffscreenContext(&PlatformDisplay::sharedDisplayForCompositing());
+ }
+ 
+ GCGLLayer::~GCGLLayer()
+diff --git a/Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.h b/Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.h
+index ab1a164817db..6bf7ee687df9 100644
+--- a/Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.h
++++ b/Source/WebCore/platform/graphics/nicosia/texmap/NicosiaGCGLLayer.h
+@@ -43,8 +43,9 @@ namespace Nicosia {
+ class GCGLLayer : public ContentLayerTextureMapperImpl::Client {
+     WTF_MAKE_FAST_ALLOCATED;
+ public:
+-    explicit GCGLLayer(WebCore::GraphicsContextGLOpenGL&);
++    static std::unique_ptr<GCGLLayer> create(WebCore::GraphicsContextGLOpenGL&);
+ 
++    GCGLLayer(WebCore::GraphicsContextGLOpenGL&, std::unique_ptr<WebCore::GLContext>&&);
+     virtual ~GCGLLayer();
+ 
+     ContentLayer& contentLayer() const { return m_contentLayer; }
+diff --git a/Source/WebCore/platform/graphics/opengl/GraphicsContextGLOpenGL.cpp b/Source/WebCore/platform/graphics/opengl/GraphicsContextGLOpenGL.cpp
+index 2d4baa05c5a9..3ddaa0049bbd 100644
+--- a/Source/WebCore/platform/graphics/opengl/GraphicsContextGLOpenGL.cpp
++++ b/Source/WebCore/platform/graphics/opengl/GraphicsContextGLOpenGL.cpp
+@@ -123,17 +123,64 @@ static uint64_t nameHashForShader(const char* name, size_t length)
+ GraphicsContextGLOpenGL::GraphicsContextGLOpenGL(GraphicsContextGLAttributes attributes)
+     : GraphicsContextGL(attributes)
+ {
++}
++
++GraphicsContextGLOpenGL::~GraphicsContextGLOpenGL()
++{
++    if (!makeContextCurrent())
++        return;
++
++    if (m_texture)
++        ::glDeleteTextures(1, &m_texture);
++#if USE(COORDINATED_GRAPHICS)
++    if (m_compositorTexture)
++        ::glDeleteTextures(1, &m_compositorTexture);
++#endif
++
++    auto attributes = contextAttributes();
++
++    if (attributes.antialias) {
++        ::glDeleteRenderbuffers(1, &m_multisampleColorBuffer);
++        if (attributes.stencil || attributes.depth)
++            ::glDeleteRenderbuffers(1, &m_multisampleDepthStencilBuffer);
++        ::glDeleteFramebuffers(1, &m_multisampleFBO);
++    } else if (attributes.stencil || attributes.depth) {
++#if USE(OPENGL_ES)
++        if (m_depthBuffer)
++            glDeleteRenderbuffers(1, &m_depthBuffer);
++
++        if (m_stencilBuffer)
++            glDeleteRenderbuffers(1, &m_stencilBuffer);
++#endif
++        if (m_depthStencilBuffer)
++            ::glDeleteRenderbuffers(1, &m_depthStencilBuffer);
++    }
++    ::glDeleteFramebuffers(1, &m_fbo);
++#if USE(COORDINATED_GRAPHICS)
++    ::glDeleteTextures(1, &m_intermediateTexture);
++#endif
++
++#if USE(CAIRO)
++    if (m_vao)
++        deleteVertexArray(m_vao);
++#endif
++}
++
++bool GraphicsContextGLOpenGL::initialize()
++{
+ #if USE(NICOSIA)
+-    m_nicosiaLayer = makeUnique<Nicosia::GCGLLayer>(*this);
++    m_nicosiaLayer = Nicosia::GCGLLayer::create(*this);
++    if (!m_nicosiaLayer)
++        return false;
+ #else
+     m_texmapLayer = makeUnique<TextureMapperGCGLPlatformLayer>(*this);
+ #endif
+ 
+-    bool success = makeContextCurrent();
+-    ASSERT_UNUSED(success, success);
++    if (!makeContextCurrent())
++        return false;
+ 
+     validateAttributes();
+-    attributes = contextAttributes(); // They may have changed during validation.
++    auto attributes = contextAttributes(); // They may have changed during validation.
+ 
+     // Create a texture to render into.
+     ::glGenTextures(1, &m_texture);
+@@ -246,57 +293,14 @@ GraphicsContextGLOpenGL::GraphicsContextGLOpenGL(GraphicsContextGLAttributes att
+     m_compiler.setResources(ANGLEResources);
+ 
+     ::glClearColor(0, 0, 0, 0);
+-}
+ 
+-GraphicsContextGLOpenGL::~GraphicsContextGLOpenGL()
+-{
+-    bool success = makeContextCurrent();
+-    ASSERT_UNUSED(success, success);
+-    if (m_texture)
+-        ::glDeleteTextures(1, &m_texture);
+-#if USE(COORDINATED_GRAPHICS)
+-    if (m_compositorTexture)
+-        ::glDeleteTextures(1, &m_compositorTexture);
+-#endif
+-
+-    auto attributes = contextAttributes();
+-
+-    if (attributes.antialias) {
+-        ::glDeleteRenderbuffers(1, &m_multisampleColorBuffer);
+-        if (attributes.stencil || attributes.depth)
+-            ::glDeleteRenderbuffers(1, &m_multisampleDepthStencilBuffer);
+-        ::glDeleteFramebuffers(1, &m_multisampleFBO);
+-    } else if (attributes.stencil || attributes.depth) {
+-#if USE(OPENGL_ES)
+-        if (m_depthBuffer)
+-            glDeleteRenderbuffers(1, &m_depthBuffer);
+-
+-        if (m_stencilBuffer)
+-            glDeleteRenderbuffers(1, &m_stencilBuffer);
+-#endif
+-        if (m_depthStencilBuffer)
+-            ::glDeleteRenderbuffers(1, &m_depthStencilBuffer);
+-    }
+-    ::glDeleteFramebuffers(1, &m_fbo);
+-#if USE(COORDINATED_GRAPHICS)
+-    ::glDeleteTextures(1, &m_intermediateTexture);
+-#endif
+-
+-#if USE(CAIRO)
+-    if (m_vao)
+-        deleteVertexArray(m_vao);
+-#endif
+-}
+-
+-bool GraphicsContextGLOpenGL::initialize()
+-{
+     return platformInitialize();
+ }
+ 
+ bool GraphicsContextGLOpenGL::makeContextCurrent()
+ {
+ #if USE(NICOSIA)
+-    return m_nicosiaLayer->makeContextCurrent();
++    return m_nicosiaLayer && m_nicosiaLayer->makeContextCurrent();
+ #else
+     return m_texmapLayer->makeContextCurrent();
+ #endif
+-- 
+2.37.3
+

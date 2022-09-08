@@ -1,0 +1,204 @@
+From 17789a7947a7596c730f925b5f159380cc5defda Mon Sep 17 00:00:00 2001
+From: Alicia Boya Garcia <aboya@igalia.com>
+Date: Sun, 4 Sep 2022 07:07:24 -0700
+Subject: [PATCH 05/25] Merge 254142@main - [GStreamer]
+ MediaPlayerPrivateGStreamer: Abort stale tasks on flushes
+ https://bugs.webkit.org/show_bug.cgi?id=244534
+
+Reviewed by Philippe Normand.
+
+This patch is a combination of a follow-up of
+https://github.com/WebKit/WebKit/pull/3746, and a fix for a race
+condition I independently discovered before said PR was published.
+
+Minor cleanups for pr/3746 are done, additional logging is added,
+MediaPlayerPrivateGStreamer::m_abortableTaskQueue is renamed to
+MediaPlayerPrivateGStreamer::m_sinkTaskQueue, comments are added, and
+most importantly: the task queue is flushed when a GStreamer flush is
+received. This fixes a race condition on MSE flushes.
+
+To compensate the additional logic added to the WebKit video sink probe,
+this patch refactors the function, getting rid of the early return
+spaghetti it had slowly become over the years.
+
+In the process, I found the code for calling flushCurrentBuffer() on
+FLUSH_START in the previous code was actually unreachable and had been
+so for the most part of a year, as an accident of an early return in the
+old code (FLUSH_START events have the
+GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM flag. The old code did an early
+return when that flag was found for an event other than a tag event).
+
+Figuring out all bugs with flushCurrentBuffer() and what usages it
+should have is very much outside of the scope of this patch. Instead,
+this patch makes no change on behavior and adds a FIXME section
+explaining the situation and how it needs further work.
+
+* Source/WebCore/platform/graphics/gstreamer/GStreamerVideoSinkCommon.cpp:
+(webKitVideoSinkSetMediaPlayerPrivate):
+* Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp:
+(WebCore::MediaPlayerPrivateGStreamer::~MediaPlayerPrivateGStreamer):
+(WebCore::MediaPlayerPrivateGStreamer::updateVideoOrientation):
+* Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h:
+(WebCore::MediaPlayerPrivateGStreamer::sinkTaskQueue):
+
+Canonical link: https://commits.webkit.org/254142@main
+
+(cherry picked from commit e55d1903cf1086c65c6d1f1fdf87578d0d54596c)
+---
+ .../gstreamer/GStreamerVideoSinkCommon.cpp    | 65 +++++++++++--------
+ .../gstreamer/MediaPlayerPrivateGStreamer.cpp | 12 ++--
+ .../gstreamer/MediaPlayerPrivateGStreamer.h   |  6 +-
+ 3 files changed, 48 insertions(+), 35 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/gstreamer/GStreamerVideoSinkCommon.cpp b/Source/WebCore/platform/graphics/gstreamer/GStreamerVideoSinkCommon.cpp
+index 608c667a7bfb..9ea63793d100 100644
+--- a/Source/WebCore/platform/graphics/gstreamer/GStreamerVideoSinkCommon.cpp
++++ b/Source/WebCore/platform/graphics/gstreamer/GStreamerVideoSinkCommon.cpp
+@@ -52,43 +52,54 @@ void webKitVideoSinkSetMediaPlayerPrivate(GstElement* appSink, MediaPlayerPrivat
+     }), player);
+ 
+     GRefPtr<GstPad> pad = adoptGRef(gst_element_get_static_pad(appSink, "sink"));
+-    gst_pad_add_probe(pad.get(), static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_PUSH | GST_PAD_PROBE_TYPE_QUERY_DOWNSTREAM | GST_PAD_PROBE_TYPE_EVENT_FLUSH | GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM), [](GstPad*, GstPadProbeInfo* info, gpointer userData) -> GstPadProbeReturn {
++    gst_pad_add_probe(pad.get(), static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_PUSH | GST_PAD_PROBE_TYPE_QUERY_DOWNSTREAM | GST_PAD_PROBE_TYPE_EVENT_FLUSH | GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM), [](GstPad* pad, GstPadProbeInfo* info, gpointer userData) -> GstPadProbeReturn {
+         auto* player = static_cast<MediaPlayerPrivateGStreamer*>(userData);
+ 
+-        if (info->type & GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM) {
+-            if (GST_EVENT_TYPE(GST_PAD_PROBE_INFO_EVENT(info)) != GST_EVENT_TAG)
+-                return GST_PAD_PROBE_OK;
++        if (info->type & GST_PAD_PROBE_TYPE_EVENT_FLUSH) {
++            if (GST_EVENT_TYPE(GST_PAD_PROBE_INFO_EVENT(info)) == GST_EVENT_FLUSH_START) {
++                GST_DEBUG_OBJECT(pad, "FLUSH_START received, aborting all pending tasks in the player sinkTaskQueue.");
++                player->sinkTaskQueue().startAborting();
++            } else if (GST_EVENT_TYPE(GST_PAD_PROBE_INFO_EVENT(info)) == GST_EVENT_FLUSH_STOP) {
++                GST_DEBUG_OBJECT(pad, "FLUSH_STOP received, allowing operation in the player sinkTaskQueue again.");
++                player->sinkTaskQueue().finishAborting();
++            }
++        }
++
++        if (info->type & GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM && GST_EVENT_TYPE(GST_PAD_PROBE_INFO_EVENT(info)) == GST_EVENT_TAG) {
+             GstTagList* tagList;
+             gst_event_parse_tag(GST_PAD_PROBE_INFO_EVENT(info), &tagList);
++            GST_DEBUG_OBJECT(pad, "Tag event received, video orientation may need to be updated. %" GST_PTR_FORMAT, tagList);
+             player->updateVideoOrientation(tagList);
+-            return GST_PAD_PROBE_OK;
+         }
+ 
+-        if (info->type & GST_PAD_PROBE_TYPE_QUERY_DOWNSTREAM) {
+-            auto* query = GST_PAD_PROBE_INFO_QUERY(info);
+-            if (GST_QUERY_TYPE(query) == GST_QUERY_ALLOCATION) {
+-                gst_query_add_allocation_meta(query, GST_VIDEO_META_API_TYPE, nullptr);
+-                return GST_PAD_PROBE_OK;
+-            }
+-
+-            // In some platforms (e.g. OpenMAX on the Raspberry Pi) when a resolution change occurs the
+-            // pipeline has to be drained before a frame with the new resolution can be decoded.
+-            // In this context, it's important that we don't hold references to any previous frame
+-            // (e.g. m_sample) so that decoding can continue.
+-            // We are also not supposed to keep the original frame after a flush.
+-            if (GST_QUERY_TYPE(query) != GST_QUERY_DRAIN)
+-                return GST_PAD_PROBE_OK;
+-            GST_DEBUG("Acting upon DRAIN query");
+-        }
+-        if (info->type & GST_PAD_PROBE_TYPE_EVENT_FLUSH) {
+-            if (GST_EVENT_TYPE(GST_PAD_PROBE_INFO_EVENT(info)) != GST_EVENT_FLUSH_START)
+-                return GST_PAD_PROBE_OK;
+-            GST_DEBUG("Acting upon flush-start event");
+-        }
++        if (info->type & GST_PAD_PROBE_TYPE_QUERY_DOWNSTREAM && GST_QUERY_TYPE(GST_PAD_PROBE_INFO_QUERY(info)) == GST_QUERY_ALLOCATION)
++            gst_query_add_allocation_meta(GST_PAD_PROBE_INFO_QUERY(info), GST_VIDEO_META_API_TYPE, nullptr);
+ 
+ #if USE(GSTREAMER_GL)
+-        player->flushCurrentBuffer();
++        // FIXME: Verify the following comment. Investigate what actually should be done here.
++        //
++        // In some platforms (e.g. OpenMAX on the Raspberry Pi) when a resolution change occurs the
++        // pipeline has to be drained before a frame with the new resolution can be decoded.
++        // In this context, it's important that we don't hold references to any previous frame
++        // (e.g. m_sample) so that decoding can continue.
++        // We are also not supposed to keep the original frame after a flush.
++        //
++        // FIXME: We used to have code to call flushCurrentBuffer() on FLUSH_START. That code became
++        // accidentally unreachable in r287349. The current code doesn't preserve that call, partly
++        // because of a refactor of this probe function, partly because it seemed to caused test
++        // regressions that were out of the scope of that change.
++        //
++        // FIXME: flushCurrentBuffer(), when called, causes the video element to become blank for the
++        // user, and has been having this issue for a long time. This is definitely a bug, and needs
++        // to be fixed eventually.
++        //
++        // For more info: https://github.com/WebKit/WebKit/pull/3802#issuecomment-1234529142
++        if (info->type & GST_PAD_PROBE_TYPE_QUERY_DOWNSTREAM && GST_QUERY_TYPE(GST_PAD_PROBE_INFO_QUERY(info)) == GST_QUERY_DRAIN) {
++            GST_DEBUG_OBJECT(pad, "Flushing current buffer in response to %" GST_PTR_FORMAT, info->data);
++            player->flushCurrentBuffer();
++        }
+ #endif
++
+         return GST_PAD_PROBE_OK;
+     }, player, nullptr);
+ }
+diff --git a/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp b/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp
+index 2038f677dce3..2633890f03e0 100644
+--- a/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp
++++ b/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp
+@@ -211,7 +211,7 @@ MediaPlayerPrivateGStreamer::~MediaPlayerPrivateGStreamer()
+     GST_DEBUG_OBJECT(pipeline(), "Disposing player");
+     m_isPlayerShuttingDown.store(true);
+ 
+-    m_abortableTaskQueue.startAborting();
++    m_sinkTaskQueue.startAborting();
+ 
+     for (auto& track : m_audioTracks.values())
+         track->disconnect();
+@@ -274,7 +274,6 @@ MediaPlayerPrivateGStreamer::~MediaPlayerPrivateGStreamer()
+ 
+     m_player = nullptr;
+     m_notifier->invalidate();
+-    m_abortableTaskQueue.finishAborting();
+ }
+ 
+ bool MediaPlayerPrivateGStreamer::isAvailable()
+@@ -3366,13 +3365,12 @@ void MediaPlayerPrivateGStreamer::updateVideoOrientation(const GstTagList* tagLi
+     if (m_videoSourceOrientation.usesWidthAsHeight())
+         m_videoSize = m_videoSize.transposedSize();
+ 
+-    m_abortableTaskQueue.enqueueTaskAndWait<AbortableTaskQueue::Void>([weakThis = WeakPtr { *this }, this] {
+-        if (!weakThis)
+-            return AbortableTaskQueue::Void();
+-
++    GST_DEBUG("Enqueuing and waiting for main-thread task to call sizeChanged()...");
++    bool sizeChangedProcessed = m_sinkTaskQueue.enqueueTaskAndWait<AbortableTaskQueue::Void>([this] {
+         m_player->sizeChanged();
+         return AbortableTaskQueue::Void();
+-    });
++    }).has_value();
++    GST_DEBUG("Finished waiting for main-thread task to call sizeChanged()... %s", sizeChangedProcessed ? "sizeChanged() was called." : "task queue aborted by flush");
+ }
+ 
+ void MediaPlayerPrivateGStreamer::updateVideoSizeAndOrientationFromCaps(const GstCaps* caps)
+diff --git a/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h b/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h
+index 71d441186059..9a7cd38623cf 100644
+--- a/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h
++++ b/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h
+@@ -248,6 +248,10 @@ public:
+     const Logger& mediaPlayerLogger() { return logger(); }
+ #endif
+ 
++    // This AbortableTaskQueue must be aborted everytime a flush is sent downstream from the main thread
++    // to avoid deadlocks from threads in the playback pipeline waiting for the main thread.
++    AbortableTaskQueue& sinkTaskQueue() { return m_sinkTaskQueue; }
++
+ protected:
+     enum MainThreadNotification {
+         VideoChanged = 1 << 0,
+@@ -601,7 +605,7 @@ private:
+ 
+     GRefPtr<GstStreamCollection> m_streamCollection;
+ 
+-    AbortableTaskQueue m_abortableTaskQueue;
++    AbortableTaskQueue m_sinkTaskQueue;
+ };
+ 
+ }
+-- 
+2.37.3
+

@@ -1,0 +1,130 @@
+From 6e3d3802382d4630df0fbe09eb966cce43bc8508 Mon Sep 17 00:00:00 2001
+From: Ryosuke Niwa <rniwa@webkit.org>
+Date: Tue, 6 Sep 2022 23:15:24 -0700
+Subject: [PATCH 09/25] Merge 254213@main - Revert 252943@main for causing
+ constant flickering on aa.com
+
+Unreviewed. Reverts 252943@main.
+
+* LayoutTests/TestExpectations:
+* LayoutTests/fast/dom/HTMLLinkElement/link-preload-load-once-expected.txt: Removed.
+* LayoutTests/fast/dom/HTMLLinkElement/link-preload-load-once.html: Removed.
+* LayoutTests/fast/dom/HTMLLinkElement/link-stylesheet-load-once-expected.txt: Removed.
+* LayoutTests/fast/dom/HTMLLinkElement/link-stylesheet-load-once.html: Removed.
+* LayoutTests/imported/w3c/web-platform-tests/html/semantics/document-metadata/the-link-element/link-multiple-error-events-expected.txt:
+* LayoutTests/imported/w3c/web-platform-tests/html/semantics/document-metadata/the-link-element/link-multiple-load-events-expected.txt:
+* LayoutTests/platform/mac-wk1/fast/dom/HTMLLinkElement/link-preload-load-once-expected.txt: Removed.
+* LayoutTests/platform/win/fast/dom/HTMLLinkElement/link-preload-load-once-expected.txt: Removed.
+* Source/WebCore/html/HTMLLinkElement.cpp:
+(WebCore::HTMLLinkElement::HTMLLinkElement):
+(WebCore::HTMLLinkElement::parseAttribute):
+(WebCore::HTMLLinkElement::notifyLoadedSheetAndAllCriticalSubresources):
+* Source/WebCore/html/HTMLLinkElement.h:
+* Source/WebCore/html/LinkRelAttribute.h:
+(WebCore::operator==): Deleted.
+(WebCore::operator!=): Deleted.
+---
+ LayoutTests/TestExpectations                  |  2 +
+ .../link-preload-load-once-expected.txt       |  8 ----
+ .../link-preload-load-once.html               | 39 -----------------
+ .../link-stylesheet-load-once-expected.txt    |  8 ----
+ .../link-stylesheet-load-once.html            | 42 -------------------
+ .../link-multiple-error-events-expected.txt   |  4 +-
+ .../link-multiple-load-events-expected.txt    |  4 +-
+ .../link-preload-load-once-expected.txt       |  8 ----
+ .../link-preload-load-once-expected.txt       |  8 ----
+ Source/WebCore/html/HTMLLinkElement.cpp       | 11 ++---
+ Source/WebCore/html/HTMLLinkElement.h         |  1 +
+ Source/WebCore/html/LinkRelAttribute.h        | 20 ---------
+ 12 files changed, 15 insertions(+), 140 deletions(-)
+ delete mode 100644 LayoutTests/fast/dom/HTMLLinkElement/link-preload-load-once-expected.txt
+ delete mode 100644 LayoutTests/fast/dom/HTMLLinkElement/link-preload-load-once.html
+ delete mode 100644 LayoutTests/fast/dom/HTMLLinkElement/link-stylesheet-load-once-expected.txt
+ delete mode 100644 LayoutTests/fast/dom/HTMLLinkElement/link-stylesheet-load-once.html
+ delete mode 100644 LayoutTests/platform/mac-wk1/fast/dom/HTMLLinkElement/link-preload-load-once-expected.txt
+ delete mode 100644 LayoutTests/platform/win/fast/dom/HTMLLinkElement/link-preload-load-once-expected.txt
+
+diff --git a/Source/WebCore/html/HTMLLinkElement.cpp b/Source/WebCore/html/HTMLLinkElement.cpp
+index 9016bf5588c7..5bac1614a713 100644
+--- a/Source/WebCore/html/HTMLLinkElement.cpp
++++ b/Source/WebCore/html/HTMLLinkElement.cpp
+@@ -92,6 +92,7 @@ inline HTMLLinkElement::HTMLLinkElement(const QualifiedName& tagName, Document&
+     , m_disabledState(Unset)
+     , m_loading(false)
+     , m_createdByParser(createdByParser)
++    , m_firedLoad(false)
+     , m_loadedResource(false)
+     , m_isHandlingBeforeLoad(false)
+     , m_allowPrefetchLoadAndErrorForTesting(false)
+@@ -166,13 +167,10 @@ void HTMLLinkElement::setDisabledState(bool disabled)
+ void HTMLLinkElement::parseAttribute(const QualifiedName& name, const AtomString& value)
+ {
+     if (name == relAttr) {
+-        auto parsedRel = LinkRelAttribute(document(), value);
+-        auto didMutateRel = parsedRel != m_relAttribute;
+-        m_relAttribute = parsedRel;
++        m_relAttribute = LinkRelAttribute(document(), value);
+         if (m_relList)
+             m_relList->associatedAttributeValueChanged(value);
+-        if (didMutateRel)
+-            process();
++        process();
+         return;
+     }
+     if (name == hrefAttr) {
+@@ -561,8 +559,11 @@ DOMTokenList& HTMLLinkElement::relList()
+ 
+ void HTMLLinkElement::notifyLoadedSheetAndAllCriticalSubresources(bool errorOccurred)
+ {
++    if (m_firedLoad)
++        return;
+     m_loadedResource = !errorOccurred;
+     linkLoadEventSender().dispatchEventSoon(*this);
++    m_firedLoad = true;
+ }
+ 
+ void HTMLLinkElement::startLoadingDynamicSheet()
+diff --git a/Source/WebCore/html/HTMLLinkElement.h b/Source/WebCore/html/HTMLLinkElement.h
+index dd14d9904a43..b79df37915b9 100644
+--- a/Source/WebCore/html/HTMLLinkElement.h
++++ b/Source/WebCore/html/HTMLLinkElement.h
+@@ -151,6 +151,7 @@ private:
+     LinkRelAttribute m_relAttribute;
+     bool m_loading : 1;
+     bool m_createdByParser : 1;
++    bool m_firedLoad : 1;
+     bool m_loadedResource : 1;
+     bool m_isHandlingBeforeLoad : 1;
+     bool m_allowPrefetchLoadAndErrorForTesting : 1;
+diff --git a/Source/WebCore/html/LinkRelAttribute.h b/Source/WebCore/html/LinkRelAttribute.h
+index 929df7f7b77d..1b4552359a5b 100644
+--- a/Source/WebCore/html/LinkRelAttribute.h
++++ b/Source/WebCore/html/LinkRelAttribute.h
+@@ -58,24 +58,4 @@ struct LinkRelAttribute {
+     static bool isSupported(Document&, StringView);
+ };
+ 
+-inline bool operator==(const LinkRelAttribute& left, const LinkRelAttribute& right)
+-{
+-    return left.iconType == right.iconType
+-        && left.isStyleSheet == right.isStyleSheet
+-        && left.isAlternate == right.isAlternate
+-        && left.isDNSPrefetch == right.isDNSPrefetch
+-        && left.isLinkPreload == right.isLinkPreload
+-        && left.isLinkPreconnect == right.isLinkPreconnect
+-        && left.isLinkPrefetch == right.isLinkPrefetch
+-#if ENABLE(APPLICATION_MANIFEST)
+-        && left.isApplicationManifest == right.isApplicationManifest
+-#endif
+-        ;
+-}
+-
+-inline bool operator!=(const LinkRelAttribute& left, const LinkRelAttribute& right)
+-{
+-    return !(left == right);
+-}
+-
+ }
+-- 
+2.37.3
+

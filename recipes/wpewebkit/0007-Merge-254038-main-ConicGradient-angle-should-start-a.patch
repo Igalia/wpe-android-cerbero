@@ -1,0 +1,187 @@
+From a222eab8754ded39df6123d016e16fadf0b3bfd4 Mon Sep 17 00:00:00 2001
+From: Vitor Roriz <vitor.roriz@apple.com>
+Date: Thu, 1 Sep 2022 06:32:49 -0700
+Subject: [PATCH 07/25] Merge 254038@main - ConicGradient angle should start at
+ the x-axis, not at the top https://bugs.webkit.org/show_bug.cgi?id=244254
+ rdar://problem/99041207
+
+Reviewed by Said Abou-Hallawa and Aditya Keerthi.
+
+* LayoutTests/fast/canvas/canvas-conic-gradient-angle-expected.html:
+* LayoutTests/fast/canvas/canvas-conic-gradient-center-expected.html:
+* LayoutTests/imported/w3c/web-platform-tests/html/canvas/element/fill-and-stroke-styles/2d.gradient.conic.negative.rotation-expected.txt:
+* LayoutTests/imported/w3c/web-platform-tests/html/canvas/element/fill-and-stroke-styles/2d.gradient.conic.negative.rotation.html:
+* LayoutTests/imported/w3c/web-platform-tests/html/canvas/element/fill-and-stroke-styles/2d.gradient.conic.positive.rotation-expected.txt:
+* LayoutTests/imported/w3c/web-platform-tests/html/canvas/element/fill-and-stroke-styles/2d.gradient.conic.positive.rotation.html:
+* LayoutTests/inspector/canvas/recording-html-2d-expected.txt:
+Updating tests for conic gradient with angle starting from the x-axis.
+
+* LayoutTests/platform/gtk-wk2/imported/w3c/web-platform-tests/html/canvas/element/fill-and-stroke-styles/2d.gradient.conic.negative.rotation-expected.txt: Added.
+* LayoutTests/platform/gtk-wk2/imported/w3c/web-platform-tests/html/canvas/element/fill-and-stroke-styles/2d.gradient.conic.positive.rotation-expected.txt: Added.
+* LayoutTests/platform/gtk-wk2/imported/w3c/web-platform-tests/html/canvas/offscreen/fill-and-stroke-styles/2d.gradient.conic.negative.rotation-expected.txt: Added.
+* LayoutTests/platform/gtk-wk2/imported/w3c/web-platform-tests/html/canvas/offscreen/fill-and-stroke-styles/2d.gradient.conic.negative.rotation.worker-expected.txt: Added.
+* LayoutTests/platform/gtk-wk2/imported/w3c/web-platform-tests/html/canvas/offscreen/fill-and-stroke-styles/2d.gradient.conic.positive.rotation-expected.txt: Added.
+* LayoutTests/platform/gtk-wk2/imported/w3c/web-platform-tests/html/canvas/offscreen/fill-and-stroke-styles/2d.gradient.conic.positive.rotation.worker-expected.txt: Added.
+Most of the related gtk-wk2 are passing now.
+
+* Source/WTF/wtf/MathExtras.h:
+Adding radians per turn constants.
+
+* Source/WebCore/html/canvas/CanvasRenderingContext2DBase.cpp:
+(WebCore::CanvasRenderingContext2DBase::createConicGradient):
+For consistency with other canvas methods, startAngle should start from x-axis:
+https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-createconicgradient
+Therefore, we are adding 90 deg (pi/2 rad) to startAngle.
+
+* Source/WebCore/platform/graphics/GeometryUtilities.cpp:
+(WebCore::normalizeAngleInRadians): Added
+* Source/WebCore/platform/graphics/GeometryUtilities.h:
+* Source/WebCore/platform/graphics/Path.cpp:
+(WebCore::computeArcBounds):
+Moving radian angle normalization logic from Path.cpp to GeometryUtilities.cpp so it can be reused.
+
+Canonical link: https://commits.webkit.org/254038@main
+
+(cherry picked from commit cf0a117f4760fd9c36ba296a7724e524bf4d3027)
+---
+ .../canvas-conic-gradient-angle-expected.html   | 16 ++++++++--------
+ .../canvas-conic-gradient-center-expected.html  | 16 ++++++++--------
+ ...radient.conic.negative.rotation-expected.txt |  2 +-
+ .../2d.gradient.conic.negative.rotation.html    |  4 ++--
+ ...radient.conic.positive.rotation-expected.txt |  2 +-
+ .../2d.gradient.conic.positive.rotation.html    |  4 ++--
+ .../canvas/recording-html-2d-expected.txt       |  2 +-
+ ...radient.conic.negative.rotation-expected.txt |  8 ++++++++
+ ...radient.conic.positive.rotation-expected.txt |  8 ++++++++
+ ...radient.conic.negative.rotation-expected.txt |  7 +++++++
+ ....conic.negative.rotation.worker-expected.txt |  3 +++
+ ...radient.conic.positive.rotation-expected.txt |  7 +++++++
+ ....conic.positive.rotation.worker-expected.txt |  3 +++
+ Source/WTF/wtf/MathExtras.h                     |  1 +
+ .../canvas/CanvasRenderingContext2DBase.cpp     |  5 ++++-
+ .../platform/graphics/GeometryUtilities.cpp     |  6 ++++++
+ .../platform/graphics/GeometryUtilities.h       |  2 ++
+ Source/WebCore/platform/graphics/Path.cpp       | 17 ++++++-----------
+ 18 files changed, 78 insertions(+), 35 deletions(-)
+ create mode 100644 LayoutTests/platform/gtk/imported/w3c/web-platform-tests/html/canvas/element/fill-and-stroke-styles/2d.gradient.conic.negative.rotation-expected.txt
+ create mode 100644 LayoutTests/platform/gtk/imported/w3c/web-platform-tests/html/canvas/element/fill-and-stroke-styles/2d.gradient.conic.positive.rotation-expected.txt
+ create mode 100644 LayoutTests/platform/gtk/imported/w3c/web-platform-tests/html/canvas/offscreen/fill-and-stroke-styles/2d.gradient.conic.negative.rotation-expected.txt
+ create mode 100644 LayoutTests/platform/gtk/imported/w3c/web-platform-tests/html/canvas/offscreen/fill-and-stroke-styles/2d.gradient.conic.negative.rotation.worker-expected.txt
+ create mode 100644 LayoutTests/platform/gtk/imported/w3c/web-platform-tests/html/canvas/offscreen/fill-and-stroke-styles/2d.gradient.conic.positive.rotation-expected.txt
+ create mode 100644 LayoutTests/platform/gtk/imported/w3c/web-platform-tests/html/canvas/offscreen/fill-and-stroke-styles/2d.gradient.conic.positive.rotation.worker-expected.txt
+
+diff --git a/Source/WTF/wtf/MathExtras.h b/Source/WTF/wtf/MathExtras.h
+index 5668ad72f4bc..246fab9c33e2 100644
+--- a/Source/WTF/wtf/MathExtras.h
++++ b/Source/WTF/wtf/MathExtras.h
+@@ -122,6 +122,7 @@ constexpr float gradientsPerDegreeFloat= 400.0f / 360.0f;
+ constexpr float degreesPerGradientFloat = 360.0f / 400.0f;
+ constexpr float turnsPerDegreeFloat = 1.0f / 360.0f;
+ constexpr float degreesPerTurnFloat = 360.0f;
++constexpr float radiansPerTurnFloat = 2.0f * piFloat;
+ 
+ constexpr inline float deg2rad(float d)  { return d * radiansPerDegreeFloat; }
+ constexpr inline float rad2deg(float r)  { return r * degreesPerRadianFloat; }
+diff --git a/Source/WebCore/html/canvas/CanvasRenderingContext2DBase.cpp b/Source/WebCore/html/canvas/CanvasRenderingContext2DBase.cpp
+index 9bbcc55e5329..74bdd8863510 100644
+--- a/Source/WebCore/html/canvas/CanvasRenderingContext2DBase.cpp
++++ b/Source/WebCore/html/canvas/CanvasRenderingContext2DBase.cpp
+@@ -49,6 +49,7 @@
+ #include "DisplayListRecorder.h"
+ #include "DisplayListReplayer.h"
+ #include "FloatQuad.h"
++#include "GeometryUtilities.h"
+ #include "Gradient.h"
+ #include "HTMLCanvasElement.h"
+ #include "HTMLImageElement.h"
+@@ -1934,7 +1935,9 @@ ExceptionOr<Ref<CanvasGradient>> CanvasRenderingContext2DBase::createConicGradie
+     if (!std::isfinite(angleInRadians) || !std::isfinite(x) || !std::isfinite(y))
+         return Exception { NotSupportedError };
+ 
+-    return CanvasGradient::create(FloatPoint(x, y), angleInRadians, *this);
++    // Angle starts from x-axis for consistency within canvas methods. See https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-createconicgradient
++    angleInRadians = normalizeAngleInRadians(angleInRadians) + piOverTwoFloat;
++    return CanvasGradient::create(FloatPoint(x, y), angleInRadians , *this);
+ }
+ 
+ ExceptionOr<RefPtr<CanvasPattern>> CanvasRenderingContext2DBase::createPattern(CanvasImageSource&& image, const String& repetition)
+diff --git a/Source/WebCore/platform/graphics/GeometryUtilities.cpp b/Source/WebCore/platform/graphics/GeometryUtilities.cpp
+index 4b8ee76c4244..41801a21b803 100644
+--- a/Source/WebCore/platform/graphics/GeometryUtilities.cpp
++++ b/Source/WebCore/platform/graphics/GeometryUtilities.cpp
+@@ -346,4 +346,10 @@ float angleOfPointToSideOfIntersection(const FloatRect& boundingRect, const std:
+     return side == BoxSide::Top || side == BoxSide::Bottom ? angle : 90 - angle;
+ }
+ 
++float normalizeAngleInRadians(float radians)
++{
++    float circles = radians / radiansPerTurnFloat;
++    return radiansPerTurnFloat * (circles - floor(circles));
++}
++
+ }
+diff --git a/Source/WebCore/platform/graphics/GeometryUtilities.h b/Source/WebCore/platform/graphics/GeometryUtilities.h
+index b910810ac093..806dc1c73e73 100644
+--- a/Source/WebCore/platform/graphics/GeometryUtilities.h
++++ b/Source/WebCore/platform/graphics/GeometryUtilities.h
+@@ -98,6 +98,8 @@ std::array<FloatPoint, 4> verticesForBox(const FloatRect&, const FloatPoint);
+ float toPositiveAngle(float angle);
+ float toRelatedAcuteAngle(float angle);
+ 
++float normalizeAngleInRadians(float radians);
++
+ struct RotatedRect {
+     FloatPoint center;
+     FloatSize size;
+diff --git a/Source/WebCore/platform/graphics/Path.cpp b/Source/WebCore/platform/graphics/Path.cpp
+index fe77a7c767c3..7788356a439e 100644
+--- a/Source/WebCore/platform/graphics/Path.cpp
++++ b/Source/WebCore/platform/graphics/Path.cpp
+@@ -32,6 +32,7 @@
+ #include "FloatPoint.h"
+ #include "FloatRect.h"
+ #include "FloatRoundedRect.h"
++#include "GeometryUtilities.h"
+ #include "PathTraversalState.h"
+ #include "RoundedRect.h"
+ #include <math.h>
+@@ -454,23 +455,17 @@ static FloatRect computeArcBounds(const FloatPoint& center, float radius, float
+     if (clockwise)
+         std::swap(start, end);
+ 
+-    constexpr float fullCircle = 2 * piFloat;
+-    if (end - start >= fullCircle) {
++    if (end - start >= radiansPerTurnFloat) {
+         auto diameter = radius * 2;
+         return { center.x() - radius, center.y() - radius, diameter, diameter };
+     }
+ 
+-    auto normalize = [&] (float radians) {
+-        double circles = radians / fullCircle;
+-        return fullCircle * (circles - floor(circles));
+-    };
+-
+-    start = normalize(start);
+-    end = normalize(end);
++    start = normalizeAngleInRadians(start);
++    end = normalizeAngleInRadians(end);
+ 
+     auto lengthInRadians = end - start;
+     if (start > end)
+-        lengthInRadians += fullCircle;
++        lengthInRadians += radiansPerTurnFloat;
+ 
+     FloatPoint startPoint { center.x() + radius * cos(start), center.y() + radius * sin(start) };
+     FloatPoint endPoint { center.x() + radius * cos(end), center.y() + radius * sin(end) };
+@@ -479,7 +474,7 @@ static FloatRect computeArcBounds(const FloatPoint& center, float radius, float
+ 
+     auto contains = [&] (float angleToCheck) {
+         return (start < angleToCheck && start + lengthInRadians > angleToCheck)
+-            || (start > angleToCheck && start + lengthInRadians > angleToCheck + fullCircle);
++            || (start > angleToCheck && start + lengthInRadians > angleToCheck + radiansPerTurnFloat);
+     };
+ 
+     if (contains(0))
+-- 
+2.37.3
+

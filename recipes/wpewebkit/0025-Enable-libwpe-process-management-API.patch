@@ -1,31 +1,31 @@
-From 5974a881885c8e9b2896ea92a5147a249c4d796c Mon Sep 17 00:00:00 2001
+From e494ca62c8cb678ec923ccec29650c1071013dbc Mon Sep 17 00:00:00 2001
 From: Jani Hautakangas <jani@igalia.com>
 Date: Thu, 14 Jul 2022 00:39:50 +0300
-Subject: [PATCH] Enable libwpe process management API
+Subject: [PATCH 25/25] Enable libwpe process management API
 
 ---
  Source/WebKit/SourcesWPE.txt                  |  1 +
- .../Launcher/glib/ProcessLauncherGLib.cpp     | 53 +++++++++++++-
- .../Launcher/glib/WPEProcessProvider.cpp      | 71 +++++++++++++++++++
- .../Launcher/glib/WPEProcessProvider.h        | 34 +++++++++
- 4 files changed, 157 insertions(+), 2 deletions(-)
+ .../Launcher/glib/ProcessLauncherGLib.cpp     | 88 ++++++++++++++++++-
+ .../Launcher/glib/WPEProcessProvider.cpp      | 71 +++++++++++++++
+ .../Launcher/glib/WPEProcessProvider.h        | 34 +++++++
+ 4 files changed, 192 insertions(+), 2 deletions(-)
  create mode 100644 Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.cpp
  create mode 100644 Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.h
 
 diff --git a/Source/WebKit/SourcesWPE.txt b/Source/WebKit/SourcesWPE.txt
-index 1446d28f..2bd62e47 100644
+index 79fa705d8250..d0d6ec020a62 100644
 --- a/Source/WebKit/SourcesWPE.txt
 +++ b/Source/WebKit/SourcesWPE.txt
-@@ -208,6 +208,7 @@ UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
+@@ -220,6 +220,7 @@ UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
  UIProcess/Launcher/glib/BubblewrapLauncher.cpp
  UIProcess/Launcher/glib/FlatpakLauncher.cpp
  UIProcess/Launcher/glib/XDGDBusProxy.cpp
 +UIProcess/Launcher/glib/WPEProcessProvider.cpp
  
- UIProcess/WebsiteData/soup/WebsiteDataStoreSoup.cpp
- UIProcess/WebsiteData/unix/WebsiteDataStoreUnix.cpp
+ UIProcess/Notifications/glib/NotificationService.cpp
+ 
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
-index b0d079fd..83a683b6 100644
+index 59bc39ae7df4..1b396f3794b9 100644
 --- a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
 +++ b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
 @@ -31,6 +31,7 @@
@@ -36,10 +36,45 @@ index b0d079fd..83a683b6 100644
  #include <errno.h>
  #include <fcntl.h>
  #include <glib.h>
-@@ -99,10 +100,54 @@ static bool isInsideSnap()
+@@ -68,10 +69,89 @@ static bool isFlatpakSpawnUsable()
  }
  #endif
  
++#if ENABLE(BUBBLEWRAP_SANDBOX)
++static bool isInsideDocker()
++{
++    static std::optional<bool> ret;
++    if (ret)
++        return *ret;
++
++    ret = g_file_test("/.dockerenv", G_FILE_TEST_EXISTS);
++    return *ret;
++}
++
++static bool isInsideFlatpak()
++{
++    static std::optional<bool> ret;
++    if (ret)
++        return *ret;
++
++    ret = g_file_test("/.flatpak-info", G_FILE_TEST_EXISTS);
++    return *ret;
++}
++
++static bool isInsideSnap()
++{
++    static std::optional<bool> ret;
++    if (ret)
++        return *ret;
++
++    // The "SNAP" environment variable is not unlikely to be set for/by something other
++    // than Snap, so check a couple of additional variables to avoid false positives.
++    // See: https://snapcraft.io/docs/environment-variables
++    ret = g_getenv("SNAP") && g_getenv("SNAP_NAME") && g_getenv("SNAP_REVISION");
++    return *ret;
++}
++#endif
++
 +#if USE(WPE_PROCESS_LAUNCHER)
 +static wpe_process_type wpeProcessType(ProcessLauncher::ProcessType processType)
 +{
@@ -91,7 +126,7 @@ index b0d079fd..83a683b6 100644
      String executablePath;
      CString realExecutablePath;
      switch (m_launchOptions.processType) {
-@@ -123,8 +168,6 @@ void ProcessLauncher::launchProcess()
+@@ -92,8 +172,6 @@ void ProcessLauncher::launchProcess()
      }
  
      realExecutablePath = FileSystem::fileSystemRepresentation(executablePath);
@@ -100,7 +135,7 @@ index b0d079fd..83a683b6 100644
      unsigned nargs = 4; // size of the argv array for g_spawn_async()
  
  #if ENABLE(DEVELOPER_MODE)
-@@ -213,7 +256,13 @@ void ProcessLauncher::terminateProcess()
+@@ -190,7 +268,13 @@ void ProcessLauncher::terminateProcess()
      if (!m_processIdentifier)
          return;
  
@@ -116,7 +151,7 @@ index b0d079fd..83a683b6 100644
  
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.cpp b/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.cpp
 new file mode 100644
-index 00000000..2437198c
+index 000000000000..2437198c2145
 --- /dev/null
 +++ b/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.cpp
 @@ -0,0 +1,71 @@
@@ -194,7 +229,7 @@ index 00000000..2437198c
 \ No newline at end of file
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.h b/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.h
 new file mode 100644
-index 00000000..9398981c
+index 000000000000..9398981cea27
 --- /dev/null
 +++ b/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.h
 @@ -0,0 +1,34 @@
@@ -234,5 +269,5 @@ index 00000000..9398981c
 +#endif // defined(WPE_ENABLE_PROCESS) && WPE_ENABLE_PROCESS
 \ No newline at end of file
 -- 
-2.34.1
+2.37.3
 
