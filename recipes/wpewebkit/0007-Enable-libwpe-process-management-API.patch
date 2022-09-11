@@ -1,7 +1,7 @@
-From 5974a881885c8e9b2896ea92a5147a249c4d796c Mon Sep 17 00:00:00 2001
+From 7beae1e565e36ee73ad737bcf7c019b55c7af353 Mon Sep 17 00:00:00 2001
 From: Jani Hautakangas <jani@igalia.com>
 Date: Thu, 14 Jul 2022 00:39:50 +0300
-Subject: [PATCH] Enable libwpe process management API
+Subject: [PATCH 7/7] Enable libwpe process management API
 
 ---
  Source/WebKit/SourcesWPE.txt                  |  1 +
@@ -13,10 +13,10 @@ Subject: [PATCH] Enable libwpe process management API
  create mode 100644 Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.h
 
 diff --git a/Source/WebKit/SourcesWPE.txt b/Source/WebKit/SourcesWPE.txt
-index 1446d28f..2bd62e47 100644
+index 97fedd4409ce..153db71b2595 100644
 --- a/Source/WebKit/SourcesWPE.txt
 +++ b/Source/WebKit/SourcesWPE.txt
-@@ -208,6 +208,7 @@ UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
+@@ -211,6 +211,7 @@ UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
  UIProcess/Launcher/glib/BubblewrapLauncher.cpp
  UIProcess/Launcher/glib/FlatpakLauncher.cpp
  UIProcess/Launcher/glib/XDGDBusProxy.cpp
@@ -25,7 +25,7 @@ index 1446d28f..2bd62e47 100644
  UIProcess/WebsiteData/soup/WebsiteDataStoreSoup.cpp
  UIProcess/WebsiteData/unix/WebsiteDataStoreUnix.cpp
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
-index b0d079fd..83a683b6 100644
+index 09f534a86b3b..e148885c859e 100644
 --- a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
 +++ b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
 @@ -31,6 +31,7 @@
@@ -36,7 +36,7 @@ index b0d079fd..83a683b6 100644
  #include <errno.h>
  #include <fcntl.h>
  #include <glib.h>
-@@ -99,10 +100,54 @@ static bool isInsideSnap()
+@@ -68,10 +69,54 @@ static bool isFlatpakSpawnUsable()
  }
  #endif
  
@@ -78,7 +78,7 @@ index b0d079fd..83a683b6 100644
 +
 +        if (m_processIdentifier > -1) {
 +            // We've finished launching the process, message back to the main run loop.
-+            RunLoop::main().dispatch([protectedThis = makeRef(*this), this, serverSocket = socketPair.server] {
++            RunLoop::main().dispatch([protectedThis = Ref {*this}, this, serverSocket = socketPair.server] {
 +                didFinishLaunchingProcess(m_processIdentifier, serverSocket);
 +            });
 +        } else {
@@ -91,7 +91,7 @@ index b0d079fd..83a683b6 100644
      String executablePath;
      CString realExecutablePath;
      switch (m_launchOptions.processType) {
-@@ -123,8 +168,6 @@ void ProcessLauncher::launchProcess()
+@@ -92,8 +137,6 @@ void ProcessLauncher::launchProcess()
      }
  
      realExecutablePath = FileSystem::fileSystemRepresentation(executablePath);
@@ -100,7 +100,7 @@ index b0d079fd..83a683b6 100644
      unsigned nargs = 4; // size of the argv array for g_spawn_async()
  
  #if ENABLE(DEVELOPER_MODE)
-@@ -213,7 +256,13 @@ void ProcessLauncher::terminateProcess()
+@@ -190,7 +233,13 @@ void ProcessLauncher::terminateProcess()
      if (!m_processIdentifier)
          return;
  
@@ -116,7 +116,7 @@ index b0d079fd..83a683b6 100644
  
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.cpp b/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.cpp
 new file mode 100644
-index 00000000..2437198c
+index 000000000000..2437198c2145
 --- /dev/null
 +++ b/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.cpp
 @@ -0,0 +1,71 @@
@@ -194,7 +194,7 @@ index 00000000..2437198c
 \ No newline at end of file
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.h b/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.h
 new file mode 100644
-index 00000000..9398981c
+index 000000000000..9398981cea27
 --- /dev/null
 +++ b/Source/WebKit/UIProcess/Launcher/glib/WPEProcessProvider.h
 @@ -0,0 +1,34 @@
@@ -234,5 +234,5 @@ index 00000000..9398981c
 +#endif // defined(WPE_ENABLE_PROCESS) && WPE_ENABLE_PROCESS
 \ No newline at end of file
 -- 
-2.34.1
+2.37.3
 

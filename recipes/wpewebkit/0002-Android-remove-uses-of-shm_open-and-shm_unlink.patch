@@ -1,17 +1,17 @@
-From 1f924137c9ed2abc6a4d5457518c61c7f62d4dcd Mon Sep 17 00:00:00 2001
+From 55894774c209ebb7fc83296c4d0f6006a7cfa6a5 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Fernando=20Jim=C3=A9nez=20Moreno?= <ferjmoreno@gmail.com>
 Date: Tue, 25 May 2021 16:00:54 +0200
-Subject: [PATCH xserver 3/9] Android remove uses of shm_open and shm_unlink
+Subject: [PATCH 2/7] Android remove uses of shm_open and shm_unlink
 
 ---
  .../WebKit/Platform/unix/SharedMemoryUnix.cpp | 25 ++++++++++++++-----
  1 file changed, 19 insertions(+), 6 deletions(-)
 
 diff --git a/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp b/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp
-index 998a2a767930..09196a0dae85 100644
+index c9240b9241b0..801b105dbb67 100644
 --- a/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp
 +++ b/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp
-@@ -54,6 +54,9 @@
+@@ -55,6 +55,9 @@
  #include "ArgumentCoders.h"
  #endif
  
@@ -21,7 +21,7 @@ index 998a2a767930..09196a0dae85 100644
  namespace WebKit {
  
  SharedMemory::Handle::Handle()
-@@ -126,6 +129,7 @@ static inline int accessModeMMap(SharedMemory::Protection protection)
+@@ -127,6 +130,7 @@ static inline int accessModeMMap(SharedMemory::Protection protection)
  
  static int createSharedMemory()
  {
@@ -29,8 +29,8 @@ index 998a2a767930..09196a0dae85 100644
      int fileDescriptor = -1;
  
  #if HAVE(LINUX_MEMFD_H)
-@@ -159,25 +163,34 @@ static int createSharedMemory()
-         shm_unlink(tempName.data());
+@@ -166,25 +170,34 @@ static int createSharedMemory()
+ #endif
  
      return fileDescriptor;
 +#endif
@@ -42,7 +42,7 @@ index 998a2a767930..09196a0dae85 100644
 +    GUniquePtr<char> name(g_build_filename(g_get_user_runtime_dir(), "WK2SharedMemory.XXXXXX", nullptr));
 +    int fileDescriptor = mkstemp(name.get());
      if (fileDescriptor == -1) {
-         WTFLogAlways("Failed to create shared memory: %s", strerror(errno));
+         WTFLogAlways("Failed to create shared memory: %s", safeStrerror(errno).data());
          return nullptr;
      }
  
@@ -71,5 +71,5 @@ index 998a2a767930..09196a0dae85 100644
          return nullptr;
      }
 -- 
-2.30.2
+2.37.3
 
