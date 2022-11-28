@@ -197,7 +197,8 @@ class Recipe(recipe.Recipe):
                 'wpewebkit/0005-Workaround-for-Android-emulator-samplerExternalOES-p.patch',
                 'wpewebkit/0006-Enable-libwpe-process-management-API.patch',
                 'wpewebkit/0007-Use-ASharedMemory-instead-of-shm.patch',
-                'wpewebkit/0008-Fix-ENABLE_JIT-on-armv7.patch'
+                'wpewebkit/0008-Fix-ENABLE_JIT-on-armv7.patch',
+                'wpewebkit/0009-Do-not-skip-generic-touch-event-handling-for-axis-event.patch'
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')

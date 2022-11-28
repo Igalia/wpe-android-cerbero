@@ -1,0 +1,63 @@
+From 294b475f07dec0def3c0302734b8277bb5e23877 Mon Sep 17 00:00:00 2001
+From: Bastian Krause <bst@pengutronix.de>
+Date: Wed, 16 Nov 2022 15:53:31 +0100
+Subject: [PATCH] [WPE] Do not skip generic touch event handling for axis event
+ gesturing https://bugs.webkit.org/show_bug.cgi?id=247975
+
+Reviewed by NOBODY (OOPS!).
+
+touchmove events are not sent anymore if the TouchGestureController
+is activated. This is wrong. Drop the short cut to make them work again.
+
+* Source/WebKit/UIProcess/API/wpe/PageClientImpl.cpp:
+(WebKit::PageClientImpl::doneWithTouchEvent): Drop special wheel event
+handling.
+* Source/WebKit/UIProcess/API/wpe/WPEView.cpp:
+(WKWPE::m_backend): Do not skip touch event handling on axis event
+gesturing.
+---
+ Source/WebKit/UIProcess/API/wpe/PageClientImpl.cpp | 13 +------------
+ Source/WebKit/UIProcess/API/wpe/WPEView.cpp        |  6 ------
+ 2 files changed, 1 insertion(+), 18 deletions(-)
+
+diff --git a/Source/WebKit/UIProcess/API/wpe/PageClientImpl.cpp b/Source/WebKit/UIProcess/API/wpe/PageClientImpl.cpp
+index 9fba86a2feee..103d9ca1944d 100644
+--- a/Source/WebKit/UIProcess/API/wpe/PageClientImpl.cpp
++++ b/Source/WebKit/UIProcess/API/wpe/PageClientImpl.cpp
+@@ -238,18 +238,7 @@ void PageClientImpl::doneWithTouchEvent(const NativeWebTouchEvent& touchEvent, b
+             event->modifiers &= ~wpe_input_pointer_modifier_button1;
+             page.handleMouseEvent(NativeWebMouseEvent(event, page.deviceScaleFactor()));
+         },
+-        [&](TouchGestureController::AxisEvent& axisEvent)
+-        {
+-#if WPE_CHECK_VERSION(1, 5, 0)
+-            auto* event = &axisEvent.event.base;
+-#else
+-            auto* event = &axisEvent.event;
+-#endif
+-            if (event->type != wpe_input_axis_event_type_null) {
+-                page.handleWheelEvent(WebKit::NativeWebWheelEvent(event, page.deviceScaleFactor(),
+-                    axisEvent.phase, WebWheelEvent::Phase::PhaseNone));
+-            }
+-        });
++        [](TouchGestureController::AxisEvent&) { });
+ }
+ #endif
+ 
+diff --git a/Source/WebKit/UIProcess/API/wpe/WPEView.cpp b/Source/WebKit/UIProcess/API/wpe/WPEView.cpp
+index bb56a8d06ab0..7f4870fa6a20 100644
+--- a/Source/WebKit/UIProcess/API/wpe/WPEView.cpp
++++ b/Source/WebKit/UIProcess/API/wpe/WPEView.cpp
+@@ -258,12 +258,6 @@ View::View(struct wpe_view_backend* backend, const API::PageConfiguration& baseC
+                             handledThroughGestureController = true;
+                         }
+                     });
+-
+-                // In case of the axis event gesturing, the generic touch event handling should be skipped.
+-                // Exception to this are touch-up events that should still be handled just like the corresponding
+-                // touch-down events were.
+-                if (handledThroughGestureController && event->type != wpe_input_touch_event_type_up)
+-                    return;
+             }
+ 
+             page.handleTouchEvent(touchEvent);
