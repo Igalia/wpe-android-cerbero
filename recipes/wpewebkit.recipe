@@ -2,7 +2,7 @@
 
 class Recipe(recipe.Recipe):
     name = 'wpewebkit'
-    version = '2.38.2'
+    version = '2.38.3'
     stype = SourceType.TARBALL
     btype = BuildType.CMAKE
     url = 'https://wpewebkit.org/releases/wpewebkit-{0}.tar.xz'.format(version)

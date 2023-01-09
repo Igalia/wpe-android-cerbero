@@ -48,7 +48,7 @@ diff --git a/Source/WebKit/UIProcess/API/wpe/WPEView.cpp b/Source/WebKit/UIProce
 index bb56a8d06ab0..7f4870fa6a20 100644
 --- a/Source/WebKit/UIProcess/API/wpe/WPEView.cpp
 +++ b/Source/WebKit/UIProcess/API/wpe/WPEView.cpp
-@@ -258,12 +258,6 @@ View::View(struct wpe_view_backend* backend, const API::PageConfiguration& baseC
+@@ -259,12 +259,6 @@ View::View(struct wpe_view_backend* backend, const API::PageConfiguration& baseC
                              handledThroughGestureController = true;
                          }
                      });
