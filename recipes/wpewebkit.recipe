@@ -2,11 +2,11 @@
 
 class Recipe(recipe.Recipe):
     name = 'wpewebkit'
-    version = '2.38.3'
+    version = '2.40.2'
     stype = SourceType.TARBALL
     btype = BuildType.CMAKE
     url = 'https://wpewebkit.org/releases/wpewebkit-{0}.tar.xz'.format(version)
-    tarball_checksum = '1dd9075eec7253a1b0d038a73f92ddbb9174394e6a7527ec07b4464fa6290498'
+    tarball_checksum = '99b7ab42580ac5726a2c95bae90caf4cf5df89765e4a046ca72e97b7fd3bccc7'
     deps = [
         'icu',
         'cairo',
@@ -42,6 +42,8 @@ class Recipe(recipe.Recipe):
         -DENABLE_BUBBLEWRAP_SANDBOX=OFF \
         -DUSE_SOUP2=ON \
         -DUSE_LCMS=OFF \
+        -DUSE_AVIF=OFF \
+        -DUSE_GBM=OFF \
         -DENABLE_WEBDRIVER=OFF \
         -DCMAKE_BUILD_TYPE=Release \
     '
@@ -115,6 +117,7 @@ class Recipe(recipe.Recipe):
         'include/wpe-webkit-1.0/wpe/WebKitOptionMenu.h',
         'include/wpe-webkit-1.0/wpe/WebKitOptionMenuItem.h',
         'include/wpe-webkit-1.0/wpe/WebKitPermissionRequest.h',
+        'include/wpe-webkit-1.0/wpe/WebKitPermissionStateQuery.h',
         'include/wpe-webkit-1.0/wpe/WebKitPlugin.h',
         'include/wpe-webkit-1.0/wpe/WebKitPolicyDecision.h',
         'include/wpe-webkit-1.0/wpe/WebKitRectangle.h',
@@ -195,11 +198,10 @@ class Recipe(recipe.Recipe):
                 'wpewebkit/0003-Scroll-related-changes.patch',
                 'wpewebkit/0004-Remove-absolute-path-from-libWPEInjectedBundle.so-on.patch',
                 'wpewebkit/0005-Workaround-for-Android-emulator-samplerExternalOES-p.patch',
-                'wpewebkit/0006-Enable-libwpe-process-management-API.patch',
-                'wpewebkit/0007-Use-ASharedMemory-instead-of-shm.patch',
-                'wpewebkit/0008-Fix-ENABLE_JIT-on-armv7.patch',
-                'wpewebkit/0009-Do-not-skip-generic-touch-event-handling-for-axis-event.patch',
-                'wpewebkit/0010-Fix-WebGL-compositing.patch'
+                'wpewebkit/0006-Use-ASharedMemory-instead-of-shm.patch',
+                'wpewebkit/0007-Fix-ENABLE_JIT-on-armv7.patch',
+                'wpewebkit/0008-WPE-Make-libgbm-and-libdrm-conditional-dependencies.patch',
+                'wpewebkit/0009-GLIB-Fix-build-error-after-264196-main.patch'
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')

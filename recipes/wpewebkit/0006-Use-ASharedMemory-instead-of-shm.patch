@@ -1,31 +1,31 @@
-From 8b4454f25a4ad867d75b539d5050a6496630af3f Mon Sep 17 00:00:00 2001
+From f20f33c25f79c02e424cd2e2c570e3ec07603f3b Mon Sep 17 00:00:00 2001
 From: Jani Hautakangas <jani@igalia.com>
 Date: Wed, 28 Sep 2022 15:13:08 +0300
 Subject: [PATCH] Use ASharedMemory instead of shm
 
 ---
- .../WebKit/Platform/unix/SharedMemoryUnix.cpp | 66 +++++++++----------
- 1 file changed, 31 insertions(+), 35 deletions(-)
+ .../WebKit/Platform/unix/SharedMemoryUnix.cpp | 63 +++++++++----------
+ 1 file changed, 30 insertions(+), 33 deletions(-)
 
 diff --git a/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp b/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp
-index 05a93d97..5af06814 100644
+index 6237f829e92f..c2028b873e5e 100644
 --- a/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp
 +++ b/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp
-@@ -56,6 +56,8 @@
- #include "ArgumentCoders.h"
+@@ -50,6 +50,8 @@
+ #include <sys/syscall.h>
  #endif
  
 +#include <android/sharedmem.h>
 +
  namespace WebKit {
  
- SharedMemory::Handle::Handle()
-@@ -120,62 +122,35 @@ static inline int accessModeMMap(SharedMemory::Protection protection)
+ void SharedMemory::Handle::clear()
+@@ -101,60 +103,35 @@ static inline int accessModeMMap(SharedMemory::Protection protection)
      return PROT_READ | PROT_WRITE;
  }
  
--static int createSharedMemory()
-+static int createSharedMemory(size_t size)
+-static UnixFileDescriptor createSharedMemory()
++static UnixFileDescriptor createSharedMemory(size_t size)
  {
      int fileDescriptor = -1;
  
@@ -37,10 +37,10 @@ index 05a93d97..5af06814 100644
 -        } while (fileDescriptor == -1 && errno == EINTR);
 -
 -        if (fileDescriptor != -1)
--            return fileDescriptor;
+-            return UnixFileDescriptor { fileDescriptor, UnixFileDescriptor::Adopt };
 -
 -        if (errno != ENOSYS)
--            return fileDescriptor;
+-            return { };
 -
 -        isMemFdAvailable = false;
 -    }
@@ -53,7 +53,7 @@ index 05a93d97..5af06814 100644
 -#else
      CString tempName;
      for (int tries = 0; fileDescriptor == -1 && tries < 10; ++tries) {
-         auto name = makeString("/WK2SharedMemory.", static_cast<unsigned>(WTF::randomNumber() * (std::numeric_limits<unsigned>::max() + 1.0)));
+         auto name = makeString("/WK2SharedMemory.", cryptographicallyRandomNumber<unsigned>());
          tempName = name.utf8();
  
          do {
@@ -66,35 +66,33 @@ index 05a93d97..5af06814 100644
 -        shm_unlink(tempName.data());
 -#endif
 -
-     return fileDescriptor;
+     return UnixFileDescriptor { fileDescriptor, UnixFileDescriptor::Adopt };
  }
  
  RefPtr<SharedMemory> SharedMemory::allocate(size_t size)
  {
--    int fileDescriptor = createSharedMemory();
-+    int fileDescriptor = createSharedMemory(size);
-     if (fileDescriptor == -1) {
+-    auto fileDescriptor = createSharedMemory();
++    auto fileDescriptor = createSharedMemory(size);
+     if (!fileDescriptor) {
          WTFLogAlways("Failed to create shared memory: %s", safeStrerror(errno).data());
          return nullptr;
      }
  
--    while (ftruncate(fileDescriptor, size) == -1) {
--        if (errno != EINTR) {
--            closeWithRetry(fileDescriptor);
+-    while (ftruncate(fileDescriptor.value(), size) == -1) {
+-        if (errno != EINTR)
 -            return nullptr;
--        }
-+    int err = ASharedMemory_setProt(fileDescriptor, PROT_READ | PROT_WRITE);
++    int err = ASharedMemory_setProt(fileDescriptor.value(), PROT_READ | PROT_WRITE);
 +    if (err < 0) {
 +        WTFLogAlways("Error %d when setting protection of ashmem", err);
 +        return nullptr;
      }
  
-     void* data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fileDescriptor, 0);
-@@ -227,7 +202,20 @@ SharedMemory::~SharedMemory()
-         closeWithRetry(m_fileDescriptor.value());
+     void* data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fileDescriptor.value(), 0);
+@@ -202,7 +179,20 @@ SharedMemory::~SharedMemory()
+     munmap(m_data, m_size);
  }
  
--bool SharedMemory::createHandle(Handle& handle, Protection)
+-auto SharedMemory::createHandle(Protection) -> std::optional<Handle>
 +static inline int accessModeFile(SharedMemory::Protection protection)
 +{
 +    switch (protection) {
@@ -108,24 +106,24 @@ index 05a93d97..5af06814 100644
 +    return O_RDWR;
 +}
 +
-+bool SharedMemory::createHandle(Handle& handle, Protection protection)
++auto SharedMemory::createHandle(Protection protection) -> std::optional<Handle>
  {
+     Handle handle;
      ASSERT_ARG(handle, handle.isNull());
-     ASSERT(m_fileDescriptor);
-@@ -240,6 +228,13 @@ bool SharedMemory::createHandle(Handle& handle, Protection)
+@@ -216,6 +206,13 @@ auto SharedMemory::createHandle(Protection) -> std::optional<Handle>
          ASSERT_NOT_REACHED();
-         return false;
+         return std::nullopt;
      }
 +
 +    int err = ASharedMemory_setProt(duplicate.value(), accessModeFile(protection));
 +    if (err < 0) {
 +        ASSERT_NOT_REACHED();
-+        return false;
++        return std::nullopt;
 +    }
 +
-     handle.m_attachment = IPC::Attachment(WTFMove(duplicate), m_size);
-     return true;
- }
+     handle.m_handle = WTFMove(duplicate);
+     handle.m_size = m_size;
+     return { WTFMove(handle) };
 -- 
 2.34.1
 

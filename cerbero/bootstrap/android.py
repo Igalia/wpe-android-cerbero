@@ -25,10 +25,10 @@ from cerbero.config import Distro, FatalError
 from cerbero.enums import Platform
 from cerbero.utils import _, shell
 
-NDK_VERSION = 'r25b'
+NDK_VERSION = 'r25c'
 NDK_BASE_URL = 'https://dl.google.com/android/repository/android-ndk-%s-%s.zip'
 NDK_CHECKSUMS = {
-    'android-ndk-r25b-linux.zip': '403ac3e3020dd0db63a848dcaba6ceb2603bf64de90949d5c4361f848e44b005',
+    'android-ndk-r25c-linux.zip': '769ee342ea75f80619d985c2da990c48b3d8eaf45f48783a2d48870d04b46108'
 }
 
 class AndroidBootstrapper (BootstrapperBase):
