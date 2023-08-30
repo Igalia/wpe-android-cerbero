@@ -2,11 +2,11 @@
 
 class Recipe(recipe.Recipe):
     name = 'wpewebkit'
-    version = '2.40.2'
+    version = '2.40.5'
     stype = SourceType.TARBALL
     btype = BuildType.CMAKE
     url = 'https://wpewebkit.org/releases/wpewebkit-{0}.tar.xz'.format(version)
-    tarball_checksum = '99b7ab42580ac5726a2c95bae90caf4cf5df89765e4a046ca72e97b7fd3bccc7'
+    tarball_checksum = '4c658d3049c50e98b12fd6623ec42772f25a99cc1c05b5347a10a8633c266733'
     deps = [
         'icu',
         'cairo',
@@ -200,8 +200,7 @@ class Recipe(recipe.Recipe):
                 'wpewebkit/0005-Workaround-for-Android-emulator-samplerExternalOES-p.patch',
                 'wpewebkit/0006-Use-ASharedMemory-instead-of-shm.patch',
                 'wpewebkit/0007-Fix-ENABLE_JIT-on-armv7.patch',
-                'wpewebkit/0008-WPE-Make-libgbm-and-libdrm-conditional-dependencies.patch',
-                'wpewebkit/0009-GLIB-Fix-build-error-after-264196-main.patch'
+                'wpewebkit/0008-WPE-Make-libgbm-and-libdrm-conditional-dependencies.patch'
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')
