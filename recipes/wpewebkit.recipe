@@ -2,11 +2,11 @@
 
 class Recipe(recipe.Recipe):
     name = 'wpewebkit'
-    version = '2.40.5'
+    version = '2.42.0'
     stype = SourceType.TARBALL
     btype = BuildType.CMAKE
     url = 'https://wpewebkit.org/releases/wpewebkit-{0}.tar.xz'.format(version)
-    tarball_checksum = '4c658d3049c50e98b12fd6623ec42772f25a99cc1c05b5347a10a8633c266733'
+    tarball_checksum = 'acda4be341c6021e092b36612c88d596dae4dd7f41e6ac47425d645dffdfe5ed'
     deps = [
         'icu',
         'cairo',
@@ -44,6 +44,7 @@ class Recipe(recipe.Recipe):
         -DUSE_LCMS=OFF \
         -DUSE_AVIF=OFF \
         -DUSE_GBM=OFF \
+        -DUSE_JPEGXL=OFF \
         -DENABLE_WEBDRIVER=OFF \
         -DCMAKE_BUILD_TYPE=Release \
     '
@@ -96,6 +97,7 @@ class Recipe(recipe.Recipe):
         'include/wpe-webkit-1.0/wpe/WebKitEnumTypes.h',
         'include/wpe-webkit-1.0/wpe/WebKitError.h',
         'include/wpe-webkit-1.0/wpe/WebKitFaviconDatabase.h',
+        'include/wpe-webkit-1.0/wpe/WebKitFeature.h',
         'include/wpe-webkit-1.0/wpe/WebKitFileChooserRequest.h',
         'include/wpe-webkit-1.0/wpe/WebKitFindController.h',
         'include/wpe-webkit-1.0/wpe/WebKitFormSubmissionRequest.h',
@@ -199,8 +201,7 @@ class Recipe(recipe.Recipe):
                 'wpewebkit/0004-Remove-absolute-path-from-libWPEInjectedBundle.so-on.patch',
                 'wpewebkit/0005-Workaround-for-Android-emulator-samplerExternalOES-p.patch',
                 'wpewebkit/0006-Use-ASharedMemory-instead-of-shm.patch',
-                'wpewebkit/0007-Fix-ENABLE_JIT-on-armv7.patch',
-                'wpewebkit/0008-WPE-Make-libgbm-and-libdrm-conditional-dependencies.patch'
+                'wpewebkit/0007-Fix-ENABLE_JIT-on-armv7.patch'
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')

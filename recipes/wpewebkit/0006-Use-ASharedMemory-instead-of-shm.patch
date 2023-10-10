@@ -1,14 +1,14 @@
-From f20f33c25f79c02e424cd2e2c570e3ec07603f3b Mon Sep 17 00:00:00 2001
+From 4d994adf2f275db786c96d89a5544c03c3df173d Mon Sep 17 00:00:00 2001
 From: Jani Hautakangas <jani@igalia.com>
 Date: Wed, 28 Sep 2022 15:13:08 +0300
-Subject: [PATCH] Use ASharedMemory instead of shm
+Subject: [PATCH 6/7] Use ASharedMemory instead of shm
 
 ---
  .../WebKit/Platform/unix/SharedMemoryUnix.cpp | 63 +++++++++----------
- 1 file changed, 30 insertions(+), 33 deletions(-)
+ 1 file changed, 31 insertions(+), 32 deletions(-)
 
 diff --git a/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp b/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp
-index 6237f829e92f..c2028b873e5e 100644
+index eab1e468ce01..d48a01f6c579 100644
 --- a/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp
 +++ b/Source/WebKit/Platform/unix/SharedMemoryUnix.cpp
 @@ -50,6 +50,8 @@
@@ -19,8 +19,8 @@ index 6237f829e92f..c2028b873e5e 100644
 +
  namespace WebKit {
  
- void SharedMemory::Handle::clear()
-@@ -101,60 +103,35 @@ static inline int accessModeMMap(SharedMemory::Protection protection)
+ UnixFileDescriptor SharedMemoryHandle::releaseHandle()
+@@ -70,60 +72,37 @@ static inline int accessModeMMap(SharedMemory::Protection protection)
      return PROT_READ | PROT_WRITE;
  }
  
@@ -65,7 +65,7 @@ index 6237f829e92f..c2028b873e5e 100644
 -    if (fileDescriptor != -1)
 -        shm_unlink(tempName.data());
 -#endif
--
+ 
      return UnixFileDescriptor { fileDescriptor, UnixFileDescriptor::Adopt };
  }
  
@@ -85,10 +85,11 @@ index 6237f829e92f..c2028b873e5e 100644
 +    if (err < 0) {
 +        WTFLogAlways("Error %d when setting protection of ashmem", err);
 +        return nullptr;
++
      }
  
      void* data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fileDescriptor.value(), 0);
-@@ -202,7 +179,20 @@ SharedMemory::~SharedMemory()
+@@ -171,7 +150,20 @@ SharedMemory::~SharedMemory()
      munmap(m_data, m_size);
  }
  
@@ -110,7 +111,7 @@ index 6237f829e92f..c2028b873e5e 100644
  {
      Handle handle;
      ASSERT_ARG(handle, handle.isNull());
-@@ -216,6 +206,13 @@ auto SharedMemory::createHandle(Protection) -> std::optional<Handle>
+@@ -185,6 +177,13 @@ auto SharedMemory::createHandle(Protection) -> std::optional<Handle>
          ASSERT_NOT_REACHED();
          return std::nullopt;
      }
