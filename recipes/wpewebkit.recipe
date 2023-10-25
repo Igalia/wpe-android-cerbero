@@ -185,13 +185,14 @@ class Recipe(recipe.Recipe):
             if self.config.target_arch == Architecture.ARMv7:
                 arch_src_name = 'arm'
             self.configure_options += ' -DCMAKE_SYSTEM_PROCESSOR=' + arch_src_name
+            self.configure_options += ' -DANDROID=1'
             self.append_env('LDFLAGS', '-landroid -llog -lm -lintl -lc++_shared -O2')
             # Android libc does not have bcmp()
             self.append_env('CXXFLAGS', ' -Dbcmp=memcmp ')
             self.append_env('CFLAGS', ' -Dbcmp=memcmp ')
             # XXX: CMake fails to check for this properly
             self.append_env('CXXFLAGS', ' -DHAVE_MISSING_STD_FILESYSTEM_PATH_CONSTRUCTOR=1')
-            self.append_env('CXXFLAGS', ' -DWPE_ENABLE_PROCESS=1 -Dis_android=1 -DLOG_DISABLED=1')
+            self.append_env('CXXFLAGS', ' -DWPE_ENABLE_PROCESS=1 -Dis_android=1 -DLOG_DISABLED=1 -D__ANDROID__=1 -DANDROID=1')
             # Placeholder to allow enabling debug externally
             self.append_env('WEBKIT_DEBUG', '')
             self.patches += [
@@ -201,7 +202,8 @@ class Recipe(recipe.Recipe):
                 'wpewebkit/0004-Remove-absolute-path-from-libWPEInjectedBundle.so-on.patch',
                 'wpewebkit/0005-Workaround-for-Android-emulator-samplerExternalOES-p.patch',
                 'wpewebkit/0006-Use-ASharedMemory-instead-of-shm.patch',
-                'wpewebkit/0007-Fix-ENABLE_JIT-on-armv7.patch'
+                'wpewebkit/0007-Fix-ENABLE_JIT-on-armv7.patch',
+                'wpewebkit/0008-Enable-Android-on-ANGLE-for-WebGL-support.patch'
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')
