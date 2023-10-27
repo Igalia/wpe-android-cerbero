@@ -13,7 +13,7 @@ jobs:
     runs-on: self-hosted
     strategy:
       matrix:
-        target: [arm64, armv7, x86_64, x86]
+        target: [arm64, x86_64]
     steps:
       - name: Fetch source code
         uses: actions/checkout@v3.1.0
