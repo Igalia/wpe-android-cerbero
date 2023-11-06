@@ -40,3 +40,4 @@ jobs:
           exit 0
         env:
           UPLOAD_KEY_PASSWD: ${{ secrets.UPLOAD_KEY_PASSWD }}
+          UPLOAD_SSH_KNOWN_HOSTS: ${{ secrets.UPLOAD_SSH_KNOWN_HOSTS }}
