@@ -1,15 +1,28 @@
 name: Build and Deploy
 on:
   workflow_dispatch:
+    inputs:
+      upload_packages:
+        description: 'Upload packages'
+        required: true
+        type: choice
+        default: 'on-merge'
+        options:
+          - 'on-merge'
+          - 'skip'
+          - 'yes'
   pull_request:
     types:
+      - opened
+      - synchronize
+      - reopened
       - closed
     branches:
       - 'wpe-android'
 
 jobs:
   build:
-    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/wpe-android') || (github.event_name == 'pull_request' && github.event.pull_request.merged == true) }}
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'pull_request' && github.event.pull_request.merged == true) }}
     runs-on: self-hosted
     strategy:
       matrix:
@@ -34,6 +47,7 @@ jobs:
           path: ./wpewebkit-android-${{ matrix.target }}*
           if-no-files-found: error
       - name: Upload packages to wpewebkit.org
+        if: ${{ inputs.upload_packages == 'yes' || (github.event.pull_request.merged == true && inputs.upload_packages == 'on-merge') }}
         run: |
           python3 ./.github/workflows/upload.py "./wpewebkit-android-${{ matrix.target }}*" || \
           echo "**:warning: WARNING :warning:** Cannot upload ./wpewebkit-android-${{ matrix.target }}... files to wpewebkit.org" >> $GITHUB_STEP_SUMMARY
