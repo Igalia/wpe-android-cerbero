@@ -74,7 +74,9 @@ class PackageSpec:
 
 
 async def with_sftp(fn, *arg, **kw):
-    async with asyncssh.connect("wpewebkit.org", port=7575, username="www-data", passphrase=os.getenv("UPLOAD_KEY_PASSWD")) as conn:
+    async with asyncssh.connect("wpewebkit.org", port=7575, username="www-data",
+                                known_hosts=asyncssh.import_known_hosts(os.getenv("UPLOAD_SSH_KNOWN_HOSTS")),
+                                passphrase=os.getenv("UPLOAD_KEY_PASSWD")) as conn:
         async with conn.start_sftp_client() as sftp:
             return await fn(sftp, *arg, **kw)
 
