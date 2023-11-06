@@ -12,6 +12,7 @@ import re
 import os
 import sys
 
+dry_run = os.environ.get("UPLOAD_DRY_RUN", "false").lower().strip() in ("1", "yes", "true")
 log = logging.getLogger(__name__)
 
 _PKGNAME_REGEX = re.compile(r"""
@@ -124,7 +125,10 @@ async def upload_tarball(sftp, path: Path, progress: bool):
     remotedir = f"wpewebkit/android/bootstrap/{spec.version}"
     print("Remote location:", remotedir)
     if not await sftp.isdir(remotedir):
-        await sftp.mkdir(remotedir)
+        if dry_run:
+            log.info("dry-run: Skipped target directory creation")
+        else:
+            await sftp.mkdir(remotedir)
 
     if spec.datecode:
         log.warn("Package '%s' already has a datecode, continuing anyway", path)
@@ -142,6 +146,10 @@ async def upload_tarball(sftp, path: Path, progress: bool):
     print("Remote symlink:", symlink_name)
     print("Remote filename:", str(spec))
 
+    if dry_run:
+        log.info("dry-run: Skipped package upload and symlink update.")
+        return
+
     progress_handler = None
     if progress:
         progress_handler = show_progress
@@ -155,7 +163,12 @@ async def upload_tarball(sftp, path: Path, progress: bool):
 
 
 async def main(path, progress):
-    logging.basicConfig(level=logging.WARN)
+    if dry_run:
+        logging.basicConfig(level=logging.INFO)
+        log.info("Note: UPLOAD_DRY_RUN was set, SFTP connection still used "
+                 "but packages will NOT be uploaded.")
+    else:
+        logging.basicConfig(level=logging.WARN)
     files = [path]
     if "*" in path:
         files = glob(path)

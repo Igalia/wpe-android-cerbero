@@ -9,6 +9,7 @@ on:
         default: 'on-merge'
         options:
           - 'on-merge'
+          - 'dry-run'
           - 'skip'
           - 'yes'
   pull_request:
@@ -47,11 +48,12 @@ jobs:
           path: ./wpewebkit-android-${{ matrix.target }}*
           if-no-files-found: error
       - name: Upload packages to wpewebkit.org
-        if: ${{ inputs.upload_packages == 'yes' || (github.event.pull_request.merged == true && inputs.upload_packages == 'on-merge') }}
+        if: ${{ inputs.upload_packages == 'yes' || inputs.upload_packages == 'dry-run' || (github.event.pull_request.merged == true && inputs.upload_packages == 'on-merge') }}
         run: |
           python3 ./.github/workflows/upload.py "./wpewebkit-android-${{ matrix.target }}*" || \
           echo "**:warning: WARNING :warning:** Cannot upload ./wpewebkit-android-${{ matrix.target }}... files to wpewebkit.org" >> $GITHUB_STEP_SUMMARY
           exit 0
         env:
+          UPLOAD_DRY_RUN: ${{ inputs.upload_packages == 'dry-run' }}
           UPLOAD_KEY_PASSWD: ${{ secrets.UPLOAD_KEY_PASSWD }}
           UPLOAD_SSH_KNOWN_HOSTS: ${{ secrets.UPLOAD_SSH_KNOWN_HOSTS }}
