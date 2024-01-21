@@ -45,13 +45,14 @@ class Recipe(recipe.Recipe):
         -DUSE_AVIF=OFF \
         -DUSE_GBM=OFF \
         -DUSE_JPEGXL=OFF \
-        -DENABLE_WEBDRIVER=OFF \
+        -DENABLE_WEBDRIVER=ON \
         -DCMAKE_BUILD_TYPE=Release \
     '
     cmake_generator = 'ninja'
 
     files_libs = [
-        'libWPEWebKit-1.0'
+        'libWPEWebKit-1.0',
+        'libWPEWebDriver'
     ]
 
     files_misc = [
@@ -203,7 +204,8 @@ class Recipe(recipe.Recipe):
                 'wpewebkit/0005-Workaround-for-Android-emulator-samplerExternalOES-p.patch',
                 'wpewebkit/0006-Use-ASharedMemory-instead-of-shm.patch',
                 'wpewebkit/0007-Fix-ENABLE_JIT-on-armv7.patch',
-                'wpewebkit/0008-Enable-Android-on-ANGLE-for-WebGL-support.patch'
+                'wpewebkit/0008-Enable-Android-on-ANGLE-for-WebGL-support.patch',
+                'wpewebkit/0009-Compile-WebDriver-as-a-library.patch'
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')
