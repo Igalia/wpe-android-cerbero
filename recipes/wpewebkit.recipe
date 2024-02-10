@@ -205,7 +205,8 @@ class Recipe(recipe.Recipe):
                 'wpewebkit/0006-Use-ASharedMemory-instead-of-shm.patch',
                 'wpewebkit/0007-Fix-ENABLE_JIT-on-armv7.patch',
                 'wpewebkit/0008-Enable-Android-on-ANGLE-for-WebGL-support.patch',
-                'wpewebkit/0009-Compile-WebDriver-as-a-library.patch'
+                'wpewebkit/0009-Compile-WebDriver-as-a-library.patch',
+                'wpewebkit/0010-Support-GLES3-according-to-spec-in-BitmapTexture.patch'
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')

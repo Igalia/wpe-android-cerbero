@@ -1,0 +1,137 @@
+From fb64e4d0aa61595734a14944373465fab9f1042a Mon Sep 17 00:00:00 2001
+From: Jani Hautakangas <jani@igalia.com>
+Date: Thu, 7 Dec 2023 13:35:04 +0200
+Subject: [PATCH] Support GLES3 according to spec in BitmapTexture
+
+According to GLES 3+ spec following must be true:
+
+4.4.4.2 Whole Framebuffer Completeness
+    - Depth and stencil attachments, if present, are the same image
+
+Otherwise FRAMEBUFFER_UNSUPPORTED is reported
+---
+ .../graphics/texmap/BitmapTextureGL.cpp       | 24 ++++++++++++++-----
+ .../graphics/texmap/BitmapTextureGL.h         |  2 ++
+ .../texmap/TextureMapperContextAttributes.cpp | 17 +++++++++++++
+ .../texmap/TextureMapperContextAttributes.h   |  1 +
+ 4 files changed, 38 insertions(+), 6 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/texmap/BitmapTextureGL.cpp b/Source/WebCore/platform/graphics/texmap/BitmapTextureGL.cpp
+index 58169432cdb6..8fa196f50d51 100644
+--- a/Source/WebCore/platform/graphics/texmap/BitmapTextureGL.cpp
++++ b/Source/WebCore/platform/graphics/texmap/BitmapTextureGL.cpp
+@@ -59,7 +59,22 @@ BitmapTextureGL::BitmapTextureGL(const TextureMapperContextAttributes& contextAt
+     : m_contextAttributes(contextAttributes)
+     , m_format(GL_RGBA)
+ {
++#if USE(TEXMAP_DEPTH_STENCIL_BUFFER)
++    m_useTexmapDepthStencilBuffer = true;
++#else
++    if (m_contextAttributes.isGLES3Compliant) {
++        // According to GLES 3+ spec following must be true:
++        //
++        // 4.4.4.2 Whole Framebuffer Completeness
++        // - Depth and stencil attachments, if present, are the same image
++        //
++        // Otherwise FRAMEBUFFER_UNSUPPORTED is reported
++        m_useTexmapDepthStencilBuffer = true;
++    }
++#endif
++
+     if (internalFormat != GL_DONT_CARE) {
++        fprintf(stderr, "FOOBAR: INTERNAL FORMAT: %d", internalFormat);
+         m_internalFormat = internalFormat;
+         return;
+     }
+@@ -227,7 +242,7 @@ RefPtr<BitmapTexture> BitmapTextureGL::applyFilters(TextureMapper& textureMapper
+ void BitmapTextureGL::initializeStencil()
+ {
+ #if !USE(TEXMAP_DEPTH_STENCIL_BUFFER)
+-    if (m_rbo)
++    if (m_useTexmapDepthStencilBuffer || m_rbo)
+         return;
+ 
+     glGenRenderbuffers(1, &m_rbo);
+@@ -245,17 +260,14 @@ void BitmapTextureGL::initializeDepthBuffer()
+     if (m_depthBufferObject)
+         return;
+ 
+-#if USE(TEXMAP_DEPTH_STENCIL_BUFFER)
+-    GLenum format = GL_DEPTH24_STENCIL8_OES;
+-#else
+-    GLenum format = GL_DEPTH_COMPONENT16;
+-#endif
++    GLenum format = m_useTexmapDepthStencilBuffer ? GL_DEPTH24_STENCIL8_OES : GL_DEPTH_COMPONENT16; 
+     
+     glGenRenderbuffers(1, &m_depthBufferObject);
+     glBindRenderbuffer(GL_RENDERBUFFER, m_depthBufferObject);
+     glRenderbufferStorage(GL_RENDERBUFFER, format, m_textureSize.width(), m_textureSize.height());
+     glBindRenderbuffer(GL_RENDERBUFFER, 0);
+     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_depthBufferObject);
++    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_depthBufferObject);
+ }
+ 
+ void BitmapTextureGL::clearIfNeeded()
+diff --git a/Source/WebCore/platform/graphics/texmap/BitmapTextureGL.h b/Source/WebCore/platform/graphics/texmap/BitmapTextureGL.h
+index 0ce9a530d251..0d70c4ec6c2f 100644
+--- a/Source/WebCore/platform/graphics/texmap/BitmapTextureGL.h
++++ b/Source/WebCore/platform/graphics/texmap/BitmapTextureGL.h
+@@ -120,6 +120,8 @@ private:
+         GL_UNSIGNED_BYTE
+ #endif
+     };
++
++    bool m_useTexmapDepthStencilBuffer { false };
+ };
+ 
+ BitmapTextureGL* toBitmapTextureGL(BitmapTexture*);
+diff --git a/Source/WebCore/platform/graphics/texmap/TextureMapperContextAttributes.cpp b/Source/WebCore/platform/graphics/texmap/TextureMapperContextAttributes.cpp
+index 0f7877fe0570..a5cb47e538ac 100644
+--- a/Source/WebCore/platform/graphics/texmap/TextureMapperContextAttributes.cpp
++++ b/Source/WebCore/platform/graphics/texmap/TextureMapperContextAttributes.cpp
+@@ -32,6 +32,7 @@
+ #include <mutex>
+ #include <wtf/ThreadSpecific.h>
+ #include <wtf/text/WTFString.h>
++#include <wtf/text/StringToIntegerConversion.h>
+ 
+ namespace WebCore {
+ 
+@@ -54,6 +55,22 @@ const TextureMapperContextAttributes& TextureMapperContextAttributes::get()
+ 
+         attributes.isGLES2Compliant = true;
+ 
++        // Version string can start with the version number (all versions except GLES 1, 2 and 3) or with
++        // "OpenGL". Different fields inside the version string are separated by spaces.
++        auto versionString = String::fromLatin1(reinterpret_cast<const char*>(::glGetString(GL_VERSION)));
++        Vector<String> versionStringComponents = versionString.split(' ');
++
++        Vector<String> versionDigits;
++        if (versionStringComponents[0] == "OpenGL"_s) {
++            // If the version string starts with "OpenGL" it can be GLES 1, 2 or 3. In GLES1 version string starts
++            // with "OpenGL ES-<profile> major.minor" and in GLES2/GLES3 with "OpenGL ES major.minor". Version is the
++            // third component in all cases.
++            versionDigits = versionStringComponents[2].split('.');
++            if (parseIntegerAllowingTrailingJunk<unsigned>(versionDigits[0]).value_or(0) > 2)
++                attributes.isGLES3Compliant = true;
++        }
++
++
+         auto extensionsString = String::fromLatin1(reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS)));
+         attributes.supportsNPOTTextures = extensionsString.contains("GL_OES_texture_npot"_s);
+         attributes.supportsUnpackSubimage = extensionsString.contains("GL_EXT_unpack_subimage"_s);
+diff --git a/Source/WebCore/platform/graphics/texmap/TextureMapperContextAttributes.h b/Source/WebCore/platform/graphics/texmap/TextureMapperContextAttributes.h
+index 87538fe7d37c..339e83f5d7da 100644
+--- a/Source/WebCore/platform/graphics/texmap/TextureMapperContextAttributes.h
++++ b/Source/WebCore/platform/graphics/texmap/TextureMapperContextAttributes.h
+@@ -34,6 +34,7 @@ struct TextureMapperContextAttributes {
+ 
+     bool initialized { false };
+     bool isGLES2Compliant { false };
++    bool isGLES3Compliant { false };
+     bool supportsNPOTTextures { false };
+     bool supportsUnpackSubimage { false };
+ };
+-- 
+2.34.1
+
