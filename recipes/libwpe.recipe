@@ -8,7 +8,7 @@ class Recipe(recipe.Recipe):
     url = 'https://wpewebkit.org/releases/libwpe-{0}.tar.xz'.format(version)
     tarball_checksum = 'b1d0cdcf0f8dbb494e65b0f7913e357106da9a0d57f4fbb7b9d1238a6dbe9ade'
     deps = ['xkbcommon']
-    meson_options = {}
+    meson_options = {'enable-xkb': 'false'}
 
     files_libs = ['libwpe-1.0']
 
