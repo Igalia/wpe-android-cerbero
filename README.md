@@ -1,5 +1,7 @@
 # Description
 
+Cerbero build system used to build WPE WebKit for wpe-android
+
 Cerbero is a cross-platform build aggregator for Open Source projects that builds
 and creates native packages for different platforms, architectures and distributions.
 It supports both native compilation and cross compilation and can run on macOS,
