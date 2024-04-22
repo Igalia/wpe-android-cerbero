@@ -6,9 +6,9 @@ from cerbero.utils import needs_xcode8_sdk_workaround
 
 class Recipe(recipe.Recipe):
     name = 'gnutls'
-    version = '3.7.0'
+    version = '3.7.4'
     url = 'https://www.gnupg.org/ftp/gcrypt/%(name)s/v%(maj_ver)s/%(name)s-%(version)s.tar.xz'
-    tarball_checksum = '49e2a22691d252c9f24a9829b293a8f359095bc5a818351f05f1c0a5188a1df8'
+    tarball_checksum = 'e6adbebcfbc95867de01060d93c789938cf89cc1d1f6ef9ef661890f6217451f'
     stype = SourceType.TARBALL
     # main library is LGPLv2+ and binaries is GPLv3+ and defined below
     licenses = [{License.LGPLv2Plus: None, License.Misc: ['LICENSE']}]
@@ -22,9 +22,7 @@ class Recipe(recipe.Recipe):
         Platform.IOS: ['proxy-libintl'],
         Platform.DARWIN: ['proxy-libintl']
     }
-    patches = [name + "/0001-Undefine-__USE_MINGW_ANSI_STDIO-as-otherwise-stdio.h.patch",
-               name + "/0001-pgusage-remove-system-call.patch",
-               name + "/0001-Fix-armv8-architecture-for-clang.patch"]
+    patches = [name + "/0001-Fix-armv8-architecture-for-clang.patch"]
     autoreconf = True
 
     files_libs = ['libgnutls', 'libgnutlsxx']
@@ -43,6 +41,8 @@ class Recipe(recipe.Recipe):
         if self.config.target_platform == Platform.DARWIN:
             self.configure_options += ' --disable-hardware-acceleration'
         if self.config.target_platform == Platform.ANDROID:
+            self.set_env('ac_cv_func_malloc_0_nonnull', 'yes')
+            self.set_env('ac_cv_func_realloc_0_nonnull', 'yes')
             self.configure_options += ' --disable-cxx'
             self.files_libs.remove('libgnutlsxx')
         if self.config.target_platform == Platform.IOS:
