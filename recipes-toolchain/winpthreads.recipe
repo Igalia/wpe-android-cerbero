@@ -9,7 +9,6 @@ class Recipe(recipe.Recipe):
     configure_options = '--enable-shared --enable-static'
     add_host_build_target = False
     autoreconf = True
-    allow_parallel_build = False
     stype = SourceType.CUSTOM
     deps = ['mingw-w64-headers']
     files_all = [
@@ -37,17 +36,16 @@ class Recipe(recipe.Recipe):
                 'CXXFLAGS', 'CCASFLAGS']:
             self.set_env(v)
         self.host = 'x86_64-w64-mingw32'
-        self.sysroot = os.path.join(self.config.prefix, self.host, 'sysroot')
-        self.configure_options += ' --with-sysroot=%s ' % self.sysroot
-        self.make_install = ['make', 'install', 'DESTDIR=' + self.sysroot]
-        self.build_dir = os.path.join(self.config.sources,
-                'mingw-w64-%s' % self.version)
-        self.make_dir = os.path.join(self.config.sources,
-                'mingw-w64-%s/mingw-w64-libraries/winpthreads' % self.version)
+        self.sysroot = f'{self.config.prefix}/{self.host}/sysroot'
+        self.configure_options.append(f'--with-sysroot={self.sysroot}')
+        self.make_install += [f'DESTDIR={self.sysroot}']
+        self.src_dir = os.path.join(self.config.sources, f'mingw-w64-sources-{self.version}', 'mingw-w64-libraries', 'winpthreads')
+        self.config_src_dir = self.src_dir
+        self.build_dir = self.src_dir
         self.configure_tpl = "%%(config-sh)s --prefix /usr/%(host)s "\
                 "--libdir /usr/%(host)s %%(options)s" % {'host': self.host}
-        self.build_dir_32 = os.path.join(self.make_dir, 'winpthread_build_32')
-        self.build_dir_64 = os.path.join(self.make_dir, 'winpthread_build_64')
+        self.build_dir_32 = os.path.join(self.build_dir, 'cerbero-build-dir-32')
+        self.build_dir_64 = os.path.join(self.build_dir, 'cerbero-build-dir-64')
 
     @modify_environment
     def configure(self):
@@ -98,3 +96,6 @@ class Recipe(recipe.Recipe):
         if os.path.exists(dest_winpthread_dll):
             os.remove(dest_winpthread_dll)
         shutil.move(src_winpthread_dll, libdir)
+        # and to <toolchain>/bin because dlltool depends on it
+        bindir = os.path.join(self.config.prefix, 'bin')
+        shutil.copy(os.path.join(libdir, "libwinpthread-1.dll"), bindir)

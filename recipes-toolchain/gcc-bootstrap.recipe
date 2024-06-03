@@ -8,23 +8,6 @@ class Recipe(recipe.Recipe):
     version = '8.2.0'
     stype = SourceType.CUSTOM
     licenses = [License.GPLv3Plus]
-    configure_options = '--with-newlib ' \
-                        '--disable-maintainer-mode ' \
-                        '--with-host-libstdcxx=\'-static-libgcc -Wl,-Bstatic,-lstdc++,-Bdynamic -lm\' ' \
-                        '--disable-shared ' \
-                        '--disable-libgomp ' \
-                        '--disable-libquadmath ' \
-                        '--disable-libquadmath-support ' \
-                        '--disable-libmudflap ' \
-                        '--disable-libmpx ' \
-                        '--disable-libssp ' \
-                        '--disable-nls ' \
-                        '--enable-threads=no ' \
-                        '--enable-__cxa_atexit ' \
-                        '--enable-lto ' \
-                        '--enable-languages=c ' \
-                        '--enable-multiarch ' \
-                        ''
     make = 'make configure-gcc configure-libcpp configure-build-libiberty &&' \
             'make all-libcpp all-build-libiberty && '\
             'make configure-libdecnumber && '\
@@ -33,6 +16,24 @@ class Recipe(recipe.Recipe):
             'make -C libbacktrace && '\
             'make all-gcc all-target-libgcc'
     make_install = 'make install-gcc install-target-libgcc'
+    override_libtool = False
+    configure_options = [
+        '--disable-maintainer-mode',
+        '--with-host-libstdcxx=-static-libgcc -Wl,-Bstatic,-lstdc++,-Bdynamic -lm',
+        '--disable-shared',
+        '--disable-libgomp',
+        '--disable-libquadmath',
+        '--disable-libquadmath-support',
+        '--disable-libmudflap',
+        '--disable-libmpx',
+        '--disable-libssp',
+        '--disable-nls',
+        '--enable-threads=no',
+        '--enable-__cxa_atexit',
+        '--enable-lto',
+        '--enable-languages=c,c++,lto',
+        '--enable-multiarch'
+    ]
     use_system_libs = True
     add_host_build_target = False
     deps = ['gcc-sources', 'mingw-w64-headers', 'gmp', 'mpfr', 'mpc', 'isl']
@@ -47,18 +48,15 @@ class Recipe(recipe.Recipe):
         self.configure_options += ' --with-local-prefix=%s ' % sysroot
         self.configure_options += ' --target=%s' % self._target
         if self.config.target_platform == Platform.WINDOWS:
-            self.configure_options += ' --host=%s' % self._target
-        if self.config.target_platform == Platform.WINDOWS:
-            self.allow_parallel_build = False
-        self.build_dir = os.path.join(self.config.sources,
-                'gcc-%s' % self.version)
-        self.make_dir = os.path.join(self.build_dir, 'gcc_build_core')
-        self.config_sh = os.path.join(self.config.sources,
-                'gcc-%s' % self.version, 'configure')
+            self.configure_options.append(f'--host={self._target}')
+        self.src_dir = os.path.join(self.config.sources, f'gcc-sources-{self.version}')
+        self.config_src_dir = self.src_dir
+        self.build_dir = os.path.join(self.src_dir, 'gcc_build_core')
+        self.make += ['all-gcc']
+        self.make_install = ['install-strip-gcc' if i == 'install' else i for i in self.make_install]
 
     async def configure(self):
-        try:
-            os.mkdir(self.make_dir)
-        except:
-            pass
+        # https://github.com/msys2/MINGW-packages/commit/54101537025a9a3a381a1e292fb9bc967e374bd2
+        header = os.path.join(self.src_dir, 'gcc/config/i386/mingw32.h')
+        shell.replace(header, {'/mingw': f'/usr/{self._target}'})
         await super(Recipe, self).configure()
