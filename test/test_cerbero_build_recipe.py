@@ -33,6 +33,7 @@ class Class1(object):
 
     def __init__(self):
         self.test = 'CODEPASS'
+        super().__init__()
 
     class1_method = lambda x: None
     compile = lambda x: 'CODEPASS'
