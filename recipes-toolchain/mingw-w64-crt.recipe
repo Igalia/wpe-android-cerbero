@@ -6,6 +6,9 @@ class Recipe(recipe.Recipe):
     add_host_build_target = False
     configure_options = ' --with-default-msvcrt=ucrtbase '
     deps = ['mingw-w64-sources', 'binutils']
+    # Race condition in onecoreuap
+    allow_parallel_build = False
+    can_msvc = False
 
     def prepare(self):
         if self.config.target_arch == Architecture.X86:
@@ -28,3 +31,6 @@ class Recipe(recipe.Recipe):
         self.make_dir = os.path.join(self.build_dir, 'mingw-w64-crt')
         self.configure_tpl = "%%(config-sh)s --prefix /usr/%(host)s "\
                 "--libdir /usr/%(host)s/lib %%(options)s" % {'host': self.host}
+        self.src_dir = os.path.join(self.config.sources, f'mingw-w64-sources-{self.version}', self.name)
+        self.config_src_dir = self.src_dir
+        self.build_dir = os.path.join(self.src_dir, 'cerbero-build-dir')
