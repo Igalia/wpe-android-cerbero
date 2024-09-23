@@ -1,0 +1,47 @@
+From 603ec4e4d5e0c83cdb07a179a3f5a899f4024004 Mon Sep 17 00:00:00 2001
+From: Jani Hautakangas <jani@igalia.com>
+Date: Mon, 23 Sep 2024 16:28:50 +0300
+Subject: [PATCH 10/11] Add Android support to Skia CMakefile.txt
+
+---
+ Source/ThirdParty/skia/CMakeLists.txt | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/Source/ThirdParty/skia/CMakeLists.txt b/Source/ThirdParty/skia/CMakeLists.txt
+index 756a9a4532cc..5f16df653889 100644
+--- a/Source/ThirdParty/skia/CMakeLists.txt
++++ b/Source/ThirdParty/skia/CMakeLists.txt
+@@ -1,5 +1,9 @@
+ set_property(DIRECTORY . PROPERTY FOLDER "skia")
+ 
++if (ANDROID)
++    set(is_android TRUE)
++endif ()
++
+ # Skia dependencies not used directly in WebKit.
+ find_package(Freetype 2.9.0 REQUIRED)
+ find_package(Fontconfig 2.13.0 REQUIRED)
+@@ -871,7 +875,6 @@ add_library(Skia STATIC
+     src/opts/SkOpts_hsw.cpp
+     src/opts/SkOpts_skx.cpp
+ 
+-    src/ports/SkDebug_stdio.cpp
+     src/ports/SkFontConfigInterface.cpp
+     src/ports/SkFontConfigInterface_direct.cpp
+     src/ports/SkFontConfigInterface_direct_factory.cpp
+@@ -892,6 +895,12 @@ add_library(Skia STATIC
+     modules/skcms/src/skcms_TransformSkx.cc
+ )
+ 
++if (is_android)
++    target_sources(Skia PRIVATE src/ports/SkDebug_android.cpp)
++else ()
++    target_sources(Skia PRIVATE src/ports/SkDebug_stdio.cpp)
++endif ()
++
+ if (USE_SYSTEM_MALLOC)
+     target_sources(Skia PRIVATE src/ports/SkMemory_malloc.cpp)
+ else ()
+-- 
+2.43.0
+

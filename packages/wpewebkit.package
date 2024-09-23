@@ -2,7 +2,7 @@
 
 class SDKPackage(package.SDKPackage):
     name = 'wpewebkit'
-    version = '2.44.1'
+    version = '2.46.0'
     shortdesc = 'Web Platform for Embedded'
     longdesc = 'WPE WebKit allows embedders to create simple and performant \
         systems based on Web platform technologies. It is a WebKit port designed \
@@ -10,7 +10,7 @@ class SDKPackage(package.SDKPackage):
         graphics APIs for best performance'
     vendor = 'Igalia'
     uuid = '5c8655ac-6e87-4cfa-b41c-4af5a814687a'
-    strip = True
+    strip = False
     strip_excludes = [
         'libc.so',
         'libm.so',
