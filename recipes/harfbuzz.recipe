@@ -4,22 +4,23 @@ from cerbero.tools.libtool import LibtoolLibrary
 
 class Recipe(recipe.Recipe):
     name = 'harfbuzz'
-    version = '10.4.0'
+    version = '11.0.1'
     stype = SourceType.TARBALL
     btype = BuildType.MESON
     url = 'https://github.com/%(name)s/%(name)s/releases/download/%(version)s/%(name)s-%(version)s.tar.xz'
-    tarball_checksum = '480b6d25014169300669aa1fc39fb356c142d5028324ea52b3a27648b9beaad8'
+    tarball_checksum = '4a7890090538136db64742073af4b4d776ab8b50e6855676a8165eb8b7f60b7a'
     licenses = [{License.BSD_like: ['COPYING']}]
-    deps = ['fontconfig', 'cairo', 'glib']
-    meson_options = {'icu': 'disabled',
+    deps = ['fontconfig', 'cairo', 'glib', 'icu']
+    meson_options = {'icu': 'enabled',
                      'glib': 'enabled',
                      'cairo': 'enabled',  # needed for hb-view
                      'gobject': 'enabled',
                      'icu_builtin': 'false',
-                     'tests': 'disabled'}
+                     'tests': 'disabled',
+                     'docs': 'disabled'}
 
     files_bins = ['hb-ot-shape-closure', 'hb-view', 'hb-shape']
-    files_libs = ['libharfbuzz', 'libharfbuzz-gobject']
+    files_libs = ['libharfbuzz', 'libharfbuzz-gobject', 'libharfbuzz-icu']
     files_devel = [
         'include/harfbuzz/*.h',
         '%(libdir)s/pkgconfig/harfbuzz.pc',

@@ -651,7 +651,6 @@ class CMake(MakefilesBase):
         '-DCMAKE_INSTALL_BINDIR=bin '
         '-DCMAKE_INSTALL_INCLUDEDIR=include '
         '%(options)s -DCMAKE_BUILD_TYPE=Release '
-        '-DCMAKE_FIND_ROOT_PATH=$CERBERO_PREFIX '
         '-DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=true '
     )
 
@@ -682,6 +681,16 @@ class CMake(MakefilesBase):
             self.configure_options = self.configure_options.split()
         else:
             self.configure_options = []
+
+        cerbero_prefix = self.env['CERBERO_PREFIX']
+        self.configure_options += [
+            f'-DCMAKE_FIND_ROOT_PATH={cerbero_prefix}',
+            f'-DCMAKE_PREFIX_PATH={cerbero_prefix}',
+        ]
+
+        ldflags = self.env['LDFLAGS']
+        for name in ('EXE', 'SHARED', 'MODULE'):
+            self.configure_options.append(f'-DCMAKE_{name}_LINKER_FLAGS:STRING={ldflags}')
 
         if self.cmake_generator == 'ninja' or self.using_msvc():
             self.configure_options += ['-G', 'Ninja']

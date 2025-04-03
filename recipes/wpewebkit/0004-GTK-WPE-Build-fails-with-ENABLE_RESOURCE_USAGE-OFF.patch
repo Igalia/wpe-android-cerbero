@@ -1,0 +1,35 @@
+From 14277b39c1f30acecf5e7cb68c62a886094aa838 Mon Sep 17 00:00:00 2001
+From: Adrian Perez de Castro <aperez@igalia.com>
+Date: Sun, 6 Apr 2025 15:07:59 -0700
+Subject: =?UTF-8?q?[GTK][WPE]=20Build=20fails=20with=20ENABLE=5FRESOURCE?=
+ =?UTF-8?q?=5FUSAGE=3DOFF=0Ahttps://bugs.webkit.org/show=5Fbug.cgi=3Fid=3D?=
+ =?UTF-8?q?291169?=
+
+Unreviewed build fix.
+
+* Source/WebCore/page/Page.cpp:
+(WebCore::Page::~Page): Add missing ENABLE(RESOURCE_USAGE) guard.
+
+Canonical link: https://commits.webkit.org/293334@main
+---
+ Source/WebCore/page/Page.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Source/WebCore/page/Page.cpp b/Source/WebCore/page/Page.cpp
+index ec609d266379..983793afc676 100644
+--- a/Source/WebCore/page/Page.cpp
++++ b/Source/WebCore/page/Page.cpp
+@@ -539,8 +539,10 @@ Page::~Page()
+     if (RefPtr scrollingCoordinator = m_scrollingCoordinator)
+         scrollingCoordinator->pageDestroyed();
+ 
++#if ENABLE(RESOURCE_USAGE)
+     if (RefPtr resourceUsageOverlay = m_resourceUsageOverlay)
+         resourceUsageOverlay->detachFromPage();
++#endif
+ 
+     checkedBackForward()->close();
+     if (!isUtilityPage())
+-- 
+2.49.0
+
