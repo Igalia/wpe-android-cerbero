@@ -17,6 +17,7 @@
 # Boston, MA 02111-1307, USA.
 
 import os
+from pathlib import Path
 import venv
 import glob
 import shutil
@@ -26,7 +27,7 @@ from cerbero.build.oven import Oven
 from cerbero.build.cookbook import CookBook
 from cerbero.commands.fetch import Fetch
 from cerbero.utils import shell
-from cerbero.enums import Platform, Distro
+from cerbero.enums import Platform, Distro, Architecture
 
 
 class BuildTools (BootstrapperBase, Fetch):
@@ -39,7 +40,7 @@ class BuildTools (BootstrapperBase, Fetch):
     }
 
     def __init__(self, config, offline):
-        BootstrapperBase.__init__(self, config, offline)
+        BootstrapperBase.__init__(self, config, offline, None)
 
         if self.config.variants.rust:
             self.BUILD_TOOLS.append('cargo-c')
@@ -116,14 +117,21 @@ class BuildTools (BootstrapperBase, Fetch):
             scriptsdir = os.path.join(self.config.build_tools_prefix, 'Scripts')
             bindir = os.path.join(self.config.build_tools_prefix, 'bin')
             os.makedirs(bindir, exist_ok=True)
-            for f in glob.glob('*', root_dir=scriptsdir):
-                tof = os.path.join(bindir, f)
+            for f in Path(scriptsdir).glob('*'):
+                tof = os.path.join(bindir, f.name)
                 if os.path.isfile(tof):
                     os.remove(tof)
-                shutil.move(os.path.join(scriptsdir, f), tof)
+                shutil.move(f, tof)
             os.rmdir(scriptsdir)
         python = os.path.join(self.config.build_tools_prefix, 'bin', 'python')
-        shell.new_call([python, '-m', 'pip', 'install', 'setuptools'])
+        shell.new_call([python, '-m', 'pip', 'install', '-U', 'setuptools', 'packaging'])
+        if self.config.platform == Platform.DARWIN and self.config.arch == Architecture.ARM64:
+            # Create an x86_64 python for introspection in universal builds
+            python_wrapper = os.path.join(self.config.build_tools_prefix, 'bin', 'python3-x86_64')
+            with open(python_wrapper, 'w') as f:
+                f.write('#!/bin/sh\n')
+                f.write('arch -x86_64 python3 "$@"\n')
+            os.chmod(python_wrapper, 0o755)
 
     async def start(self, jobs=0):
         self.setup_venv()

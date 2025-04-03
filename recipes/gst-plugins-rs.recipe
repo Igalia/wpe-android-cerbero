@@ -1,23 +1,24 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
-from custom import GStreamer
+from custom import GStreamer, running_on_cerbero_ci
 from cerbero.errors import FatalError
 from cerbero.utils import messages as m
 from cerbero.utils import shell, determine_num_cargo_jobs, determine_total_ram
 from pathlib import Path
 import re
+import shlex
 import shutil
 import tempfile
 
 
 class Recipe(recipe.Recipe):
     name = 'gst-plugins-rs'
-    version = '0.12.9'
+    version = '0.14.0-alpha.1'
     stype = SourceType.GIT
     remotes = {'origin': 'https://gitlab.freedesktop.org/gstreamer/%(name)s.git'}
     if GStreamer.tagged_for_release:
         commit = f'gstreamer-{GStreamer.version}'
     else:
-        commit = 'origin/0.12'
+        commit = 'origin/main'
     # Each plugin uses one or more of these licenses.
     licenses = [{
         License.Apachev2: ['LICENSE-APACHE'],
@@ -37,22 +38,29 @@ class Recipe(recipe.Recipe):
         'ffv1',
         'fmp4',
         'gif',
+        'gopbuffer',
+        'hlsmultivariantsink',
         'hlssink3',
         'hsv',
         'inter',
         'json',
         'livesync',
         'lewton',
+        'mpegtslive',
         'mp4',
         'ndi',
         'onvif',
+        'originalbuffer',
+        'quinn',
         'rav1e',
         'regex',
+        'relationmeta',
         'reqwest',
         'raptorq',
         'png',
         'rtp',
         'rtsp',
+        'streamgrouper',
         'textahead',
         'textwrap',
         'threadshare',
@@ -69,12 +77,9 @@ class Recipe(recipe.Recipe):
     if determine_num_cargo_jobs() == 1:
         allow_parallel_build = False
         allow_universal_parallel_build = False
-    elif determine_total_ram() <= (32 << 30):
-        # gst-plugins-rs peaks at ~17GB per architectural build.
-        # Let's assume that > 32GB is enough, but that can be upped
-        # afterwards. Currently a 32GB box freezes when trying the
-        # universal build, as soon as it reaches the gstrswebrtc and
-        # gstaws crates.
+    elif determine_total_ram() <= (64 << 30):
+        # gst-plugins-rs has bloated to the point where a 64GB machine OOMs if
+        # too many architectures are built in parallel.
         allow_universal_parallel_build = False
 
     # Needed for openssl
@@ -110,15 +115,58 @@ class Recipe(recipe.Recipe):
             self.deps.append('openssl')
 
         plugin_files = {
-            'core': ['fallbackswitch', 'livesync', 'rsinter', 'rstracers',
-                     'threadshare', 'togglerecord'],
-            'net': ['aws', 'hlssink3', 'ndi', 'rsonvif', 'raptorq', 'reqwest',
-                    'rsrtp', 'rsrtsp', 'webrtchttp', 'rswebrtc'],
-            'effects': ['rsaudiofx', 'rsvideofx'],
-            'codecs': ['cdg', 'claxon', 'dav1d', 'rsclosedcaption', 'ffv1',
-                       'fmp4', 'mp4', 'gif', 'hsv', 'lewton', 'rav1e', 'json',
-                       'rspng', 'regex', 'textwrap', 'textahead'],
-            'playback': ['uriplaylistbin'],
+            'core': [
+                'fallbackswitch',
+                'gopbuffer',
+                'livesync',
+                'originalbuffer',
+                'rsinter',
+                'rstracers',
+                'streamgrouper',
+                'threadshare',
+                'togglerecord',
+            ],
+            'net': [
+                'aws',
+                'hlssink3',
+                'hlsmultivariantsink',
+                'mpegtslive',
+                'ndi',
+                'quinn',
+                'rsonvif',
+                'raptorq',
+                'rsrelationmeta',
+                'reqwest',
+                'rsrtp',
+                'rsrtsp',
+                'webrtchttp',
+                'rswebrtc',
+            ],
+            'effects': [
+                'rsaudiofx',
+                'rsvideofx',
+            ],
+            'codecs': [
+                'cdg',
+                'claxon',
+                'dav1d',
+                'rsclosedcaption',
+                'ffv1',
+                'fmp4',
+                'mp4',
+                'gif',
+                'hsv',
+                'lewton',
+                'rav1e',
+                'json',
+                'rspng',
+                'regex',
+                'textwrap',
+                'textahead',
+            ],
+            'playback': [
+                'uriplaylistbin',
+            ],
         }
         for category, names in plugin_files.items():
             for name in names:
@@ -135,11 +183,25 @@ class Recipe(recipe.Recipe):
         for each in components:
             self.cargo_features.append(f'gst{each}/v1_22')
         self.cargo_features.append('gst-plugin-webrtc/v1_22')
+        self.cargo_features.append('gst-plugin-webrtc/aws')
+        self.cargo_features.append('gst-plugin-webrtc/livekit')
+
+
+        # The LIBRARY_PATH setting affects all invocations of GCC underneath
+        # Cargo, in particular those that link build scripts (that are meant to
+        # run on the host machine, not through wine).
+        # When creating these, a value for LIBRARY_PATH present will cause
+        # cross-mingw GCC to prefer libpthread.a for MinGW-w64 over the system
+        # libpthread, and hell breaks loose.
+        if self.config.target_platform == Platform.WINDOWS and \
+            self.config.platform != self.config.target_platform:
+            self.set_env('LDFLAGS')
+            self.set_env('LIBRARY_PATH')
 
     async def configure(self):
         # Check that the Cargo.toml version matches the recipe version
         toml_version = self.get_cargo_toml_version()
-        if toml_version != self.version:
+        if toml_version != self.version and running_on_cerbero_ci():
             msg = f'{self.name} version {self.version} doesn\'t match Cargo.toml version {toml_version}'
             if GStreamer.tagged_for_release:
                 raise FatalError(msg)
@@ -150,19 +212,19 @@ class Recipe(recipe.Recipe):
     def post_install(self):
         # Cargo-C currently can't install pc files into custom dirs, so we need
         # to move these plugin pkgconfig files to the right place.
-        for f in self.files_list_by_category(self.DEVEL_CAT):
+        for f in self.files_list_by_category(self.DEVEL_CAT, only_existing=False):
             if not f.endswith('.pc') or not 'gstreamer-1.0' in f:
                 continue
             name = os.path.basename(f)
             src = os.path.join(self.config.libdir, 'pkgconfig', name)
             dst = os.path.join(self.config.prefix, f)
             if os.path.exists(src):
-                shutil.copy(src, dst)
+                shutil.move(src, dst)
         # Cargo-C names MinGW DLLs as foo.dll instead of libfoo.dll
         # https://github.com/lu-zero/cargo-c/issues/280
         # It also follows MSVC convention for static/import libraries
         if self.using_msvc():
-            for f in self.files_list_by_category(self.DEVEL_CAT):
+            for f in self.files_list_by_category(self.DEVEL_CAT, only_existing=False):
                 if not f.endswith('.a'):
                     continue
                 dst = Path(self.config.prefix) / f
@@ -170,7 +232,7 @@ class Recipe(recipe.Recipe):
                 if src.exists():
                     shutil.copy(src, dst)
         else:
-            for f in self.dist_files_list():
+            for f in self.dist_files_list(only_existing=False):
                 if not f.endswith('.dll'):
                     continue
                 name = os.path.basename(f)
@@ -182,7 +244,7 @@ class Recipe(recipe.Recipe):
                 # if there's a .dll.a it also needs renaming
                 if os.path.exists(src + '.a'):
                     shutil.copy(src + '.a', dst + '.a')
-            libraries = [f for f in self.devel_files_list()
+            libraries = [f for f in self.devel_files_list(only_existing=False)
                          if f.endswith('.a')]
             for f in libraries:
                 if self.config.target_platform in (Platform.IOS, Platform.DARWIN):
@@ -195,7 +257,7 @@ class Recipe(recipe.Recipe):
                     # Skip undefined symbols
                     # Write pathname of the object file
                     manifest = shell.check_output(
-                        [self.get_llvm_tool("llvm-nm"), "-gjPUA", source.absolute()],
+                        [self.get_llvm_tool("llvm-nm"), "-gjPUA", "--quiet", source.absolute()],
                         env=self.env,
                     )
 

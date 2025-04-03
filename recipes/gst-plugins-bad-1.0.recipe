@@ -9,7 +9,7 @@ class Recipe(custom.GStreamer):
       licenses = [{License.LGPLv2Plus: None, License.BSD_like: ['ext/sctp/usrsctp/LICENSE.md']}]
     else:
       licenses = [{License.LGPLv2Plus: None, License.BSD_like: ['subprojects/gst-plugins-bad/ext/sctp/usrsctp/LICENSE.md']}]
-    tarball_checksum = '35ad70de3d7cbca3089f33bb77c45750daad2ae93d79827fdbb469fa8aba84eb'
+    tarball_checksum = 'f8287a84c5f66368a5a50da5f969994a02c47f20220ffe1ca3154193e65af216'
     # Explicitly enable plugins that we provide dependencies for to ensure that
     # we error out if they weren't found.
     meson_options = {'gpl': 'enabled',
@@ -26,11 +26,11 @@ class Recipe(custom.GStreamer):
                      'dts': 'enabled',
                      'hls': 'enabled',
                      'hls-crypto': 'openssl',
-                     'isac': 'enabled',
                      'ivfparse': 'enabled',
                      'ladspa': 'auto', # lrdf is optional
                      'openh264': 'enabled',
                      'openjpeg': 'enabled',
+                     'qroverlay': 'enabled',
                      'opus': 'enabled',
                      'rtmp': 'enabled',
                      'rtmp2': 'enabled',
@@ -43,7 +43,6 @@ class Recipe(custom.GStreamer):
                      'srtp': 'enabled',
                      'resindvd': 'enabled',
                      'rist' : 'enabled',
-                     'rsvg': 'enabled',
                      'voaacenc': 'enabled',
                      'vulkan': 'enabled',
                      'webrtc': 'enabled',
@@ -51,6 +50,7 @@ class Recipe(custom.GStreamer):
                      'zbar': 'enabled',
                      # disabled plugins
                      'amfcodec': 'disabled',
+                     'asio': 'disabled',
                      'curl': 'disabled',
                      'curl-ssh2': 'disabled',
                      'dc1394': 'disabled',
@@ -78,6 +78,7 @@ class Recipe(custom.GStreamer):
                      'sndfile': 'disabled',
                      'teletext': 'disabled',
                      'voamrwbenc': 'disabled',
+                     'webview2': 'disabled',
                      'wic': 'disabled',
                      'win32ipc': 'disabled',
                      'wildmidi': 'disabled',
@@ -85,14 +86,10 @@ class Recipe(custom.GStreamer):
     deps = ['gstreamer-1.0', 'gst-plugins-base-1.0', 'bzip2', 'libass',
             'zlib', 'openh264', 'opus', 'librtmp', 'libxml2',
             'libsrtp', 'libdca', 'libdvdnav', 'libnice',
-            'soundtouch', 'vo-aacenc', 'librsvg', 'openjpeg',
+            'soundtouch', 'vo-aacenc', 'openjpeg',
             'pango', 'spandsp', 'webrtc-audio-processing', 'sbc', 'ladspa',
-            'srt', 'zbar', 'libltc']
+            'srt', 'zbar', 'libltc', 'qrencode', 'json-glib']
     use_system_libs = True
-
-    patches = [
-        'gst-plugins-bad/0001-gst-plugins-bad-Only-Android-API-33-and-higher-suppo.patch'
-    ]
 
     files_lang = ['gst-plugins-bad-1.0']
 
@@ -177,15 +174,14 @@ class Recipe(custom.GStreamer):
              '%(libdir)s/gstreamer-1.0/libgstdebugutilsbad%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstfieldanalysis%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstfreeverb%(mext)s',
-             '%(libdir)s/gstreamer-1.0/libgstfrei0r%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstgaudieffects%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstgeometrictransform%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstinter%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstinterlace%(mext)s',
-             '%(libdir)s/gstreamer-1.0/libgstisac%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstivtc%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstlegacyrawparse%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstproxy%(mext)s',
+             '%(libdir)s/gstreamer-1.0/libgstqroverlay%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstremovesilence%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstsegmentclip%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstsmooth%(mext)s',
@@ -214,12 +210,10 @@ class Recipe(custom.GStreamer):
              '%(libdir)s/gstreamer-1.0/libgstdebugutilsbad.a', '%(libdir)s/gstreamer-1.0/libgstdebugutilsbad.la',
              '%(libdir)s/gstreamer-1.0/libgstfieldanalysis.a', '%(libdir)s/gstreamer-1.0/libgstfieldanalysis.la',
              '%(libdir)s/gstreamer-1.0/libgstfreeverb.a', '%(libdir)s/gstreamer-1.0/libgstfreeverb.la',
-             '%(libdir)s/gstreamer-1.0/libgstfrei0r.a', '%(libdir)s/gstreamer-1.0/libgstfrei0r.la',
              '%(libdir)s/gstreamer-1.0/libgstgaudieffects.a', '%(libdir)s/gstreamer-1.0/libgstgaudieffects.la',
              '%(libdir)s/gstreamer-1.0/libgstgeometrictransform.a', '%(libdir)s/gstreamer-1.0/libgstgeometrictransform.la',
              '%(libdir)s/gstreamer-1.0/libgstinter.a', '%(libdir)s/gstreamer-1.0/libgstinter.la',
              '%(libdir)s/gstreamer-1.0/libgstinterlace.a', '%(libdir)s/gstreamer-1.0/libgstinterlace.la',
-             '%(libdir)s/gstreamer-1.0/libgstisac.a', '%(libdir)s/gstreamer-1.0/libgstisac.la',
              '%(libdir)s/gstreamer-1.0/libgstivtc.a', '%(libdir)s/gstreamer-1.0/libgstivtc.la',
              '%(libdir)s/gstreamer-1.0/libgstlegacyrawparse.a', '%(libdir)s/gstreamer-1.0/libgstlegacyrawparse.la',
              '%(libdir)s/gstreamer-1.0/libgstproxy.a', '%(libdir)s/gstreamer-1.0/libgstproxy.la',
@@ -265,7 +259,6 @@ class Recipe(custom.GStreamer):
              '%(libdir)s/gstreamer-1.0/libgsty4mdec%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstjpegformat%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstgdp%(mext)s',
-             '%(libdir)s/gstreamer-1.0/libgstrsvg%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstopenjpeg%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstspandsp%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstsbc%(mext)s',
@@ -301,7 +294,6 @@ class Recipe(custom.GStreamer):
              '%(libdir)s/gstreamer-1.0/libgsty4mdec.a', '%(libdir)s/gstreamer-1.0/libgsty4mdec.la',
              '%(libdir)s/gstreamer-1.0/libgstjpegformat.a', '%(libdir)s/gstreamer-1.0/libgstjpegformat.la',
              '%(libdir)s/gstreamer-1.0/libgstgdp.a', '%(libdir)s/gstreamer-1.0/libgstgdp.la',
-             '%(libdir)s/gstreamer-1.0/libgstrsvg.a', '%(libdir)s/gstreamer-1.0/libgstrsvg.la',
              '%(libdir)s/gstreamer-1.0/libgstopenjpeg.a', '%(libdir)s/gstreamer-1.0/libgstopenjpeg.la',
              '%(libdir)s/gstreamer-1.0/libgstspandsp.a', '%(libdir)s/gstreamer-1.0/libgstspandsp.la',
              '%(libdir)s/gstreamer-1.0/libgstsbc.a', '%(libdir)s/gstreamer-1.0/libgstsbc.la',
@@ -333,7 +325,7 @@ class Recipe(custom.GStreamer):
              '%(libdir)s/gstreamer-1.0/libgstmpegpsmux%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstmpegtsdemux%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstmpegtsmux%(mext)s',
-             '%(libdir)s/gstreamer-1.0/libgstvoaacenc%(mext)s'
+             '%(libdir)s/gstreamer-1.0/libgstvoaacenc%(mext)s',
     ]
 
     files_plugins_codecs_restricted_devel = [
@@ -452,6 +444,7 @@ class Recipe(custom.GStreamer):
         Platform.WINDOWS: [
              '%(libdir)s/gstreamer-1.0/libgstd3d%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstd3d11%(mext)s',
+             '%(libdir)s/gstreamer-1.0/libgstd3d12%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstwasapi%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstdecklink%(mext)s',
             ],
@@ -477,6 +470,7 @@ class Recipe(custom.GStreamer):
         Platform.WINDOWS: [
              '%(libdir)s/gstreamer-1.0/libgstd3d.a', '%(libdir)s/gstreamer-1.0/libgstd3d.la',
              '%(libdir)s/gstreamer-1.0/libgstd3d11.a', '%(libdir)s/gstreamer-1.0/libgstd3d11.la',
+             '%(libdir)s/gstreamer-1.0/libgstd3d12.a', '%(libdir)s/gstreamer-1.0/libgstd3d12.la',
              '%(libdir)s/gstreamer-1.0/libgstwasapi.a', '%(libdir)s/gstreamer-1.0/libgstwasapi.la',
              '%(libdir)s/gstreamer-1.0/libgstdecklink.a', '%(libdir)s/gstreamer-1.0/libgstdecklink.la',
             ],
@@ -514,9 +508,14 @@ class Recipe(custom.GStreamer):
         self.enable_plugin('msdk', 'codecs', 'intelmsdk')
         self.enable_plugin('va', 'codecs', 'vaapi')
 
-        # MediaFoundation and DirectShow can only be built with MSVC
-        self.enable_plugin('mediafoundation', 'sys', 'visualstudio')
-        self.enable_plugin('directshow', 'sys', 'visualstudio')
+        self.enable_plugin('rsvg', 'codecs', variant='rust', dep='librsvg')
+        self.enable_plugin('svtav1', 'codecs', dep='svt-av1')
+
+        self.enable_plugin('x265', 'codecs', dep='x265')
+
+        if self.config.target_platform not in [Platform.IOS, Platform.ANDROID]:
+            # These need plugins
+            self.enable_plugin('frei0r', 'effects', dep='frei0r-plugins')
 
         if self.config.target_platform == Platform.WINDOWS:
             self.meson_options['wasapi2'] = 'disabled'
@@ -524,7 +523,7 @@ class Recipe(custom.GStreamer):
             self.meson_options['d3dvideosink'] = 'enabled'
             self.meson_options['d3d11'] = 'enabled'
             self.meson_options['d3d11-math'] = 'enabled'
-            self.meson_options['d3d12'] = 'disabled'
+            self.meson_options['d3d12'] = 'enabled'
             self.meson_options['directsound'] = 'enabled'
             self.meson_options['winks'] = 'enabled'
             self.meson_options['winscreencap'] = 'enabled'
@@ -536,11 +535,14 @@ class Recipe(custom.GStreamer):
                 self.enable_plugin('wic', 'codecs')
                 # WGC support requires Windows 11 SDK from Visual Studio
                 self.meson_options['d3d11-wgc'] = 'enabled'
+                self.meson_options['d3d12-wgc'] = 'enabled'
                 # HLSL cross-compile is not supported
-                self.meson_options['d3d11-hlsl-precompile'] = 'enabled'
-                # D3D12 needs newer SDK than system installed one with helper library
-                self.deps.append('directx-headers')
-                self.enable_plugin('d3d12', 'sys')
+                self.meson_options['d3d-hlsl-precompile'] = 'enabled'
+                # Download webview2 nuget package
+                self.deps.append('webview2')
+                self.enable_plugin('webview2', 'sys')
+                # DirectShow can only be built with MSVC
+                self.enable_plugin('directshow', 'sys')
             else:
                 # mingw does not ship DirectXMath headers
                 self.deps += ['directxmath']
@@ -555,11 +557,24 @@ class Recipe(custom.GStreamer):
             # Decoder baseclass library for d3d11 and d3d12 plugins
             self.files_libs += ['libgstdxva-1.0']
 
+            # d3d11/d3d12 HLSL shader library
+            self.files_libs += ['libgstd3dshader-1.0']
+
+            # D3D12 needs newer SDK than system installed one with helper library
+            self.deps.append('directx-headers')
+            self.files_libs += ['libgstd3d12-1.0']
+            self.files_plugins_devel += [
+                'include/gstreamer-1.0/gst/d3d12',
+                '%(libdir)s/pkgconfig/gstreamer-d3d12-1.0.pc',
+            ]
+
             self.enable_plugin('amfcodec', 'codecs')
             self.enable_plugin('qsv', 'codecs')
             self.enable_plugin('win32ipc', 'sys')
             self.enable_plugin('dwrite', 'sys')
             self.enable_plugin('qt6d3d11', 'qt6', 'qt6')
+            self.enable_plugin('asio', 'sys')
+            self.enable_plugin('mediafoundation', 'sys')
 
         if self.config.target_platform in (Platform.LINUX, Platform.WINDOWS):
             self.enable_plugin('nvcodec', 'codecs')
@@ -576,13 +591,10 @@ class Recipe(custom.GStreamer):
             self.deps += ['moltenvk']
         if self.config.target_platform in (Platform.ANDROID):
             self.deps += ['vulkan-android']
+            self.enable_plugin('tinyalsa', 'sys', dep='tinyalsa')
 
         # TODO: Vulkan support on Linux and Windows
-        # No MoltenVK available for iOS x86_64
-        # Disabled on macOS ARM64 due to https://gitlab.freedesktop.org/gstreamer/cerbero/-/issues/361
-        if self.config.target_platform not in (Platform.DARWIN, Platform.IOS, Platform.ANDROID) or \
-                (self.config.target_platform == Platform.IOS and self.config.target_arch != Architecture.ARM64) or \
-                (self.config.target_platform == Platform.DARWIN and self.config.target_arch == Architecture.ARM64):
+        if self.config.target_platform not in (Platform.DARWIN, Platform.IOS, Platform.ANDROID):
             self.disable_plugin('vulkan', 'vulkan', library_name='vulkan')
 
         if self.config.target_platform in (Platform.ANDROID, Platform.IOS):
@@ -619,7 +631,6 @@ class Recipe(custom.GStreamer):
             self.disable_plugin('spandsp', 'codecs', dep='spandsp')
             self.disable_plugin('smoothstreaming', 'codecs', dep='libxml2')
             self.disable_plugin('srt', 'net', dep='srt')
-            self.disable_plugin('rsvg', 'codecs', dep='librsvg')
             self.disable_plugin('voaacenc', 'codecs_restricted', dep='vo-aacenc')
             self.disable_plugin('zbar', 'codecs', dep='zbar')
             # amf, nvcodec, and qsv all load dlls which wouldn't work on UWP
@@ -633,6 +644,11 @@ class Recipe(custom.GStreamer):
         if self.config.variants.nodebug:
             self.append_env('CFLAGS', '-DGST_LEVEL_MAX=GST_LEVEL_FIXME')
 
+        if self.config.target_platform in (Platform.WINDOWS, Platform.LINUX):
+            if self.config.target_arch == Architecture.X86_64:
+                # self.enable_plugin('svt-jpeg-xs', 'codecs', dep='svt-jpeg-xs')
+                self.deps.append('svt-jpeg-xs')
+
     def post_install(self):
         LibtoolLibrary('gsturidownloader-1.0', None, None, None, self.config.libdir,
                 self.config.target_platform, deps=['gstreamer-1.0', 'gstbase-1.0']).save()
@@ -642,4 +658,7 @@ class Recipe(custom.GStreamer):
                 self.config.target_platform, deps=['gstreamer-1.0', 'gstapp-1.0', 'gstbase-1.0']).save()
         LibtoolLibrary('gstisoff-1.0', None, None, None, self.config.libdir,
                 self.config.target_platform, deps=['gstreamer-1.0']).save()
+        LibtoolLibrary('gstcodecs-1.0', None, None, None, self.config.libdir,
+                self.config.target_platform,
+                deps=['gstreamer-1.0', 'gstvideo-1.0', 'gstcodecparsers-1.0']).save()
         super().post_install()

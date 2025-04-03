@@ -16,11 +16,13 @@
 # Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 # Boston, MA 02111-1307, USA.
 
+import sys
+
 from cerbero.bootstrap import BootstrapperBase
 from cerbero.bootstrap.bootstrapper import register_system_bootstrapper
 from cerbero.enums import Platform, Architecture, Distro, DistroVersion
-from cerbero.errors import ConfigurationError, CommandError
-from cerbero.utils import user_is_root, shell
+from cerbero.errors import ConfigurationError, CommandError, FatalError
+from cerbero.utils import user_is_root, shell, split_version
 from cerbero.utils import messages as m
 
 
@@ -32,7 +34,7 @@ class UnixBootstrapper(BootstrapperBase):
     packages = []
 
     def __init__(self, config, offline, assume_yes):
-        BootstrapperBase.__init__(self, config, offline)
+        BootstrapperBase.__init__(self, config, offline, 'linux')
         self.assume_yes = assume_yes
         if user_is_root() and 'sudo' in self.tool:  # no need for sudo as root user
             self.tool.remove('sudo')
@@ -43,9 +45,20 @@ class UnixBootstrapper(BootstrapperBase):
 
         if self.config.distro_packages_install:
             extra_packages = self.config.extra_bootstrap_packages.get(self.config.platform, None)
+            override_packages = self.config.override_bootstrap_packages.get(self.config.platform, None)
+            if extra_packages and override_packages:
+                raise ConfigurationError(
+                    'You are setting "extra_bootstrap_packages" and "override_bootstrap_packages" '
+                    'on the same CBC. This might cause conflicts.'
+                )
             if extra_packages:
                 self.packages += extra_packages.get(self.config.distro, [])
                 self.packages += extra_packages.get(self.config.distro_version, [])
+            if override_packages:
+                self.packages = []
+                self.packages += override_packages.get(self.config.distro, [])
+                self.packages += override_packages.get(self.config.distro_version, [])
+
             tool = self.tool
             if self.assume_yes:
                 tool += self.yes_arg
@@ -111,7 +124,7 @@ class DebianBootstrapper(UnixBootstrapper):
                 self.packages.append('libc6:i386')
                 self.checks.append(self.create_debian_arch_check('i386'))
             if self.config.arch in [Architecture.X86_64, Architecture.X86]:
-                self.packages.append('wine')
+                self.packages += ['wine', 'xvfb']
 
     def create_debian_arch_check(self, arch):
         def check_arch():
@@ -154,7 +167,6 @@ class RedHatBootstrapper(UnixBootstrapper):
         'curl',
         'rpm-build',
         'redhat-rpm-config',
-        'python3-devel',
         'libXrender-devel',
         'pulseaudio-libs-devel',
         'libXv-devel',
@@ -164,38 +176,82 @@ class RedHatBootstrapper(UnixBootstrapper):
         'libXi-devel',
         'perl-XML-Simple',
         'gperf',
-        'wget',
         'libXrandr-devel',
         'libXtst-devel',
         'git',
         'xorg-x11-util-macros',
         'mesa-libEGL-devel',
-        'ccache',
         'openssl-devel',
         'alsa-lib-devel',
-        'perl-FindBin',
+        'perl-IPC-Cmd',
+        'libatomic',
     ]
 
     def __init__(self, config, offline, assume_yes):
         UnixBootstrapper.__init__(self, config, offline, assume_yes)
 
-        if self.config.distro_version < DistroVersion.FEDORA_23:
+        dn, dv = self.config.distro_version.split('_', 1)
+        dv = split_version(dv)
+
+        if (dn == 'fedora' and dv < (23,)) or (dn == 'redhat' and dv < (8, 3)):
             self.tool = ['yum']
-        elif self.config.distro_version in [DistroVersion.REDHAT_6, DistroVersion.REDHAT_7]:
-            self.tool = ['yum']
-        elif self.config.distro_version == DistroVersion.REDHAT_8:
-            self.tool = ['yum', '--enablerepo=PowerTools']
+
+        if dn == 'redhat' and dv >= (8,):
+            if dv < (8, 3):
+                self.tool += ['--enablerepo=PowerTools']
+            elif dv < (9,):
+                self.tool += ['--enablerepo=powertools']
+            else:
+                self.tool += ['--enablerepo=crb']
+
+        def pkg_available(pkg):
+            return shell.new_call(self.tool + ['list', pkg, '-q'], fail=False) == 0
+
+        def add_pkg(names, required=True):
+            for pkg in names:
+                if pkg_available(pkg):
+                    self.packages.append(pkg)
+                    return True
+            if required:
+                raise FatalError('Required package not found, tried: ' + ', '.join(names))
+            return False
+
+        if not user_is_root():
+            self.tool = ['sudo'] + self.tool
+
+        # In RHEL based distros ccache is only available in the EPEL repo
+        if not add_pkg(['ccache'], required=False):
+            if pkg_available('epel-release'):
+                cmd = self.tool + ['install', 'epel-release'] + (['-y'] if assume_yes else [])
+                self.checks.append(
+                    lambda: shell.new_call(cmd, interactive=True, fail=False) == 0 and self.packages.append('ccache')
+                )
+            else:
+                m.warning('Compilation will not use ccache since it is not available')
+                self.config.use_ccache = False
+
+        # Before RHEL 9 perl-FindBin wasn't a standalone package
+        if dn != 'redhat' or dv >= (9,):
+            add_pkg(['perl-FindBin'])
+        elif dv >= (8,):
+            add_pkg(['perl-interpreter'])
+        else:
+            add_pkg(['perl'])
+
+        # Use curl if wget isn't found, because wget2 is not production-ready yet
+        add_pkg(['wget', 'curl'])
+
+        # Try to get a better matching python3 library version
+        ver = sys.version_info[1]
+        add_pkg([f'python3{v}-devel' for v in [ver, f'.{ver}', '']])
 
         if self.config.target_platform == Platform.WINDOWS:
             if self.config.arch == Architecture.X86_64:
                 self.packages.append('glibc.i686')
-            if self.config.distro_version in [DistroVersion.FEDORA_24, DistroVersion.FEDORA_25]:
+            if self.config.distro_version in ['fedora_24', 'fedora_25']:
                 self.packages.append('libncurses-compat-libs.i686')
             if self.config.arch in [Architecture.X86_64, Architecture.X86]:
-                self.packages.append('wine')
-        if user_is_root():
-            return
-        self.tool = ['sudo'] + self.tool
+                self.packages += ['wine', 'which', 'xorg-x11-server-Xvfb']
 
 
 class OpenSuseBootstrapper(UnixBootstrapper):
@@ -238,7 +294,7 @@ class OpenSuseBootstrapper(UnixBootstrapper):
         UnixBootstrapper.__init__(self, config, offline, assume_yes)
         if self.config.target_platform == Platform.WINDOWS:
             if self.config.arch in [Architecture.X86_64, Architecture.X86]:
-                self.packages.append('wine')
+                self.packages += ['wine', 'xvfb-run']
 
 
 class ArchBootstrapper(UnixBootstrapper):
@@ -267,6 +323,8 @@ class ArchBootstrapper(UnixBootstrapper):
         'ccache',
         'openssl',
         'alsa-lib',
+        'which',
+        'libpulse',
     ]
 
     def __init__(self, config, offline, assume_yes):
@@ -284,7 +342,7 @@ class ArchBootstrapper(UnixBootstrapper):
             self.packages.append('gcc')
         if self.config.target_platform == Platform.WINDOWS:
             if self.config.arch in [Architecture.X86_64, Architecture.X86]:
-                self.packages.append('wine')
+                self.packages += ['wine', 'xorg-server-xvfb']
 
 
 class GentooBootstrapper(UnixBootstrapper):

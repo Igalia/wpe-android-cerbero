@@ -16,7 +16,7 @@
 # Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 # Boston, MA 02111-1307, USA.
 
-
+import os
 from cerbero.bootstrap import BootstrapperBase
 from cerbero.bootstrap.bootstrapper import register_system_bootstrapper
 from cerbero.config import Distro
@@ -27,13 +27,13 @@ from cerbero.enums import Architecture
 
 class OSXBootstrapper(BootstrapperBase):
     def __init__(self, config, offline, assume_yes):
-        super().__init__(config, offline)
+        super().__init__(config, offline, 'macos')
 
     async def start(self, jobs=0):
         # skip system package install if not needed
         if not self.config.distro_packages_install:
             return
-        if self.config.arch == Architecture.ARM64:
+        if self.config.arch == Architecture.ARM64 and not os.path.exists('/Library/Apple/usr/lib/libRosettaAot.dylib'):
             m.message('Installing rosetta needed for some package installation scripts')
             shell.new_call(['/usr/sbin/softwareupdate', '--install-rosetta', '--agree-to-license'])
 

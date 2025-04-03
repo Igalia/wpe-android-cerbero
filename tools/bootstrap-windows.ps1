@@ -1,5 +1,7 @@
 # vim: set sts=2 sw=2 et :
 
+#Requires -RunAsAdministrator
+
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
 
 . "$PSScriptRoot\common.ps1"
@@ -11,9 +13,10 @@ $ProgressPreference = 'SilentlyContinue'
 $cmake_req = '3.10.2'
 $git_req = '2.0' # placeholder
 $python_req = '3.7'
-$wix_req = '3.0' # placeholder
+$wix_req = '5.0.1'
 $vs2019_url = 'https://aka.ms/vs/16/release/vs_buildtools.exe'
 $vs2022_url = 'https://aka.ms/vs/17/release/vs_buildtools.exe'
+$wix_url = 'https://github.com/wixtoolset/wix/releases/download/v5.0.1/wix-cli-x64.msi'
 $choco_url = 'https://chocolatey.org/install.ps1'
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 
@@ -129,10 +132,26 @@ if (!(Is-Newer 'py' $python_req)) {
   Write-Host "Python >= $python_req not found, installing..."
   choco install -y python3
 }
+python -m pip install setuptools
 
-if (!(Is-Newer "$env:WIX\bin\light" $wix_req)) {
+if (!(Is-Newer 'wix' $wix_req) -and !(Is-Newer "$env:WIX5\wix" $wix_req)) {
   Write-Host "WiX >= $wix_req not found, installing..."
-  choco install -y wixtoolset
+  Invoke-WebRequest -Uri $wix_url -OutFile "$env:TEMP\wix-tools-x64.msi"
+
+  Get-Date
+  Write-Host "Installing .NET Core 8"
+  choco install -y dotnet-8.0-runtime
+  if (!$?) {
+    Write-Host "Failed to install .NET Core 8"
+    return $false
+  }
+  Write-Host "Installing WiX"
+  Start-Process -NoNewWindow -Wait "msiexec" -ArgumentList "/I $env:TEMP\wix-tools-x64.msi /Qn /norestart"
+  if (!$?) {
+    Write-Host "Failed to install WiX"
+    return $false
+  }
+  Remove-Item "$env:TEMP\wix-tools-x64.msi" -Force
 }
 
 $MSYS2_Dir = (Get-MSYS2)

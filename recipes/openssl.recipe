@@ -1,4 +1,7 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+from pathlib import Path
+import shutil
+
 from cerbero.build.build import modify_environment
 from cerbero.tools.libtool import LibtoolLibrary
 from cerbero.utils import shell, messages
@@ -8,14 +11,12 @@ class Recipe(recipe.Recipe):
     # Note: openssl helpfully moves tarballs somewhere else (old/x.y.z/)
     # whenever a new release comes out, so make sure to mirror to fdo when
     # bumping the release!
-    version = '1.1.1s'
-    licenses = [{License.OPENSSL: ['LICENSE']}]
+    version = '3.4.0'
+    licenses = [License.Apachev2]
     stype = SourceType.TARBALL
-    url = 'https://ftp.openssl.org/source/{0}-{1}.tar.gz'.format(name, version)
-    tarball_checksum = 'c5ac01e760ee6ff0dab61d6b2bbd30146724d063eb322180c6f18a6f74e4b6aa'
+    url = 'https://github.com/openssl/openssl/releases/download/openssl-%(version)s/openssl-%(version)s.tar.gz'
+    tarball_checksum = 'e15dda82fe2fe8139dc2ac21a36d4ca01d5313c75f99f46c4e8a27709b7294bf'
     deps = ['ca-certificates', 'zlib']
-    # Parallel make fails randomly due to undefined macros, probably races
-    allow_parallel_build = False
     # Configure script is perl, not shell
     config_sh_needs_shell = False
     # Can build for MSVC and UWP
@@ -25,17 +26,12 @@ class Recipe(recipe.Recipe):
         # Portable prefix with SSL certs
         'openssl/0001-Load-ca-certificate.crt-from-PREFIX-etc-ssl-on-macOS.patch',
         # MSVC and UWP support
-        'openssl/0001-windows-makefile.tmpl-Generate-and-install-pkgconfig.patch',
-        'openssl/0002-windows-makefile.tmpl-Fix-ONECORE-build.patch',
-        'openssl/0003-windows-makefile.tmpl-Do-not-prefix-import-libraries.patch',
-        # https://github.com/openssl/openssl/pull/12400
-        'openssl/0001-crypto-win-Don-t-use-disallowed-APIs-on-UWP.patch',
-        'openssl/0002-win-onecore-Build-with-APPCONTAINER-for-UWP-compat.patch',
-        # Android support
-        'openssl/0003-openssl-Support-loading-ca-certificates-on-Android.patch',
+        'openssl/0002-windows-makefile.tmpl-Generate-and-install-pkgconfig.patch',
+        # quicserver is a test utility that is not qualified as such
+        'openssl/0003-util-Disable-quicserver-with-no-tests.patch',
+        #'openssl/0003-windows-makefile.tmpl-Do-not-prefix-import-libraries.patch',
     ]
 
-    files_bins = ['openssl']
     files_libs = ['libcrypto', 'libssl']
     files_devel = ['include/openssl', '%(libdir)s/pkgconfig/openssl.pc',
                    '%(libdir)s/pkgconfig/libssl.pc', '%(libdir)s/pkgconfig/libcrypto.pc']
@@ -122,6 +118,8 @@ class Recipe(recipe.Recipe):
         ldflags = self.get_env('LDFLAGS')
 
         if self.using_msvc():
+            # https://github.com/openssl/openssl/issues/25774
+            self.patches += ['openssl/0004-Fix-build-with-NASM-on-Windows.patch']
             # Gets converted to C:/MinGW/msys/1.0/utf-8 by MSYS somehow, so
             # just remove it. We only need this for gstreamer sources anyway.
             cflags = cflags.replace('/utf-8', '')
@@ -154,7 +152,6 @@ class Recipe(recipe.Recipe):
             self.make += ['build_libs', 'openssl.pc', 'libssl.pc', 'libcrypto.pc']
             self.make_install = ['make', 'install_dev', 'RANLIB=' + ranlib]
 
-       
         if self.config.platform == Platform.WINDOWS:
             # Ensure that our Perl's File/Spec.pm uses backward slashes when
             # building for MSVC and forward-slashes when building for MinGW.
@@ -184,7 +181,11 @@ class Recipe(recipe.Recipe):
         if self.config.target_platform == Platform.IOS:
             self.library_type = LibraryType.STATIC
         if self.config.target_platform == Platform.ANDROID:
+            self.patches += [
+                'openssl/0004-Android-fix-relocation-of-OPENSSL_armcap_P.patch',
+            ]
             self.prepend_env('PATH', self.get_env('ANDROID_NDK_TOOLCHAIN_BIN'), sep=os.pathsep)
+            self.set_env('ANDROID_NDK_ROOT', self.get_env('ANDROID_NDK_HOME'))
 
 
     @modify_environment
@@ -199,7 +200,7 @@ class Recipe(recipe.Recipe):
                                  ''.format(perl, found, m))
         # OpenSSL guesses the libdir incorrectly on x86_64
         config_sh = 'perl ./Configure --prefix=' + self.config.prefix + \
-            ' --libdir=lib' + self.config.lib_suffix + '  no-makedepend no-unit-test '
+            ' --libdir=lib' + self.config.lib_suffix + '  no-makedepend no-unit-test no-tests no-fuzz-afl no-fuzz-libfuzzer no-h3demo'
         if self.config.target_platform == Platform.IOS:
             # Note: disable 'no-devcryptoeng' when we finally target the
             # *real* ios configuration targets
@@ -224,8 +225,18 @@ class Recipe(recipe.Recipe):
             else:
                 raise AssertionError
 
-        if self.config.target_platform == Platform.ANDROID:
-            config_sh += ' --openssldir=/system/etc/security '
+        # TODO: Is this needed?
+        # if self.config.target_platform == Platform.ANDROID:
+        #     config_sh += ' --openssldir=/system/etc/security '
+
+        if self.config.platform == Platform.WINDOWS:
+            config_sh += ' no-tests '
+
+        # https://github.com/openssl/openssl/issues/25785
+        if self.using_msvc() and self.config.variants.uwp:
+            config_sh += ' no-apps '
+        else:
+            self.files_bins = ['openssl']
 
         await shell.async_call(config_sh + self.openssl_platform, self.build_dir,
                                logfile=self.logfile, env=self.env)
@@ -245,4 +256,14 @@ class Recipe(recipe.Recipe):
         if self.using_msvc():
             shell.replace(os.path.join(self.config.libdir, 'pkgconfig', 'openssl.pc'), {'\\': '/'})
             shell.replace(os.path.join(self.config.libdir, 'pkgconfig', 'libcrypto.pc'), {'\\': '/'})
+        # g-ir-scanner expects import libraries to end in .lib when
+        # building a gir for "internal" (same project) libraries
+        # Unfixed OpenSSL breaks introspection for glib-networking and libnice
+        if self.using_msvc() and self.config.variants.gi:
+            prefix = Path(self.config.libdir)
+            for f in ['libssl.lib', 'libcrypto.lib']:
+                src = prefix / f
+                dst = src.with_stem(src.stem.replace('lib', ''))
+                dst.unlink(missing_ok=True)
+                shutil.copyfile(src, dst)
         super().post_install()

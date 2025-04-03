@@ -16,7 +16,7 @@
 # Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 # Boston, MA 02111-1307, USA.
 
-from cerbero.config import Platform, Distro, DistroVersion
+from cerbero.config import Platform, Distro
 from cerbero.packages import package
 from cerbero.packages.packagesstore import PackagesStore
 from test.test_build_common import create_cookbook
@@ -64,7 +64,7 @@ class Package4(package.Package):
     licences = ['LGPL']
     uuid = '1'
     vendor = 'GStreamer Project'
-    sys_deps = {Distro.DEBIAN: ['python'], DistroVersion.FEDORA_16: ['python27']}
+    sys_deps = {Distro.DEBIAN: ['python'], 'fedora_16': ['python27']}
 
     files = ['recipe4:misc']
 
@@ -104,10 +104,6 @@ class App(package.App):
     embed_deps = True
 
 
-class DummyConfig(object):
-    pass
-
-
 def create_store(config):
     cookbook = create_cookbook(config)
     store = PackagesStore(config, False)
@@ -115,9 +111,11 @@ def create_store(config):
     for klass in [Package1, Package2, Package3, Package4, App]:
         package = klass(config, store, cookbook)
         package.__file__ = 'test/test_packages_common.py'
+        package.load()
         store.add_package(package)
     for klass in [MetaPackage]:
         package = klass(config, store)
         package.__file__ = 'test/test_packages_common.py'
+        package.load()
         store.add_package(package)
     return store

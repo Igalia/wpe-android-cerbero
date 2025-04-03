@@ -18,20 +18,15 @@
 
 import os
 import re
-import glob
-import copy
 import shutil
 import shlex
-import sys
-import subprocess
 import asyncio
 from pathlib import Path
 from itertools import chain
 
-from cerbero.enums import Platform, Architecture, Distro, LibraryType
+from cerbero.enums import Platform, Architecture, Distro, DistroVersion, LibraryType
 from cerbero.errors import FatalError, InvalidRecipeError
 from cerbero.utils import shell, add_system_libs, determine_num_cargo_jobs
-from cerbero.utils import EnvValue, EnvValueSingle, EnvValueArg, EnvValueCmd, EnvValuePath
 from cerbero.utils import messages as m
 
 
@@ -44,11 +39,12 @@ def get_optimization_from_config(config):
 
 
 def modify_environment(func):
-    '''
+    """
     Decorator to modify the build environment
 
     When called recursively, it only modifies the environment once.
-    '''
+    """
+
     def call(*args):
         self = args[0]
         try:
@@ -77,9 +73,10 @@ def modify_environment(func):
 
 
 class EnvVarOp:
-    '''
+    """
     An operation to be done on the values of a particular env var
-    '''
+    """
+
     def __init__(self, op, var, vals, sep):
         self.execute = getattr(self, op)
         self.op = op
@@ -134,16 +131,16 @@ class EnvVarOp:
             env[self.var] = self.sep.join(new)
 
     def __repr__(self):
-        vals = "None"
+        vals = 'None'
         if self.sep:
             vals = self.sep.join(self.vals)
-        return "<EnvVarOp " + self.op + " " + self.var + " with " + vals + ">"
+        return '<EnvVarOp ' + self.op + ' ' + self.var + ' with ' + vals + '>'
 
 
 class ModifyEnvBase:
-    '''
+    """
     Base class for build systems and recipes that require extra env variables
-    '''
+    """
 
     use_system_libs = False
     # Use the outdated MSYS perl instead of the new perl downloaded in bootstrap
@@ -180,7 +177,15 @@ class ModifyEnvBase:
                     raise RuntimeError('Unknown when value: ' + when)
 
             def __repr__(this):
-                return "<ModifyEnvFuncWrapper " + this.method + " for " + repr(this.target) + "  at " + str(hex(id(this))) + ">"
+                return (
+                    '<ModifyEnvFuncWrapper '
+                    + this.method
+                    + ' for '
+                    + repr(this.target)
+                    + '  at '
+                    + str(hex(id(this)))
+                    + '>'
+                )
 
         for i in ('append', 'prepend', 'set', 'remove'):
             setattr(self, i + '_env', ModifyEnvFuncWrapper(self, i))
@@ -209,11 +214,13 @@ class ModifyEnvBase:
                 toolchain_env = self.config.mingw_env_for_toolchain.items()
         else:
             if self.using_msvc():
-                toolchain_env = chain(self.config.msvc_env_for_toolchain.items(),
-                                      self.config.msvc_env_for_build_system.items())
+                toolchain_env = chain(
+                    self.config.msvc_env_for_toolchain.items(), self.config.msvc_env_for_build_system.items()
+                )
             else:
-                toolchain_env = chain(self.config.mingw_env_for_toolchain.items(),
-                                      self.config.mingw_env_for_build_system.items())
+                toolchain_env = chain(
+                    self.config.mingw_env_for_toolchain.items(), self.config.mingw_env_for_build_system.items()
+                )
         # Set the toolchain environment
         for var, val in toolchain_env:
             # PATH and LDFLAGS are already set in self.env by config.py, so we
@@ -224,8 +231,20 @@ class ModifyEnvBase:
                 self.set_env(var, val.get(), sep=val.sep)
 
     def unset_toolchain_env(self):
-        for var in ('CC', 'CXX', 'OBJC', 'OBJCXX', 'AR', 'WINDRES', 'STRIP',
-                    'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'OBJCFLAGS', 'LDFLAGS'):
+        for var in (
+            'CC',
+            'CXX',
+            'OBJC',
+            'OBJCXX',
+            'AR',
+            'WINDRES',
+            'STRIP',
+            'CFLAGS',
+            'CXXFLAGS',
+            'CPPFLAGS',
+            'OBJCFLAGS',
+            'LDFLAGS',
+        ):
             if var in self.env:
                 # Env vars that are edited by the recipe will be restored by
                 # @modify_environment when we return from the build step but
@@ -238,10 +257,10 @@ class ModifyEnvBase:
 
     @modify_environment
     def get_recipe_env(self):
-        '''
+        """
         Used in oven.py to start a shell prompt with the correct env on recipe
         build failure
-        '''
+        """
         return self.env.copy()
 
     def _save_env_var(self, var):
@@ -253,9 +272,9 @@ class ModifyEnvBase:
                 self._old_env[var] = None
 
     def _modify_env(self):
-        '''
+        """
         Modifies the build environment by inserting env vars from new_env
-        '''
+        """
         # If requested, remove the new mingw-perl downloaded in bootstrap from
         # PATH and use the MSYS Perl instead
         if self.config.distro == Distro.MSYS and self.use_msys_perl:
@@ -272,7 +291,7 @@ class ModifyEnvBase:
             env_op.execute(self.env)
 
     def _restore_env(self):
-        ''' Restores the old environment '''
+        """Restores the old environment"""
         for var, val in self._old_env.items():
             if val is None:
                 if var in self.env:
@@ -282,16 +301,16 @@ class ModifyEnvBase:
         self._old_env.clear()
 
     def maybe_add_system_libs(self, step=''):
-        '''
+        """
         Add /usr/lib/pkgconfig to PKG_CONFIG_PATH so the system's .pc file
         can be found.
-        '''
+        """
         # Note: this is expected to be called with the environment already
         # modified using @{async_,}modify_environment
 
         # don't add system libs unless explicitly asked for
         if not self.use_system_libs or not self.config.allow_system_libs:
-            return;
+            return
 
         # this only works because add_system_libs() does very little
         # this is a possible source of env conflicts
@@ -310,14 +329,14 @@ class ModifyEnvBase:
 
 
 class Build(object):
-    '''
+    """
     Base class for build handlers
 
     @ivar recipe: the parent recipe
     @type recipe: L{cerbero.recipe.Recipe}
     @ivar config: cerbero's configuration
     @type config: L{cerbero.config.Config}
-    '''
+    """
 
     library_type = LibraryType.BOTH
     # Whether this recipe's build system can be built with MSVC
@@ -351,37 +370,40 @@ class Build(object):
         return True
 
     async def configure(self):
-        '''
+        """
         Configures the module
-        '''
-        raise NotImplemented("'configure' must be implemented by subclasses")
+        """
+        raise NotImplementedError("'configure' must be implemented by subclasses")
 
     async def compile(self):
-        '''
+        """
         Compiles the module
-        '''
-        raise NotImplemented("'make' must be implemented by subclasses")
+        """
+        raise NotImplementedError("'make' must be implemented by subclasses")
 
     async def install(self):
-        '''
+        """
         Installs the module
-        '''
-        raise NotImplemented("'install' must be implemented by subclasses")
+        """
+        raise NotImplementedError("'install' must be implemented by subclasses")
 
     def check(self):
-        '''
+        """
         Runs any checks on the module
-        '''
+        """
         pass
 
     def num_of_cpus(self):
-        if self.config.allow_parallel_build and getattr(self, 'allow_parallel_build', True) \
-                and self.config.num_of_cpus > 1:
+        if (
+            self.config.allow_parallel_build
+            and getattr(self, 'allow_parallel_build', True)
+            and self.config.num_of_cpus > 1
+        ):
             return self.config.num_of_cpus
         return None
 
-class CustomBuild(Build, ModifyEnvBase):
 
+class CustomBuild(Build, ModifyEnvBase):
     def __init__(self):
         Build.__init__(self)
         ModifyEnvBase.__init__(self)
@@ -396,10 +418,10 @@ class CustomBuild(Build, ModifyEnvBase):
         pass
 
 
-class MakefilesBase (Build, ModifyEnvBase):
-    '''
+class MakefilesBase(Build, ModifyEnvBase):
+    """
     Base class for makefiles build systems like autotools and cmake
-    '''
+    """
 
     config_sh = ''
     configure_tpl = ''
@@ -423,10 +445,9 @@ class MakefilesBase (Build, ModifyEnvBase):
             self.setup_buildtype_env_ops()
 
         if self.requires_non_src_build:
-            self.make_dir = os.path.join (self.config_src_dir, "cerbero-build-dir")
+            self.make_dir = os.path.join(self.config_src_dir, 'cerbero-build-dir')
         else:
-            self.make_dir = os.path.abspath(os.path.join(self.config_src_dir,
-                                                           self.srcdir))
+            self.make_dir = os.path.abspath(os.path.join(self.config_src_dir, self.srcdir))
 
         self.make = self.make or ['make', 'V=1']
         self.make_install = self.make_install or ['make', 'install']
@@ -442,12 +463,12 @@ class MakefilesBase (Build, ModifyEnvBase):
         self.set_env('CONFIG_SITE', when='now')
 
     async def configure(self):
-        '''
+        """
         Base configure method
 
         When called from a method in deriverd class, that method has to be
         decorated with modify_environment decorator.
-        '''
+        """
         if not os.path.exists(self.make_dir):
             os.makedirs(self.make_dir)
         if self.requires_non_src_build:
@@ -481,8 +502,7 @@ class MakefilesBase (Build, ModifyEnvBase):
 
         self.maybe_add_system_libs(step='configure')
 
-        await shell.async_call(configure_cmd, self.make_dir,
-                               logfile=self.logfile, env=self.env)
+        await shell.async_call(configure_cmd, self.make_dir, logfile=self.logfile, env=self.env)
 
     @modify_environment
     async def compile(self):
@@ -506,29 +526,29 @@ class MakefilesBase (Build, ModifyEnvBase):
             shell.new_call(self.make_check, self.build_dir, logfile=self.logfile, env=self.env)
 
 
-class Makefile (MakefilesBase):
-    '''
+class Makefile(MakefilesBase):
+    """
     Build handler for Makefile project
-    '''
+    """
+
     @modify_environment
     async def configure(self):
         await MakefilesBase.configure(self)
 
 
-class Autotools (MakefilesBase):
-    '''
+class Autotools(MakefilesBase):
+    """
     Build handler for autotools project
 
     @cvar override_libtool: overrides ltmain.sh to generate a libtool
                             script with the one built by cerbero.
     @type override_libtool: boolean
-    '''
+    """
 
     autoreconf = False
     autoreconf_sh = 'autoreconf -f -i'
     config_sh = './configure'
-    configure_tpl = "%(config-sh)s --prefix %(prefix)s "\
-                    "--libdir %(libdir)s"
+    configure_tpl = '%(config-sh)s --prefix %(prefix)s ' '--libdir %(libdir)s'
     add_host_build_target = True
     can_use_configure_cache = True
     supports_cache_variables = True
@@ -546,22 +566,21 @@ class Autotools (MakefilesBase):
         # Disable automatic dependency tracking, speeding up one-time builds
         self.configure_tpl += ' --disable-dependency-tracking '
         # Only use --disable-maintainer mode for real autotools based projects
-        if os.path.exists(os.path.join(self.config_src_dir, 'configure.in')) or\
-                os.path.exists(os.path.join(self.config_src_dir, 'configure.ac')):
-            self.configure_tpl += " --disable-maintainer-mode "
-            self.configure_tpl += " --disable-silent-rules "
+        if os.path.exists(os.path.join(self.config_src_dir, 'configure.in')) or os.path.exists(
+            os.path.join(self.config_src_dir, 'configure.ac')
+        ):
+            self.configure_tpl += ' --disable-maintainer-mode '
+            self.configure_tpl += ' --disable-silent-rules '
             # Never build gtk-doc documentation
-            self.configure_tpl += " --disable-gtk-doc "
+            self.configure_tpl += ' --disable-gtk-doc '
 
-        if self.config.variants.gi and not self.disable_introspection \
-                and self.use_gobject_introspection():
-            self.configure_tpl += " --enable-introspection "
+        if self.config.variants.gi and not self.disable_introspection and self.use_gobject_introspection():
+            self.configure_tpl += ' --enable-introspection '
         else:
-            self.configure_tpl += " --disable-introspection "
+            self.configure_tpl += ' --disable-introspection '
 
         if self.autoreconf:
-            await shell.async_call(self.autoreconf_sh, self.config_src_dir,
-                                   logfile=self.logfile, env=self.env)
+            await shell.async_call(self.autoreconf_sh, self.config_src_dir, logfile=self.logfile, env=self.env)
 
         # We don't build libtool on Windows
         if self.config.platform == Platform.WINDOWS:
@@ -580,11 +599,10 @@ class Autotools (MakefilesBase):
             files.remove('')
             for f in files:
                 o = os.path.join(srcdir, cf)
-                m.log("CERBERO: copying %s to %s" % (o, f), self.logfile)
+                m.log('CERBERO: copying %s to %s' % (o, f), self.logfile)
                 shutil.copy(o, f)
 
-        if self.config.platform == Platform.WINDOWS and \
-                self.supports_cache_variables:
+        if self.config.platform == Platform.WINDOWS and self.supports_cache_variables:
             # On windows, environment variables are upperscase, but we still
             # need to pass things like am_cv_python_platform in lowercase for
             # configure and autogen.sh
@@ -612,34 +630,36 @@ class Autotools (MakefilesBase):
             self.configure_tpl += ' --cache-file=%s' % cache
 
         # Add at the very end to allow recipes to override defaults
-        self.configure_tpl += "  %(options)s "
+        self.configure_tpl += '  %(options)s '
 
         await MakefilesBase.configure(self)
 
 
-class CMake (MakefilesBase):
-    '''
+class CMake(MakefilesBase):
+    """
     Build handler for cmake projects
-    '''
+    """
 
     cmake_generator = 'make'
     config_sh_needs_shell = False
     config_sh = None
-    configure_tpl = '%(config-sh)s -DCMAKE_INSTALL_PREFIX=%(prefix)s ' \
-                    '-H%(make_dir)s ' \
-                    '-B%(build_dir)s ' \
-                    '-DCMAKE_LIBRARY_OUTPUT_PATH=%(libdir)s ' \
-                    '-DCMAKE_INSTALL_LIBDIR=%(libdir)s ' \
-                    '-DCMAKE_INSTALL_BINDIR=bin ' \
-                    '-DCMAKE_INSTALL_INCLUDEDIR=include ' \
-                    '%(options)s -DCMAKE_BUILD_TYPE=Release '\
-                    '-DCMAKE_FIND_ROOT_PATH=$CERBERO_PREFIX '\
-                    '-DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=true '
+    configure_tpl = (
+        '%(config-sh)s -DCMAKE_INSTALL_PREFIX=%(prefix)s '
+        '-H%(make_dir)s '
+        '-B%(build_dir)s '
+        '-DCMAKE_LIBRARY_OUTPUT_PATH=%(libdir)s '
+        '-DCMAKE_INSTALL_BINDIR=bin '
+        '-DCMAKE_INSTALL_INCLUDEDIR=include '
+        '%(options)s -DCMAKE_BUILD_TYPE=Release '
+        '-DCMAKE_FIND_ROOT_PATH=$CERBERO_PREFIX '
+        '-DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=true '
+    )
 
     def __init__(self):
         MakefilesBase.__init__(self)
         self.build_dir = os.path.join(self.build_dir, 'b')
         self.config_sh = 'cmake'
+        self.configure_tpl += f'-DCMAKE_INSTALL_LIBDIR={self.config.rel_libdir} '
         if self.config.distro == Distro.MSYS2:
             # We do not want the MSYS2 CMake because it doesn't support MSVC
             self.config_sh = shutil.which('cmake', path=shell.get_path_minus_msys(self.env['PATH']))
@@ -673,8 +693,7 @@ class CMake (MakefilesBase):
                 self.make += ['-j1']
             self.make_install = self.make + ['install']
         else:
-            if self.config.platform == Platform.WINDOWS and \
-                    self.config.distro != Distro.MSYS :
+            if self.config.platform == Platform.WINDOWS and self.config.distro != Distro.MSYS:
                 self.configure_options += ['-G', 'MSYS Makefiles']
             else:
                 self.configure_options += ['-G', 'Unix Makefiles']
@@ -689,21 +708,51 @@ class CMake (MakefilesBase):
         elif self.config.target_platform == Platform.IOS:
             system_name = 'iOS'
 
-        if self.config.cross_compiling() or self.config.target_platform == Platform.WINDOWS:
-            self.configure_options += [f'-DCMAKE_SYSTEM_NAME={system_name}']
-
         if self.config.target_platform in (Platform.DARWIN, Platform.IOS):
             self.configure_options += ['-DCMAKE_OSX_ARCHITECTURES=' + self.config.target_arch]
 
+        # We always need a toolchain file because CMakeLists.txt requires these values to be set.
+        # The Android NDK provides one, so we use that as-is.
+        # This recipe uses these to decide which cpuinfo implementation to use:
+        # https://github.com/libjpeg-turbo/libjpeg-turbo/blob/3.0.3/CMakeLists.txt#L92
+        if self.config.target_platform == Platform.ANDROID:
+            arch = self.config.target_arch
+            if self.config.target_arch == Architecture.ARMv7:
+                arch = 'armeabi-v7a'
+            elif self.config.target_arch == Architecture.ARM64:
+                arch = 'arm64-v8a'
+            self.configure_options += [
+                f"-DCMAKE_TOOLCHAIN_FILE={self.config.env['ANDROID_NDK_HOME']}/build/cmake/android.toolchain.cmake",
+                f'-DANDROID_ABI={arch}',
+                # Required by taglib and svt-av1
+                f'-DANDROID_PLATFORM={DistroVersion.get_android_api_version(self.config.target_distro_version)}',
+            ]
+        # A toolchain file triggers specific cross compiling logic
+        # in wavpack and taglib
+        elif self.config.cross_compiling():
+            with open(f'{self.config_src_dir}/toolchain.cmake', 'w') as f:
+                f.write(f'set(CMAKE_SYSTEM_NAME {system_name})\n')
+                f.write(f'set(CMAKE_SYSTEM_PROCESSOR {self.config.target_arch})\n')
+            self.configure_options += [f'-DCMAKE_TOOLCHAIN_FILE={self.config_src_dir}/toolchain.cmake']
+        elif self.config.target_platform == Platform.WINDOWS:
+            self.configure_options += [
+                f'-DCMAKE_SYSTEM_NAME={system_name}',
+                f'-DCMAKE_SYSTEM_PROCESSOR={self.config.target_arch}',
+            ]
+
         # FIXME: Maybe export the sysroot properly instead of doing regexp magic
         if self.config.target_platform in [Platform.DARWIN, Platform.IOS]:
-            r = re.compile(r".*-isysroot ([^ ]+) .*")
+            r = re.compile(r'.*-isysroot ([^ ]+) .*')
             sysroot = r.match(cflags).group(1)
             self.configure_options += ['-DCMAKE_OSX_SYSROOT=' + sysroot]
 
+        # Supplying these with the Android toolchain file breaks the former
+        if self.config.target_platform != Platform.ANDROID:
+            self.configure_options += [
+                '-DCMAKE_C_COMPILER=' + cc,
+                '-DCMAKE_CXX_COMPILER=' + cxx,
+            ]
         self.configure_options += [
-            '-DCMAKE_C_COMPILER=' + cc,
-            '-DCMAKE_CXX_COMPILER=' + cxx,
             '-DCMAKE_C_FLAGS=' + cflags,
             '-DCMAKE_CXX_FLAGS=' + cxxflags,
             '-DLIB_SUFFIX=' + self.config.lib_suffix,
@@ -721,8 +770,8 @@ class CMake (MakefilesBase):
         # as build_dir is different from source dir, makefile location will be in build_dir.
         self.make_dir = self.build_dir
 
-MESON_FILE_TPL = \
-'''
+
+MESON_FILE_TPL = """
 [host_machine]
 system = '{system}'
 cpu_family = '{cpu_family}'
@@ -731,6 +780,9 @@ endian = '{endian}'
 
 [constants]
 toolchain = '{toolchain}'
+
+[built-in options]
+{builtin_options}
 
 [properties]
 {extra_properties}
@@ -741,14 +793,16 @@ cpp = {CXX}
 objc = {OBJC}
 objcpp = {OBJCXX}
 ar = {AR}
-pkgconfig = {PKG_CONFIG}
+nasm = {NASM}
+pkg-config = {PKG_CONFIG}
 {extra_binaries}
-'''
+"""
 
-class Meson (Build, ModifyEnvBase) :
-    '''
+
+class Meson(Build, ModifyEnvBase):
+    """
     Build handler for meson project
-    '''
+    """
 
     make = None
     make_install = None
@@ -763,7 +817,7 @@ class Meson (Build, ModifyEnvBase) :
     can_msvc = True
     # Build files require a build machine compiler when cross-compiling
     meson_needs_build_machine_compiler = False
-    meson_builddir = "b"
+    meson_builddir = 'b'
     # We do not use cmake dependency files by default, speed up the build by disabling it
     need_cmake = False
 
@@ -811,16 +865,16 @@ class Meson (Build, ModifyEnvBase) :
         raise AssertionError('Invalid option type {!r}'.format(opt_type))
 
     def _set_option(self, opt_names, variant_name):
-        '''
+        """
         Parse the meson_options.txt file, figure out whether any of the provided option names exist,
         figure out the type, and enable/disable it as per the cerbero configuration.
-        '''
+        """
         # Don't overwrite if it's already set
         if opt_names.intersection(self.meson_options):
             return
         # Error out on invalid usage
         if not os.path.isdir(self.build_dir):
-            raise FatalError('Build directory doesn\'t exist yet?')
+            raise FatalError("Build directory doesn't exist yet?")
         # Check if the option exists, and if so, what the type is
         meson_options = os.path.join(self.build_dir, 'meson_options.txt')
         if not os.path.isfile(meson_options):
@@ -838,7 +892,7 @@ class Meson (Build, ModifyEnvBase) :
                 if opt_name in opt_names:
                     # get the type of the option
                     type_regex = r"type\s*:\s*'(?P<type>[^']+)'"
-                    ty = re.search (type_regex, option, re.MULTILINE)
+                    ty = re.search(type_regex, option, re.MULTILINE)
                     if ty:
                         if ty.group('type') in ('feature', 'boolean'):
                             opt_type = ty.group('type')
@@ -864,53 +918,15 @@ class Meson (Build, ModifyEnvBase) :
         return str(qmake.parent / moc_name)
 
     def _get_meson_target_file_contents(self):
-        '''
+        """
         Get the toolchain configuration for the target machine. This will
         either go into a cross file or a native file depending on whether we're
         cross-compiling or not.
-        '''
-        def merge_env(old_env, new_env):
-            ret_env = {}
-            # Set/merge new values
-            for k, new_v in new_env.items():
-                new_v = EnvValue.from_key(k, new_v)
-                if k not in old_env:
-                    ret_env[k] = new_v
-                    continue
-                old_v = old_env[k]
-                assert(isinstance(old_v, EnvValue))
-                if isinstance(old_v, (EnvValueSingle, EnvValueCmd)) or (new_v == old_v):
-                    ret_env[k] = new_v
-                elif isinstance(old_v, (EnvValuePath, EnvValueArg)):
-                    ret_env[k] = new_v + old_v
-                else:
-                    raise FatalError("Don't know how to combine the environment "
-                        "variable '%s' with values '%s' and '%s'" % (k, new_v, old_v))
-            # Set remaining old values
-            for k in old_env.keys():
-                if k not in new_env:
-                    ret_env[k] = old_env[k]
-            return ret_env
+        """
 
-        # Extract toolchain config for the build system from the appropriate
-        # config env dict. Start with `self.env`, since it contains toolchain
-        # config set by the recipe and when building for target platforms other
-        # than Windows, it also contains build tools and the env for the
-        # toolchain set by config/*.config.
-        #
-        # On Windows, the toolchain config is `self.config.msvc_env_for_build_system`
-        # or `self.config.mingw_env_for_build_system` depending on which toolchain
-        # this recipe will use.
-        if self.config.target_platform == Platform.WINDOWS:
-            if self.using_msvc():
-                build_env = dict(self.config.msvc_env_for_build_system)
-            else:
-                build_env = dict(self.config.mingw_env_for_build_system)
-        else:
-            build_env = {}
         # Override/merge toolchain env with recipe env and return a new dict
         # with values as EnvValue objects
-        build_env = merge_env(build_env, self.env)
+        build_env = self.config.get_build_env(self.env, self.using_msvc())
 
         cc = build_env.pop('CC')
         cxx = build_env.pop('CXX')
@@ -921,20 +937,20 @@ class Meson (Build, ModifyEnvBase) :
         build_env.pop('CPP', None)
         build_env.pop('LD', None)
 
-        # Operate on a copy of the recipe properties to avoid accumulating args
-        # from all archs when doing universal builds
-        props = {}
-        build_env.pop('CPP', None) # Meson does not read this
-        build_env.pop('CPPFLAGS', None) # Meson does not read this, and it's duplicated in *FLAGS
-        props['c_args'] = build_env.pop('CFLAGS', [])
-        props['cpp_args'] = build_env.pop('CXXFLAGS', [])
-        props['objc_args'] = build_env.pop('OBJCFLAGS', [])
-        props['objcpp_args'] = build_env.pop('OBJCXXFLAGS', [])
+        builtins = {}
+        builtins['c_args'] = build_env.pop('CFLAGS', [])
+        builtins['cpp_args'] = build_env.pop('CXXFLAGS', [])
+        builtins['objc_args'] = build_env.pop('OBJCFLAGS', [])
+        builtins['objcpp_args'] = build_env.pop('OBJCXXFLAGS', [])
         # Link args
-        props['c_link_args'] = build_env.pop('LDFLAGS', [])
-        props['cpp_link_args'] = props['c_link_args']
-        props['objc_link_args'] = build_env.pop('OBJLDFLAGS', props['c_link_args'])
-        props['objcpp_link_args'] = props['objc_link_args']
+        builtins['c_link_args'] = build_env.pop('LDFLAGS', [])
+        builtins['cpp_link_args'] = builtins['c_link_args']
+        builtins['objc_link_args'] = build_env.pop('OBJLDFLAGS', builtins['c_link_args'])
+        builtins['objcpp_link_args'] = builtins['objc_link_args']
+        build_env.pop('CPP', None)  # Meson does not read this
+        build_env.pop('CPPFLAGS', None)  # Meson does not read this, and it's duplicated in *FLAGS
+
+        props = {}
         for key, value in self.config.meson_properties.items():
             if key not in props:
                 props[key] = value
@@ -953,15 +969,18 @@ class Meson (Build, ModifyEnvBase) :
 
         # Point meson to rustc with correct arguments to ensure it's detected when cross-compiling
         if self.config.cargo_home:
-            target_triple = self.config.rust_triple(self.config.target_arch,
-                self.config.target_platform, self.using_msvc())
+            target_triple = self.config.rust_triple(
+                self.config.target_arch, self.config.target_platform, self.using_msvc()
+            )
             binaries['rust'] = [self.config.cargo_home + '/bin/rustc', '--target', target_triple]
 
         # Try to detect build tools in the remaining env vars
         build_tool_paths = build_env['PATH'].get()
         for name, tool in build_env.items():
             # Autoconf env vars, incorrectly detected as a build tool because of 'yes'
-            if name.startswith('ac_cv'):
+            if '_cv_' in name:
+                continue
+            if name in ('EDITOR', 'SHELL', '_'):
                 continue
             # Files are always executable on Windows
             if name in ('HISTFILE', 'GST_REGISTRY_1_0'):
@@ -969,39 +988,65 @@ class Meson (Build, ModifyEnvBase) :
             if tool and shutil.which(tool[0], path=build_tool_paths):
                 binaries[name.lower()] = tool
 
+        builtin_options = ''
+        for k, v in builtins.items():
+            builtin_options += '{} = {}\n'.format(k, str(v))
+
         extra_properties = ''
         for k, v in props.items():
             extra_properties += '{} = {}\n'.format(k, str(v))
+
+        # When building cross-macos-universal on arm64, we can use Rosetta to
+        # transparently run the x86_64 binaries. Inform Meson about this.
+        if (
+            self.config.target_platform == Platform.DARWIN
+            and self.config.target_arch != self.config.arch
+            and self.config.arch == Architecture.ARM64
+        ):
+            extra_properties += 'needs_exe_wrapper = false\n'
+            if self.config.target_arch == Architecture.X86_64:
+                tools = ['glib-compile-resources', 'gio-querymodules']
+                pytools = ['glib-mkenums', 'glib-genmarshal', 'gdbus-codegen']
+                if self.config.variants.gi:
+                    tools += ['g-ir-compiler', 'g-ir-generate']
+                    pytools += ['g-ir-scanner', 'g-ir-annotation-tool']
+                for tool in tools:
+                    binaries[tool] = [os.path.join(self.config.prefix, 'bin', tool)]
+                for pytool in pytools:
+                    binaries[pytool] = [self.config.python_exe, os.path.join(self.config.prefix, 'bin', pytool)]
 
         extra_binaries = ''
         for k, v in binaries.items():
             extra_binaries += '{} = {}\n'.format(k, str(v))
 
         contents = MESON_FILE_TPL.format(
-                system=self.config.target_platform,
-                cpu=self.config.target_arch,
-                cpu_family=self._get_target_cpu_family(),
-                # Assume all supported target archs are little endian
-                endian='little',
-                toolchain='',
-                CC=cc,
-                CXX=cxx,
-                OBJC=objc,
-                OBJCXX=objcxx,
-                AR=ar,
-                PKG_CONFIG="'pkg-config'",
-                extra_binaries=extra_binaries,
-                extra_properties=extra_properties)
+            system=self.config.target_platform,
+            cpu=self.config.target_arch,
+            cpu_family=self._get_target_cpu_family(),
+            # Assume all supported target archs are little endian
+            endian='little',
+            toolchain='',
+            CC=cc,
+            CXX=cxx,
+            OBJC=objc,
+            OBJCXX=objcxx,
+            AR=ar,
+            NASM="'nasm'",
+            PKG_CONFIG="'pkg-config'",
+            extra_binaries=extra_binaries,
+            builtin_options=builtin_options,
+            extra_properties=extra_properties,
+        )
         return contents
 
     def _get_meson_native_file_contents(self):
-        '''
+        """
         Get a toolchain configuration that points to the build machine's
         toolchain. On Windows, this is the MinGW toolchain that we ship. On
         Linux and macOS, this is the system-wide compiler.
         When targetting android, we can use the NDK bundled clang compiler
         for this purpose as well.
-        '''
+        """
         false = ['false']
         if self.config.platform == Platform.WINDOWS:
             cc = self.config.mingw_env_for_build_system['CC']
@@ -1030,45 +1075,51 @@ class Meson (Build, ModifyEnvBase) :
         # We do not use cmake dependency files, speed up the build by disabling it
         extra_binaries = 'cmake = {}'.format(str(false))
         contents = MESON_FILE_TPL.format(
-                system=self.config.platform,
-                cpu=self.config.arch,
-                cpu_family=self.config.arch,
-                endian='little',
-                toolchain=self.get_env('ANDROID_NDK_TOOLCHAIN_BIN', ''),
-                CC=cc,
-                CXX=cxx,
-                OBJC=objc,
-                OBJCXX=objcxx,
-                AR=ar,
-                PKG_CONFIG=false,
-                extra_binaries=extra_binaries,
-                extra_properties='')
+            system=self.config.platform,
+            cpu=self.config.arch,
+            cpu_family=self.config.arch,
+            endian='little',
+            toolchain=self.get_env('ANDROID_NDK_TOOLCHAIN_BIN', ''),
+            CC=cc,
+            CXX=cxx,
+            OBJC=objc,
+            OBJCXX=objcxx,
+            AR=ar,
+            NASM="'nasm'",
+            PKG_CONFIG=false,
+            extra_binaries=extra_binaries,
+            builtin_options='',
+            extra_properties='',
+        )
         return contents
 
     def _get_meson_dummy_file_contents(self):
-        '''
+        """
         Get a toolchain configuration that points to `false` for everything.
         This forces Meson to not detect a build-machine (native) compiler when
         cross-compiling.
-        '''
+        """
         # Tell meson to not use a native compiler for anything
         false = ['false']
         # We do not use cmake dependency files, speed up the build by disabling it
         extra_binaries = 'cmake = {}'.format(str(false))
         contents = MESON_FILE_TPL.format(
-                system=self.config.platform,
-                cpu=self.config.arch,
-                cpu_family=self.config.arch,
-                endian='little',
-                toolchain='',
-                CC=false,
-                CXX=false,
-                OBJC=false,
-                OBJCXX=false,
-                AR=false,
-                PKG_CONFIG=false,
-                extra_binaries=extra_binaries,
-                extra_properties='')
+            system=self.config.platform,
+            cpu=self.config.arch,
+            cpu_family=self.config.arch,
+            endian='little',
+            toolchain='',
+            CC=false,
+            CXX=false,
+            OBJC=false,
+            OBJCXX=false,
+            AR=false,
+            NASM=false,
+            PKG_CONFIG=false,
+            extra_binaries=extra_binaries,
+            builtin_options='',
+            extra_properties='',
+        )
         return contents
 
     def _write_meson_file(self, contents, fname):
@@ -1098,25 +1149,40 @@ class Meson (Build, ModifyEnvBase) :
         # Automatically disable examples
         self._set_option({'examples'}, None)
 
+        if self.config.variants.noassert and 'b_ndebug' not in self.meson_options:
+            self.meson_options['b_ndebug'] = 'true'
+
         # NOTE: self.tagged_for_release is set in recipes/custom.py
         is_gstreamer_recipe = hasattr(self, 'tagged_for_release')
-        # Enable -Werror for gstreamer recipes and when running under CI
-        if is_gstreamer_recipe and self.config.variants.werror:
-            # Let recipes override the value
-            if 'werror' not in self.meson_options:
+        if is_gstreamer_recipe:
+            # Enable -Werror for gstreamer recipes and when running under CI but let recipes override the value
+            if self.config.variants.werror and 'werror' not in self.meson_options:
                 self.meson_options['werror'] = 'true'
+
+            if 'glib_assert' not in self.meson_options:
+                self._set_option({'glib_assert'}, 'assert')
+
+            if 'glib_checks' not in self.meson_options:
+                self._set_option({'glib_checks'}, 'checks')
 
         debug = 'true' if self.config.variants.debug else 'false'
         opt = get_optimization_from_config(self.config)
 
         if self.library_type == LibraryType.NONE:
-            raise RuntimeException("meson recipes cannot be LibraryType.NONE")
+            raise RuntimeError('meson recipes cannot be LibraryType.NONE')
 
-        meson_cmd = [self.meson_sh, 'setup', '--prefix=' + self.config.prefix,
-            '--libdir=lib' + self.config.lib_suffix, '-Ddebug=' + debug,
-            '--default-library=' + self.library_type, '-Doptimization=' + opt,
-            '--backend=' + self.meson_backend, '--wrap-mode=nodownload',
-            '-Dpkgconfig.relocatable=true']
+        meson_cmd = [
+            self.meson_sh,
+            'setup',
+            '--prefix=' + self.config.prefix,
+            '--libdir=' + self.config.rel_libdir,
+            '-Ddebug=' + debug,
+            '--default-library=' + self.library_type,
+            '-Doptimization=' + opt,
+            '--backend=' + self.meson_backend,
+            '--wrap-mode=nodownload',
+            '-Dpkgconfig.relocatable=true',
+        ]
 
         if self.using_msvc():
             meson_cmd.append('-Db_vscrt=' + self.config.variants.vscrt)
@@ -1138,7 +1204,7 @@ class Meson (Build, ModifyEnvBase) :
         if 'default_library' in self.meson_options:
             raise RuntimeError('Do not set `default_library` in self.meson_options, use self.library_type instead')
 
-        for (key, value) in self.meson_options.items():
+        for key, value in self.meson_options.items():
             meson_cmd += ['-D%s=%s' % (key, str(value))]
 
         # We export the target toolchain with env vars, but that confuses Meson
@@ -1175,11 +1241,12 @@ class Meson (Build, ModifyEnvBase) :
 
 
 class Cargo(Build, ModifyEnvBase):
-    '''
+    """
     Cargo build system recipes
 
     NOTE: Currently only intended for build-tools recipes
-    '''
+    """
+
     srcdir = '.'
     can_msvc = True
     cargo_features = None
@@ -1196,11 +1263,9 @@ class Cargo(Build, ModifyEnvBase):
         if not self.using_msvc():
             self.setup_buildtype_env_ops()
 
-        self.config_src_dir = os.path.abspath(os.path.join(self.build_dir,
-                                                           self.srcdir))
+        self.config_src_dir = os.path.abspath(os.path.join(self.build_dir, self.srcdir))
         self.cargo_dir = os.path.join(self.config_src_dir, 'b')
-        self.cargo = os.path.join(self.config.cargo_home, 'bin',
-                'cargo' + self.config._get_exe_suffix())
+        self.cargo = os.path.join(self.config.cargo_home, 'bin', 'cargo' + self.config._get_exe_suffix())
 
         # Debuginfo is enormous, about 0.5GB per plugin, so it's split out
         # where enabled by default (macOS and MSVC) and stripped everywhere
@@ -1213,15 +1278,19 @@ class Cargo(Build, ModifyEnvBase):
         else:
             self.rustc_debuginfo = 'strip'
         try:
-            self.target_triple = self.config.rust_triple(self.config.target_arch,
-                    self.config.target_platform, self.using_msvc())
+            self.target_triple = self.config.rust_triple(
+                self.config.target_arch, self.config.target_platform, self.using_msvc()
+            )
         except FatalError as e:
             raise InvalidRecipeError(self.name, e.msg)
 
         self.cargo_args = [
-            '--verbose', '--offline',
-            '--target', self.target_triple,
-            '--target-dir', self.cargo_dir,
+            '--verbose',
+            '--offline',
+            '--target',
+            self.target_triple,
+            '--target-dir',
+            self.cargo_dir,
         ]
 
         jobs = self.num_of_cpus()
@@ -1253,19 +1322,15 @@ class Cargo(Build, ModifyEnvBase):
             f.write(s)
 
     def get_llvm_tool(self, tool: str) -> Path:
-        '''
+        """
         Gets one of the LLVM tools matching the current Rust toolchain.
-        '''
-        root_dir = shell.check_output(
-            ["rustc", "--print", "sysroot"], env=self.env
-        ).strip()
+        """
+        root_dir = shell.check_output(['rustc', '--print', 'sysroot'], env=self.env).strip()
 
-        tools = list(Path(root_dir).glob(f"**/{tool}"))
+        tools = list(Path(root_dir).glob(f'**/{tool}'))
 
         if len(tools) == 0:
-            raise FatalError(
-                f"Rust {tool} tool not found at {root_dir}, try re-running bootstrap"
-            )
+            raise FatalError(f'Rust {tool} tool not found at {root_dir}, try re-running bootstrap')
         return tools[0]
 
     def get_cargo_toml_version(self):
@@ -1303,10 +1368,8 @@ class Cargo(Build, ModifyEnvBase):
             # We need to extract necessary linker flags from LDFLAGS which is
             # passed to the compiler
             for arg in shlex.split(self.get_env('LDFLAGS', '')):
-                link_args += ['-C', f"link-arg={arg}"]
-            s = f'[target.{self.target_triple}]\n' \
-                f'linker = "{linker}"\n' \
-                f'rustflags = {link_args!r}\n'
+                link_args += ['-C', f'link-arg={arg}']
+            s = f'[target.{self.target_triple}]\n' f'linker = "{linker}"\n' f'rustflags = {link_args!r}\n'
             self.append_config_toml(s)
         # No configure step with cargo
 
@@ -1320,33 +1383,59 @@ class Cargo(Build, ModifyEnvBase):
     async def install(self):
         self.maybe_add_system_libs(step='configure+install')
         cmd = [
-            self.cargo, 'install',
-            '--path', self.config_src_dir,
-            '--root', self.config.prefix,
+            self.cargo,
+            'install',
+            '--path',
+            self.config_src_dir,
+            '--root',
+            self.config.prefix,
         ] + self.get_cargo_args()
         await self.retry_run(shell.async_call, cmd, logfile=self.logfile, env=self.env)
 
 
 class CargoC(Cargo):
-    '''
+    """
     Cargo-C build system recipes
-    '''
+    """
+
     srcdir = '.'
 
     def __init__(self):
         Cargo.__init__(self)
 
+        # cargo-c ignores config.toml's rustflags, which are necessary for i386
+        # cross-build
+        self.target_triple = self.config.rust_triple(
+            self.config.target_arch, self.config.target_platform, self.using_msvc()
+        )
+        if self.target_triple == 'i686-pc-windows-gnu':
+            tgt = self.target_triple.upper().replace('-', '_')
+            self.set_env(f'CARGO_TARGET_{tgt}_LINKER', self.get_env('RUSTC_LINKER'))
+            link_args = []
+            for arg in shlex.split(self.get_env('RUSTC_LDFLAGS')):
+                link_args += ['-C', f'link-arg={arg}']
+            self.set_env('RUSTFLAGS', ' '.join(link_args))
+
     def get_cargoc_args(self):
         cargoc_args = [
-            '--release', '--frozen',
-            '--prefix', self.config.prefix,
-            '--libdir', self.config.libdir,
+            '--release',
+            '--frozen',
+            '--prefix',
+            self.config.prefix,
+            '--libdir',
+            self.config.libdir,
         ]
         # --library-type args do not override, but are collected
         if self.library_type in (LibraryType.STATIC, LibraryType.BOTH):
             cargoc_args += ['--library-type', 'staticlib']
         if self.library_type in (LibraryType.SHARED, LibraryType.BOTH):
             cargoc_args += ['--library-type', 'cdylib']
+
+        if self.config.variants.noassert:
+            cargoc_args += ['--config', 'debug-assertions=false']
+        if self.config.variants.nochecks:
+            cargoc_args += ['--config', 'overflow-checks=false']
+
         cargoc_args += self.get_cargo_args()
         return cargoc_args
 
@@ -1363,8 +1452,7 @@ class CargoC(Cargo):
         await self.retry_run(shell.async_call, cmd, self.cargo_dir, logfile=self.logfile, env=self.env)
 
 
-class BuildType (object):
-
+class BuildType(object):
     CUSTOM = CustomBuild
     MAKEFILE = Makefile
     AUTOTOOLS = Autotools

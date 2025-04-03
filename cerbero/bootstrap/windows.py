@@ -30,15 +30,15 @@ from cerbero.utils import shell, git
 from cerbero.utils import messages as m
 
 # Toolchain
-TOOLCHAIN_BASE_URL = 'https://gstreamer.freedesktop.org/data/cerbero/toolchain/windows/'
+TOOLCHAIN_BASE_URL = 'https://gstreamer.freedesktop.org/data/cerbero/toolchain/mingw/14.2.0/'
 TOOLCHAIN_PLATFORM = {
     Platform.LINUX: (
-        'mingw-6.0.0-gcc-8.2.0-linux-multilib.tar.xz',
-        '396ceb50161720b19971e2c71c87ce08150213b091ed8ffc00782df8759921bf',
+        'mingw-12.0.0-gcc-14.2.0-linux-multilib.tar.xz',
+        'ef3bcdd10716578b9300591da68beb73753002252a46e41f316bb94a577e3c04',
     ),
     Platform.WINDOWS: (
-        'mingw-6.0.0-gcc-8.2.0-windows-multilib.tar.xz',
-        '77fc1319b13894d7340d4994150e3af615e23a63113a9947412d11be95f4d8a9',
+        'mingw-12.0.0-gcc-14.2.0-windows-multilib.tar.xz',
+        '2e9039c6404f68bfce1eecd34172b16715565a15555c76c1652ec26265d5ae89',
     ),
 }
 
@@ -67,7 +67,7 @@ class MSYSBootstrapper(BootstrapperBase):
     packages = ['msys-flex', 'msys-bison', 'msys-perl']
 
     def __init__(self, config, offline, assume_yes):
-        super().__init__(config, offline)
+        super().__init__(config, offline, 'msys')
         self.perl_prefix = self.config.mingw_perl_prefix
         self.prefix = self.config.toolchain_prefix
         # MinGW Perl needed by openssl
@@ -159,7 +159,7 @@ class MSYS2Bootstrapper(BootstrapperBase):
     ]
 
     def __init__(self, config, offline, assume_yes):
-        super().__init__(config, offline)
+        super().__init__(config, offline, 'msys2')
 
     async def start(self, jobs=0):
         shell.new_call(['pacman', '-Sy', '--noconfirm', '--needed'] + self.packages)
@@ -172,7 +172,7 @@ class MinGWBootstrapper(BootstrapperBase):
     """
 
     def __init__(self, config, offline, assume_yes):
-        super().__init__(config, offline)
+        super().__init__(config, offline, 'mingw')
         self.prefix = self.config.toolchain_prefix
         self.arch = self.config.target_arch
         # Register all network resources this bootstrapper needs. They will all
