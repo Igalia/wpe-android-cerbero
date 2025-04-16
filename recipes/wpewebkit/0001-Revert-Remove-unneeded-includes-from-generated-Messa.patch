@@ -1,0 +1,3953 @@
+From 9c6d7847c21f421ed0620a1707225deb0bb522a2 Mon Sep 17 00:00:00 2001
+From: Simon Pena <spena@igalia.com>
+Date: Wed, 16 Apr 2025 13:04:50 +0100
+Subject: [PATCH 2/2] Revert "Remove unneeded includes from generated Messages
+ headers"
+
+This reverts commit e1c5bb1d3ef6f7d2718c9e418a46602112ac5a29.
+---
+ .../RemoteDisplayListRecorder.messages.in     |   2 +-
+ Source/WebKit/Platform/IPC/Connection.h       |  10 +-
+ .../Platform/IPC/MessageSenderInlines.h       |   8 +-
+ .../Platform/IPC/StreamClientConnection.h     |  10 +-
+ Source/WebKit/Scripts/webkit/messages.py      | 245 +++++++------
+ .../tests/MessageArgumentDescriptions.cpp     | 341 +++++++++++++++++-
+ .../tests/TestWithCVPixelBufferMessages.h     |  18 +-
+ .../TestWithDeferSendingOptionMessages.h      |  54 ++-
+ .../TestWithDispatchedFromAndToMessages.h     |   9 +-
+ .../TestWithEnabledByAndConjunctionMessages.h |   9 +-
+ .../webkit/tests/TestWithEnabledByMessages.h  |  36 +-
+ .../TestWithEnabledByOrConjunctionMessages.h  |   9 +-
+ .../webkit/tests/TestWithIfMessageMessages.h  |  21 +-
+ .../webkit/tests/TestWithImageDataMessages.h  |  19 +-
+ .../tests/TestWithLegacyReceiverMessages.h    | 226 +++++-------
+ ...tWithMultiLineExtendedAttributesMessages.h |   9 +-
+ .../webkit/tests/TestWithSemaphoreMessages.h  |  18 +-
+ .../tests/TestWithSpanOfConstMessages.h       |  19 +-
+ .../tests/TestWithStreamBatchedMessages.h     |   9 +-
+ .../tests/TestWithStreamBufferMessages.h      |   9 +-
+ .../webkit/tests/TestWithStreamMessages.h     |  63 ++--
+ ...WithStreamServerConnectionHandleMessages.h |   9 +-
+ ...hSuperclassAndWantsAsyncDispatchMessages.h |  18 +-
+ ...stWithSuperclassAndWantsDispatchMessages.h |  18 +-
+ .../webkit/tests/TestWithSuperclassMessages.h |  66 ++--
+ .../webkit/tests/TestWithValidatorMessages.h  |  36 +-
+ .../TestWithWantsAsyncDispatchMessages.h      |  18 +-
+ .../tests/TestWithWantsDispatchMessages.h     |  18 +-
+ ...tWithWantsDispatchNoSyncMessagesMessages.h |   9 +-
+ .../tests/TestWithoutAttributesMessages.h     | 226 +++++-------
+ .../TestWithoutUsingIPCConnectionMessages.h   |  54 ++-
+ .../WebCoreArgumentCoders.serialization.in    |   2 +
+ .../API/glib/WebKitNetworkSession.cpp         |   1 -
+ .../API/glib/WebKitUserContentManager.cpp     |   1 -
+ .../WebKit/UIProcess/AuxiliaryProcessProxy.h  |   7 +-
+ .../RemoteWebInspectorUIProxy.messages.in     |   4 +-
+ .../Inspector/WebInspectorUIProxy.messages.in |   6 +-
+ .../Tests/IPC/ConnectionTests.cpp             |  33 +-
+ Tools/TestWebKitAPI/Tests/IPC/EventTests.cpp  |  12 +-
+ .../Tests/IPC/IPCSerialization.mm             |  16 +-
+ .../Tests/IPC/IPCTestUtilities.h              |   5 +-
+ .../Tests/IPC/StreamConnectionTests.cpp       |  32 +-
+ .../Tests/WebKitCocoa/WebPushDaemon.mm        |   4 +-
+ 43 files changed, 940 insertions(+), 799 deletions(-)
+
+diff --git a/Source/WebKit/GPUProcess/graphics/RemoteDisplayListRecorder.messages.in b/Source/WebKit/GPUProcess/graphics/RemoteDisplayListRecorder.messages.in
+index 11917f4e417e..4c73fc00961a 100644
+--- a/Source/WebKit/GPUProcess/graphics/RemoteDisplayListRecorder.messages.in
++++ b/Source/WebKit/GPUProcess/graphics/RemoteDisplayListRecorder.messages.in
+@@ -50,7 +50,7 @@ messages -> RemoteDisplayListRecorder Stream {
+     SetStrokeThickness(float thickness) StreamBatched
+     SetStrokeStyle(enum:uint8_t WebCore::StrokeStyle style) StreamBatched
+     SetCompositeMode(struct WebCore::CompositeMode mode) StreamBatched
+-    SetDropShadow(struct std::optional<WebCore::GraphicsDropShadow> dropShadow) StreamBatched
++    SetDropShadow(std::optional<WebCore::GraphicsDropShadow> dropShadow) StreamBatched
+     SetStyle(std::optional<WebCore::GraphicsStyle> style) StreamBatched
+     SetAlpha(float alpha) StreamBatched
+     SetTextDrawingMode(WebCore::TextDrawingModeFlags mode) StreamBatched
+diff --git a/Source/WebKit/Platform/IPC/Connection.h b/Source/WebKit/Platform/IPC/Connection.h
+index b60568a84535..76a3479e5aaf 100644
+--- a/Source/WebKit/Platform/IPC/Connection.h
++++ b/Source/WebKit/Platform/IPC/Connection.h
+@@ -755,7 +755,7 @@ Error Connection::send(T&& message, uint64_t destinationID, OptionSet<SendOption
+     static_assert(!T::isSync, "Async message expected");
+ 
+     auto encoder = makeUniqueRef<Encoder>(T::name(), destinationID);
+-    message.encode(encoder.get());
++    encoder.get() << message.arguments();
+ 
+     return sendMessage(WTFMove(encoder), sendOptions, qos);
+ }
+@@ -776,7 +776,7 @@ std::optional<Connection::AsyncReplyID> Connection::sendWithAsyncReply(T&& messa
+     auto handler = makeAsyncReplyHandler<T>(std::forward<C>(completionHandler));
+     auto replyID = handler.replyID;
+     auto encoder = makeUniqueRef<Encoder>(T::name(), destinationID);
+-    message.encode(encoder.get());
++    encoder.get() << message.arguments();
+     if (sendMessageWithAsyncReply(WTFMove(encoder), WTFMove(handler), sendOptions) == Error::NoError)
+         return replyID;
+     // FIXME: Propagate the error back.
+@@ -790,7 +790,7 @@ std::optional<Connection::AsyncReplyID> Connection::sendWithAsyncReplyOnDispatch
+     auto handler = makeAsyncReplyHandlerWithDispatcher<T>(std::forward<C>(completionHandler), dispatcher);
+     auto replyID = handler.replyID;
+     auto encoder = makeUniqueRef<Encoder>(T::name(), destinationID);
+-    message.encode(encoder.get());
++    encoder.get() << message.arguments();
+     if (sendMessageWithAsyncReplyWithDispatcher(WTFMove(encoder), WTFMove(handler), sendOptions) == Error::NoError)
+         return replyID;
+     // FIXME: Propagate the error back.
+@@ -805,7 +805,7 @@ Ref<Promise> Connection::sendWithPromisedReply(T&& message, uint64_t destination
+     auto promise = producer.promise();
+     auto handler = makeAsyncReplyHandlerWithDispatcher<PC, T, Promise>(WTFMove(producer));
+     auto encoder = makeUniqueRef<Encoder>(T::name(), destinationID);
+-    message.encode(encoder.get());
++    encoder.get() << message.arguments();
+     sendMessageWithAsyncReplyWithDispatcher(WTFMove(encoder), WTFMove(handler), sendOptions);
+     // The promise will be rejected in the handler should an error occur.
+     return promise;
+@@ -822,7 +822,7 @@ template<typename T> Connection::SendSyncResult<T> Connection::sendSync(T&& mess
+     }
+ 
+     // Encode the rest of the input arguments.
+-    message.encode(encoder.get());
++    encoder.get() << message.arguments();
+ 
+     // Now send the message and wait for a reply.
+     auto replyDecoderOrError = sendSyncMessage(syncRequestID, WTFMove(encoder), timeout, sendSyncOptions);
+diff --git a/Source/WebKit/Platform/IPC/MessageSenderInlines.h b/Source/WebKit/Platform/IPC/MessageSenderInlines.h
+index 2bb883b2722a..9bf15bcf3753 100644
+--- a/Source/WebKit/Platform/IPC/MessageSenderInlines.h
++++ b/Source/WebKit/Platform/IPC/MessageSenderInlines.h
+@@ -34,7 +34,7 @@ template<typename MessageType> inline bool MessageSender::send(MessageType&& mes
+ {
+     static_assert(!MessageType::isSync);
+     auto encoder = makeUniqueRef<Encoder>(MessageType::name(), destinationID);
+-    message.encode(encoder.get());
++    encoder.get() << std::forward<MessageType>(message).arguments();
+     return sendMessage(WTFMove(encoder), options);
+ }
+ 
+@@ -50,7 +50,7 @@ template<typename MessageType, typename C> inline std::optional<AsyncReplyID> Me
+ {
+     static_assert(!MessageType::isSync);
+     auto encoder = makeUniqueRef<IPC::Encoder>(MessageType::name(), destinationID);
+-    message.encode(encoder.get());
++    encoder.get() << std::forward<MessageType>(message).arguments();
+     auto asyncHandler = Connection::makeAsyncReplyHandler<MessageType>(std::forward<C>(completionHandler));
+     auto replyID = asyncHandler.replyID;
+     if (sendMessageWithAsyncReply(WTFMove(encoder), WTFMove(asyncHandler), options))
+@@ -62,7 +62,7 @@ template<typename MessageType> inline bool MessageSender::sendWithoutUsingIPCCon
+ {
+     static_assert(!MessageType::isSync);
+     auto encoder = makeUniqueRef<IPC::Encoder>(MessageType::name(), messageSenderDestinationID());
+-    message.encode(encoder.get());
++    encoder.get() << std::forward<MessageType>(message).arguments();
+ 
+     return performSendWithoutUsingIPCConnection(WTFMove(encoder));
+ }
+@@ -92,7 +92,7 @@ template<typename MessageType, typename C> inline bool MessageSender::sendWithAs
+ {
+     static_assert(!MessageType::isSync);
+     auto encoder = makeUniqueRef<IPC::Encoder>(MessageType::name(), messageSenderDestinationID());
+-    message.encode(encoder.get());
++    encoder.get() << std::forward<MessageType>(message).arguments();
+ 
+     auto asyncHandler = [completionHandler = std::forward<C>(completionHandler)] (Decoder* decoder) mutable {
+         if (decoder && decoder->isValid())
+diff --git a/Source/WebKit/Platform/IPC/StreamClientConnection.h b/Source/WebKit/Platform/IPC/StreamClientConnection.h
+index 8ee6e17a8974..c8ecef47a34b 100644
+--- a/Source/WebKit/Platform/IPC/StreamClientConnection.h
++++ b/Source/WebKit/Platform/IPC/StreamClientConnection.h
+@@ -217,8 +217,7 @@ std::optional<StreamClientConnection::AsyncReplyID> StreamClientConnection::send
+ 
+     sendProcessOutOfStreamMessage(WTFMove(*span));
+     auto encoder = makeUniqueRef<Encoder>(T::name(), destinationID.toUInt64());
+-    message.encode(encoder.get());
+-    encoder.get() << replyID;
++    encoder.get() << message.arguments() << replyID;
+     if (connection->sendMessage(WTFMove(encoder), IPC::SendOption::DispatchMessageEvenWhenWaitingForSyncReply, { }) == Error::NoError)
+         return replyID;
+ 
+@@ -238,8 +237,7 @@ template<typename T, typename... AdditionalData>
+ bool StreamClientConnection::trySendStream(std::span<uint8_t> span, T& message, AdditionalData&&... args)
+ {
+     StreamConnectionEncoder messageEncoder { T::name(), span };
+-    message.encode(messageEncoder);
+-    if ((messageEncoder << ... << std::forward<decltype(args)>(args))) {
++    if (((messageEncoder << message.arguments()) << ... << std::forward<decltype(args)>(args))) {
+         auto wakeUpResult = m_buffer.release(messageEncoder.size());
+         if constexpr (T::isStreamBatched)
+             wakeUpServerBatched(wakeUpResult);
+@@ -306,9 +304,7 @@ std::optional<StreamClientConnection::SendSyncResult<T>> StreamClientConnection:
+ 
+     auto decoderResult = [&]() -> std::optional<Connection::DecoderOrError> {
+         StreamConnectionEncoder messageEncoder { T::name(), span };
+-        messageEncoder << syncRequestID;
+-        message.encode(messageEncoder);
+-        if (!messageEncoder)
++        if (!(messageEncoder << syncRequestID << message.arguments()))
+             return std::nullopt;
+ 
+         auto wakeUpResult = m_buffer.release(messageEncoder.size());
+diff --git a/Source/WebKit/Scripts/webkit/messages.py b/Source/WebKit/Scripts/webkit/messages.py
+index 8be91932583b..29308fd34fb3 100644
+--- a/Source/WebKit/Scripts/webkit/messages.py
++++ b/Source/WebKit/Scripts/webkit/messages.py
+@@ -51,6 +51,7 @@ _license_header = """/*
+  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
++
+ """
+ 
+ WANTS_DISPATCH_MESSAGE_ATTRIBUTE = 'WantsDispatchMessage'
+@@ -230,6 +231,8 @@ def message_to_struct_declaration(receiver, message):
+     result = []
+     function_parameters = [(function_parameter_type(x.type, x.kind), x.name) for x in message.parameters]
+ 
++    arguments_constructor_parameters = [arguments_constructor_name(x.type, x.name) for x in message.parameters]
++
+     result.append('class %s {\n' % message.name)
+     result.append('public:\n')
+     result.append('    using Arguments = std::tuple<%s>;\n' % ', '.join([parameter.type for parameter in message.parameters]))
+@@ -266,39 +269,33 @@ def message_to_struct_declaration(receiver, message):
+             else:
+                 result.append('    using Promise = WTF::NativePromise<std::tuple<%s>, IPC::Error>;\n' % ', '.join([parameter.type for parameter in message.reply_parameters]))
+ 
+-    result.append('    %s%s(%s)\n' % (len(message.parameters) == 1 and 'explicit ' or '', message.name, ', '.join([' '.join(x) for x in function_parameters])))
+-    for i in range(len(message.parameters)):
+-        parameter = message.parameters[i]
+-        result.append('        %s m_%s(%s)\n' % (',' if i else ':', parameter.name, arguments_constructor_name(parameter.type, parameter.name)))
+-    result.append('    {\n')
+-    result += generate_dispatched_for_x(receiver.receiver_dispatched_from, spacing='        ')
+-    result.append('    }\n\n')
++    if len(function_parameters) or receiver.receiver_dispatched_from:
++        result.append('    %s%s(%s)' % (len(function_parameters) == 1 and 'explicit ' or '', message.name, ', '.join([' '.join(x) for x in function_parameters])))
++        result.append('\n        : m_arguments(%s)\n' % ', '.join(arguments_constructor_parameters))
++        result.append('    {\n')
++        result += generate_dispatched_for_x(receiver.receiver_dispatched_from, spacing='        ')
++        result.append('    }\n\n')
+ 
+     if message.coalescing_key_indices is not None:
++        result.append('    // Not valid to call this after arguments() is called.\n')
+         if message.coalescing_key_indices:
+             result.append('    void encodeCoalescingKey(IPC::Encoder& encoder) const\n')
+             result.append('    {\n')
+-            for i in message.coalescing_key_indices:
+-                result.append('        encoder << m_%s;\n' % message.parameters[i].name)
++            get_arguments_string = ' << '.join((f'std::get<{i}>(m_arguments)' for i in message.coalescing_key_indices))
++            result.append(f'        encoder << {get_arguments_string};\n')
+         else:
+             result.append('    void encodeCoalescingKey(IPC::Encoder&) const\n')
+             result.append('    {\n')
+         result.append('    }\n')
+         result.append('\n')
+ 
+-    result.append('    template<typename Encoder>\n')
+-    result.append('    void encode(Encoder& encoder)\n')
++    result.append('    auto&& arguments()\n')
+     result.append('    {\n')
+-    for parameter in message.parameters:
+-        if parameter.type in types_that_must_be_moved():
+-            result.append('        encoder << WTFMove(m_%s);\n' % parameter.name)
+-        else:
+-            result.append('        encoder << m_%s;\n' % parameter.name)
++    result.append('        return WTFMove(m_arguments);\n')
+     result.append('    }\n')
+     result.append('\n')
+     result.append('private:\n')
+-    for parameter in function_parameters:
+-        result.append('    %s m_%s;\n' % parameter)
++    result.append('    std::tuple<%s> m_arguments;\n' % ', '.join([x[0] for x in function_parameters]))
+     result.append('};\n')
+     return surround_in_condition(''.join(result), message.condition)
+ 
+@@ -350,8 +347,6 @@ def forward_declaration(namespace, kind_and_type):
+         return 'enum class %s : %s' % (type, kind[5:])
+     elif qualified_name in serialized_identifiers():
+         return 'struct ' + type + 'Type;\nusing ' + type + ' = ' + atomic_object_identifier(qualified_name) + 'ObjectIdentifier<' + type + 'Type>'
+-    elif qualified_name in serialized_identifiers():
+-        return 'struct ' + type + 'Type;\nusing ' + type + ' = ' + atomic_object_identifier(qualified_name) + 'ObjectIdentifier<' + type + 'Type>'
+     else:
+         return 'class %s' % type
+ 
+@@ -614,7 +609,7 @@ def types_that_cannot_be_forward_declared():
+         'WebKit::WebKeyboardEvent',
+         'WebKit::XRDeviceIdentifier',
+         'WTF::SystemMemoryPressureStatus',
+-    ] + types_that_must_be_moved())
++    ] + serialized_identifiers() + types_that_must_be_moved())
+ 
+ 
+ def conditions_for_header(header):
+@@ -650,7 +645,6 @@ def conditions_for_header(header):
+         '<WebCore/DynamicContentScalingDisplayList.h>': ["ENABLE(RE_DYNAMIC_CONTENT_SCALING)"],
+         '<WebCore/ImageUtilities.h>': ["PLATFORM(COCOA)"],
+         '<WebCore/MediaPlaybackTargetContext.h>': ["ENABLE(WIRELESS_PLAYBACK_TARGET)"],
+-        '<WebCore/ModelPlayerIdentifier.h>': ["ENABLE(MODEL_PROCESS)"],
+         '<WebCore/PlaybackTargetClientContextIdentifier.h>': ["ENABLE(WIRELESS_PLAYBACK_TARGET)"],
+         '<WebCore/SoupNetworkProxySettings.h>': ["USE(SOUP)"],
+         '<WebCore/SelectionData.h>': ["PLATFORM(GTK)", "PLATFORM(WPE)"],
+@@ -684,9 +678,6 @@ def forward_declarations_and_headers(receiver):
+         kind = parameter.kind
+         type = parameter.type
+ 
+-        if type.startswith('std::optional<') and type.endswith('>'):
+-            type = type[14: len(type) - 1]
+-
+         if type.find('<') != -1 or type in no_forward_declaration_types:
+             # Don't forward declare class templates.
+             headers.update(headers_for_type(type))
+@@ -727,7 +718,7 @@ def generate_messages_header(receiver):
+     result = []
+ 
+     result.append(_license_header)
+-    result.append('\n')
++
+     result.append('#pragma once\n')
+     result.append('\n')
+ 
+@@ -931,7 +922,7 @@ def argument_coder_headers_for_type(type):
+     return headers
+ 
+ 
+-def headers_for_type(type, for_implementation_file=False):
++def headers_for_type(type):
+     header_infos_and_types = class_template_headers(type)
+ 
+     special_cases = {
+@@ -1063,8 +1054,6 @@ def headers_for_type(type, for_implementation_file=False):
+         'WebCore::IndexedDB::ObjectStoreOverwriteMode': ['<WebCore/IndexedDB.h>'],
+         'WebCore::InputMode': ['<WebCore/InputMode.h>'],
+         'WebCore::InspectorClientDeveloperPreference': ['<WebCore/InspectorClient.h>'],
+-        'WebCore::InspectorFrontendClientAppearance': ['<WebCore/InspectorFrontendClient.h>'],
+-        'WebCore::InspectorFrontendClientSaveData': ['<WebCore/InspectorFrontendClient.h>'],
+         'WebCore::InspectorOverlayHighlight': ['<WebCore/InspectorOverlay.h>'],
+         'WebCore::IsLoggedIn': ['<WebCore/IsLoggedIn.h>'],
+         'WebCore::IDBResourceObjectIdentifier': ['<WebCore/IDBResourceIdentifier.h>'],
+@@ -1215,7 +1204,6 @@ def headers_for_type(type, for_implementation_file=False):
+         'WebCore::TrackInfo': ['<WebCore/MediaSample.h>'],
+         'WebCore::TrackInfo::TrackType': ['<WebCore/MediaSample.h>'],
+         'WebCore::UserGestureTokenIdentifierID': ['"GeneratedSerializers.h"'],
+-        'WebCore::WindowIdentifier': ['<WebCore/GlobalWindowIdentifier.h>'],
+         'WebCore::WritingTools::Context': ['<WebCore/WritingToolsTypes.h>'],
+         'WebCore::WritingTools::ContextID': ['<WebCore/WritingToolsTypes.h>'],
+         'WebCore::WritingTools::Action': ['<WebCore/WritingToolsTypes.h>'],
+@@ -1231,6 +1219,7 @@ def headers_for_type(type, for_implementation_file=False):
+         'WebCore::VideoFrameRotation': ['<WebCore/VideoFrame.h>'],
+         'WebCore::VideoPlaybackQualityMetrics': ['<WebCore/VideoPlaybackQualityMetrics.h>'],
+         'WebCore::VideoPresetData': ['<WebCore/VideoPreset.h>'],
++        'WebCore::WindowIdentifier': ['<WebCore/GlobalWindowIdentifier.h>'],
+         'WebCore::WebGPU::AddressMode': ['<WebCore/WebGPUAddressMode.h>'],
+         'WebCore::WebGPU::BlendFactor': ['<WebCore/WebGPUBlendFactor.h>'],
+         'WebCore::WebGPU::BlendOperation': ['<WebCore/WebGPUBlendOperation.h>'],
+@@ -1429,9 +1418,6 @@ def headers_for_type(type, for_implementation_file=False):
+             headers += special_cases[type]
+             continue
+ 
+-        if not for_implementation_file and type not in types_that_cannot_be_forward_declared():
+-            continue
+-
+         # We assume that we must include a header for a type iff it has a scope
+         # resolution operator (::).
+         split = type.split('::')
+@@ -1469,7 +1455,7 @@ def collect_header_conditions_for_receiver(receiver, header_conditions):
+                     header_conditions[header] = []
+                 header_conditions[header].extend(conditions)
+ 
+-        type_headers = headers_for_type(type, True)
++        type_headers = headers_for_type(type)
+         for header in type_headers:
+             if header not in header_conditions:
+                 header_conditions[header] = []
+@@ -1571,7 +1557,6 @@ def generate_message_handler(receiver):
+     result = []
+ 
+     result.append(_license_header)
+-    result.append('\n')
+     result.append('#include "config.h"\n')
+ 
+     if receiver.condition:
+@@ -1736,7 +1721,6 @@ def generate_message_handler(receiver):
+ def generate_message_names_header(receivers):
+     result = []
+     result.append(_license_header)
+-    result.append('\n')
+     result.append('#pragma once\n')
+     result.append('\n')
+     result.append('#include <algorithm>\n')
+@@ -1818,7 +1802,6 @@ def generate_message_names_header(receivers):
+ def generate_message_names_implementation(receivers):
+     result = []
+     result.append(_license_header)
+-    result.append('\n')
+     result.append('#include "config.h"\n')
+     result.append('#include "MessageNames.h"\n')
+     result.append('\n')
+@@ -1846,47 +1829,47 @@ def generate_message_names_implementation(receivers):
+ 
+ 
+ def generate_js_value_conversion_function(result, receivers, function_name, decoder_function_name, argument_type, predicate=lambda message: True):
+-    result.append('std::optional<JSC::JSValue> %s(JSC::JSGlobalObject* globalObject, MessageName name, Decoder& decoder)' % function_name)
+-    result.append('{')
+-    result.append('    switch (name) {')
++    result.append('std::optional<JSC::JSValue> %s(JSC::JSGlobalObject* globalObject, MessageName name, Decoder& decoder)\n' % function_name)
++    result.append('{\n')
++    result.append('    switch (name) {\n')
+     for receiver in receivers:
+         if receiver.has_attribute(BUILTIN_ATTRIBUTE):
+             continue
+         if receiver.condition:
+-            result.append('#if %s' % receiver.condition)
++            result.append('#if %s\n' % receiver.condition)
+         previous_message_condition = None
+         for message in receiver.messages:
+             if not predicate(message):
+                 continue
+             if previous_message_condition != message.condition:
+                 if previous_message_condition:
+-                    result.append('#endif')
++                    result.append('#endif\n')
+                 if message.condition:
+-                    result.append('#if %s' % message.condition)
++                    result.append('#if %s\n' % message.condition)
+             previous_message_condition = message.condition
+-            result.append('    case MessageName::%s_%s:' % (receiver.name, message.name))
+-            result.append('        return %s<MessageName::%s_%s>(globalObject, decoder);' % (decoder_function_name, receiver.name, message.name))
++            result.append('    case MessageName::%s_%s:\n' % (receiver.name, message.name))
++            result.append('        return %s<MessageName::%s_%s>(globalObject, decoder);\n' % (decoder_function_name, receiver.name, message.name))
+         if previous_message_condition:
+-            result.append('#endif')
++            result.append('#endif\n')
+         if receiver.condition:
+-            result.append('#endif')
+-    result.append('    default:')
+-    result.append('        break;')
+-    result.append('    }')
+-    result.append('    return std::nullopt;')
+-    result.append('}')
++            result.append('#endif\n')
++    result.append('    default:\n')
++    result.append('        break;\n')
++    result.append('    }\n')
++    result.append('    return std::nullopt;\n')
++    result.append('}\n')
+ 
+ 
+ def generate_js_argument_descriptions(receivers, function_name, arguments_from_message):
+     result = []
+-    result.append('std::optional<Vector<ArgumentDescription>> %s(MessageName name)' % function_name)
+-    result.append('{')
+-    result.append('    switch (name) {')
++    result.append('std::optional<Vector<ArgumentDescription>> %s(MessageName name)\n' % function_name)
++    result.append('{\n')
++    result.append('    switch (name) {\n')
+     for receiver in receivers:
+         if receiver.has_attribute(BUILTIN_ATTRIBUTE):
+             continue
+         if receiver.condition:
+-            result.append('#if %s' % receiver.condition)
++            result.append('#if %s\n' % receiver.condition)
+         previous_message_condition = None
+         for message in receiver.messages:
+             if message.has_attribute(BUILTIN_ATTRIBUTE):
+@@ -1896,94 +1879,126 @@ def generate_js_argument_descriptions(receivers, function_name, arguments_from_m
+                 continue
+             if previous_message_condition != message.condition:
+                 if previous_message_condition:
+-                    result.append('#endif')
++                    result.append('#endif\n')
+                 if message.condition:
+-                    result.append('#if %s' % message.condition)
++                    result.append('#if %s\n' % message.condition)
+             previous_message_condition = message.condition
+-            result.append('    case MessageName::%s_%s:' % (receiver.name, message.name))
++            result.append('    case MessageName::%s_%s:\n' % (receiver.name, message.name))
+ 
+             if not len(argument_list):
+-                result.append('        return Vector<ArgumentDescription> { };')
++                result.append('        return Vector<ArgumentDescription> { };\n')
+                 continue
+ 
+-            result.append('        return Vector<ArgumentDescription> {')
++            result.append('        return Vector<ArgumentDescription> {\n')
+             for argument in argument_list:
+-                result.append('            { "%s"_s, "%s"_s },' % (argument.name, argument.type))
+-            result.append('        };')
++                result.append('            { "%s"_s, "%s"_s },\n' % (argument.name, argument.type))
++            result.append('        };\n')
+         if previous_message_condition:
+-            result.append('#endif')
++            result.append('#endif\n')
+         if receiver.condition:
+-            result.append('#endif')
+-    result.append('    default:')
+-    result.append('        break;')
+-    result.append('    }')
+-    result.append('    return std::nullopt;')
+-    result.append('}')
++            result.append('#endif\n')
++    result.append('    default:\n')
++    result.append('        break;\n')
++    result.append('    }\n')
++    result.append('    return std::nullopt;\n')
++    result.append('}\n')
+     return result
+ 
+ 
+-def header_and_condition_from_parameter(parameter, message, receiver):
+-    type = parameter.type
+-    if type.startswith('std::optional<') and type.endswith('>'):
+-        type = type[14: len(type) - 1]
+-    headers = []
+-    for header in headers_for_type(type, True):
+-        conditions = []
+-        if message.condition is not None:
+-            conditions.append(message.condition)
+-        if receiver.condition is not None:
+-            conditions.append(receiver.condition)
+-        headers.append((header, ' && '.join(conditions)))
+-    return headers
+-
+-
+ def generate_message_argument_description_implementation(receivers, receiver_headers):
+     result = []
+     result.append(_license_header)
+-    result.append('#include "config.h"')
+-    result.append('#include "MessageArgumentDescriptions.h"')
+-    result.append('')
+-    result.append('#include "JSIPCBinding.h"')
+-    result.append('#include "MessageNames.h"')
+-    result.append('')
+-    result.append('#if ENABLE(IPC_TESTING_API) || !LOG_DISABLED')
+-    result.append('')
+-    result.append('namespace IPC {')
+-    result.append('')
+-    result.append('#if ENABLE(IPC_TESTING_API)')
+-    result.append('')
++    result.append('#include "config.h"\n')
++    result.append('#include "MessageArgumentDescriptions.h"\n')
++    result.append('\n')
++    result.append('#if ENABLE(IPC_TESTING_API) || !LOG_DISABLED\n')
++    result.append('\n')
++    all_headers = ['"JSIPCBinding.h"']
++    for identifier in serialized_identifiers():
++        for header in headers_for_type(identifier):
++            all_headers.append(header)
++    all_headers = sorted(list(dict.fromkeys(all_headers)))
++    for header in all_headers:
++        conditions = conditions_for_header(header)
++        if conditions and None not in conditions:
++            result.append('#if %s\n' % ' || '.join(sorted(set(conditions))))
++            result.append('#include %s\n' % header)
++            result.append('#endif\n')
++        else:
++            result.append('#include %s\n' % header)
++
++    for receiver in receivers:
++        if receiver.has_attribute(BUILTIN_ATTRIBUTE):
++            continue
++        if receiver.condition:
++            result.append('#if %s\n' % receiver.condition)
++        header_conditions = {
++            '"%s"' % messages_header_filename(receiver): [None]
++        }
++        result += generate_header_includes_from_conditions(header_conditions)
++        if receiver.condition:
++            result.append('#endif\n')
++
++    result.append('\n')
++
++    result.append('namespace IPC {\n')
++    result.append('\n')
++    result.append('#if ENABLE(IPC_TESTING_API)\n')
++    result.append('\n')
+ 
+     generate_js_value_conversion_function(result, receivers, 'jsValueForArguments', 'jsValueForDecodedMessage', 'Arguments')
+ 
+-    result.append('')
++    result.append('\n')
+ 
+     generate_js_value_conversion_function(result, receivers, 'jsValueForReplyArguments', 'jsValueForDecodedMessageReply', 'ReplyArguments', lambda message: message.reply_parameters is not None)
+ 
+-    result.append('')
+-    result.append('Vector<ASCIILiteral> serializedIdentifiers()')
+-    result.append('{')
+-    result.append('    return {')
++    result.append('\n')
++    result.append('Vector<ASCIILiteral> serializedIdentifiers()\n')
++    result.append('{\n')
+ 
++    identifier_headers = {}
+     for identifier in serialized_identifiers():
+-        result.append('        "' + identifier + '"_s,')
++        assert(len(headers_for_type(identifier)) == 1)
++        identifier_headers[identifier] = headers_for_type(identifier)[0]
+ 
+-    result.append('    };')
+-    result.append('}')
++    for identifier in serialized_identifiers():
++        conditions = conditions_for_header(identifier_headers[identifier])
++        statement = '    static_assert(sizeof(uint64_t) == sizeof(' + identifier + '));\n'
++        if conditions and None not in conditions:
++            result.append('#if %s\n' % ' || '.join(sorted(set(conditions))))
++            result.append(statement)
++            result.append('#endif\n')
++        else:
++            result.append(statement)
+ 
+-    result.append('')
+-    result.append('#endif // ENABLE(IPC_TESTING_API)')
+-    result.append('')
++    result.append('    return {\n')
++
++    for identifier in serialized_identifiers():
++        conditions = conditions_for_header(identifier_headers[identifier])
++        statement = '        "' + identifier + '"_s,\n'
++        if conditions and None not in conditions:
++            result.append('#if %s\n' % ' || '.join(sorted(set(conditions))))
++            result.append(statement)
++            result.append('#endif\n')
++        else:
++            result.append(statement)
++
++    result.append('    };\n')
++    result.append('}\n')
++
++    result.append('\n')
++    result.append('#endif // ENABLE(IPC_TESTING_API)\n')
++    result.append('\n')
+ 
+     result += generate_js_argument_descriptions(receivers, 'messageArgumentDescriptions', lambda message: message.parameters)
+ 
+-    result.append('')
++    result.append('\n')
+ 
+     result += generate_js_argument_descriptions(receivers, 'messageReplyArgumentDescriptions', lambda message: message.reply_parameters)
+ 
+-    result.append('')
++    result.append('\n')
+ 
+-    result.append('} // namespace WebKit')
+-    result.append('')
+-    result.append('#endif // ENABLE(IPC_TESTING_API) || !LOG_DISABLED')
+-    result.append('')
+-    return '\n'.join(result)
++    result.append('} // namespace WebKit\n')
++    result.append('\n')
++    result.append('#endif // ENABLE(IPC_TESTING_API) || !LOG_DISABLED\n')
++    return ''.join(result)
+diff --git a/Source/WebKit/Scripts/webkit/tests/MessageArgumentDescriptions.cpp b/Source/WebKit/Scripts/webkit/tests/MessageArgumentDescriptions.cpp
+index 892d1596913d..2f77b7a10220 100644
+--- a/Source/WebKit/Scripts/webkit/tests/MessageArgumentDescriptions.cpp
++++ b/Source/WebKit/Scripts/webkit/tests/MessageArgumentDescriptions.cpp
+@@ -25,11 +25,171 @@
+ #include "config.h"
+ #include "MessageArgumentDescriptions.h"
+ 
+-#include "JSIPCBinding.h"
+-#include "MessageNames.h"
+-
+ #if ENABLE(IPC_TESTING_API) || !LOG_DISABLED
+ 
++#include "AudioMediaStreamTrackRendererInternalUnitIdentifier.h"
++#include "Connection.h"
++#include "ContentWorldShared.h"
++#include "DataTaskIdentifier.h"
++#include "DisplayLinkObserverID.h"
++#include "DownloadID.h"
++#include "DrawingAreaInfo.h"
++#include "GPUProcessConnectionIdentifier.h"
++#include "GeneratedSerializers.h"
++#include "GeolocationIdentifier.h"
++#include "GraphicsContextGLIdentifier.h"
++#include "IPCConnectionTesterIdentifier.h"
++#include "IPCStreamTesterIdentifier.h"
++#include "IdentifierTypes.h"
++#include "JSIPCBinding.h"
++#include "JavaScriptEvaluationResult.h"
++#include "LegacyCustomProtocolID.h"
++#include "LibWebRTCResolverIdentifier.h"
++#include "LogStreamIdentifier.h"
++#include "MarkSurfacesAsVolatileRequestIdentifier.h"
++#include "NetworkConnectionToWebProcess.h"
++#include "NetworkResourceLoadIdentifier.h"
++#include "PDFPluginIdentifier.h"
++#include "PlaybackSessionContextIdentifier.h"
++#include "QuotaIncreaseRequestIdentifier.h"
++#include "RemoteAudioDestinationIdentifier.h"
++#include "RemoteAudioHardwareListenerIdentifier.h"
++#if ENABLE(GPU_PROCESS) && ENABLE(ENCRYPTED_MEDIA)
++#include "RemoteCDMIdentifier.h"
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(ENCRYPTED_MEDIA)
++#include "RemoteCDMInstanceIdentifier.h"
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(ENCRYPTED_MEDIA)
++#include "RemoteCDMInstanceSessionIdentifier.h"
++#endif
++#include "RemoteDisplayListRecorderIdentifier.h"
++#include "RemoteImageBufferSetIdentifier.h"
++#if ENABLE(GPU_PROCESS) && ENABLE(LEGACY_ENCRYPTED_MEDIA)
++#include "RemoteLegacyCDMIdentifier.h"
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(LEGACY_ENCRYPTED_MEDIA)
++#include "RemoteLegacyCDMSessionIdentifier.h"
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(MEDIA_RECORDER)
++#include "RemoteMediaRecorderPrivateWriterIdentifier.h"
++#endif
++#include "RemoteMediaResourceIdentifier.h"
++#if ENABLE(GPU_PROCESS) && ENABLE(MEDIA_SOURCE)
++#include "RemoteMediaSourceIdentifier.h"
++#endif
++#include "RemoteRemoteCommandListenerIdentifier.h"
++#include "RemoteSerializedImageBufferIdentifier.h"
++#if ENABLE(GPU_PROCESS) && ENABLE(MEDIA_SOURCE)
++#include "RemoteSourceBufferIdentifier.h"
++#endif
++#include "RemoteVideoFrameIdentifier.h"
++#include "RenderingBackendIdentifier.h"
++#include "RenderingUpdateID.h"
++#include "RetrieveRecordResponseBodyCallbackIdentifier.h"
++#include "SampleBufferDisplayLayerIdentifier.h"
++#include "ScriptMessageHandlerIdentifier.h"
++#include "ShapeDetectionIdentifier.h"
++#include "StorageAreaIdentifier.h"
++#include "StorageAreaImplIdentifier.h"
++#include "StorageAreaMapIdentifier.h"
++#include "StorageNamespaceIdentifier.h"
++#include "UserContentControllerIdentifier.h"
++#include "UserScriptIdentifier.h"
++#include "UserStyleSheetIdentifier.h"
++#include "VideoDecoderIdentifier.h"
++#include "VideoEncoderIdentifier.h"
++#include "VisitedLinkTableIdentifier.h"
++#include "WebExtensionContextIdentifier.h"
++#include "WebExtensionControllerIdentifier.h"
++#include "WebExtensionFrameIdentifier.h"
++#include "WebExtensionPortChannelIdentifier.h"
++#include "WebExtensionTabIdentifier.h"
++#include "WebExtensionWindowIdentifier.h"
++#include "WebGPUIdentifier.h"
++#include "WebPageProxyIdentifier.h"
++#include "WebTransportSession.h"
++#include "WebURLSchemeHandlerIdentifier.h"
++#if PLATFORM(COCOA)
++#include <WebCore/AttributedString.h>
++#endif
++#include <WebCore/BackgroundFetchRecordIdentifier.h>
++#include <WebCore/DictationContext.h>
++#include <WebCore/ElementIdentifier.h>
++#include <WebCore/FetchIdentifier.h>
++#include <WebCore/FileSystemHandleIdentifier.h>
++#include <WebCore/FileSystemSyncAccessHandleIdentifier.h>
++#include <WebCore/FileSystemWritableFileStreamIdentifier.h>
++#include <WebCore/FrameIdentifier.h>
++#include <WebCore/GlobalWindowIdentifier.h>
++#include <WebCore/IDBDatabaseConnectionIdentifier.h>
++#include <WebCore/IDBIndexIdentifier.h>
++#include <WebCore/IDBObjectStoreIdentifier.h>
++#include <WebCore/IDBResourceIdentifier.h>
++#include <WebCore/ImageDecoderIdentifier.h>
++#include <WebCore/InbandGenericCueIdentifier.h>
++#include <WebCore/LayerHostingContextIdentifier.h>
++#include <WebCore/LibWebRTCSocketIdentifier.h>
++#include <WebCore/MediaKeySystemRequestIdentifier.h>
++#include <WebCore/MediaPlayerClientIdentifier.h>
++#include <WebCore/MediaPlayerIdentifier.h>
++#include <WebCore/MediaSessionIdentifier.h>
++#include <WebCore/MediaUniqueIdentifier.h>
++#include <WebCore/ModelPlayerIdentifier.h>
++#include <WebCore/NavigationIdentifier.h>
++#include <WebCore/PageIdentifier.h>
++#if ENABLE(WIRELESS_PLAYBACK_TARGET)
++#include <WebCore/PlaybackTargetClientContextIdentifier.h>
++#endif
++#include <WebCore/PortIdentifier.h>
++#include <WebCore/ProcessIdentifier.h>
++#include <WebCore/PushSubscriptionIdentifier.h>
++#include <WebCore/RTCDataChannelLocalIdentifier.h>
++#include <WebCore/RealtimeMediaSourceIdentifier.h>
++#include <WebCore/RenderingResourceIdentifier.h>
++#include <WebCore/ResourceLoaderIdentifier.h>
++#include <WebCore/SecurityOriginData.h>
++#include <WebCore/ServiceWorkerIdentifier.h>
++#include <WebCore/ServiceWorkerTypes.h>
++#include <WebCore/SharedWorkerIdentifier.h>
++#include <WebCore/SleepDisablerIdentifier.h>
++#include <WebCore/SnapshotIdentifier.h>
++#include <WebCore/SpeechRecognitionConnectionClientIdentifier.h>
++#include <WebCore/TextCheckingRequestIdentifier.h>
++#include <WebCore/TextManipulationItemIdentifier.h>
++#include <WebCore/TextManipulationToken.h>
++#include <WebCore/UserMediaRequestIdentifier.h>
++#include <WebCore/WebSocketIdentifier.h>
++#include "TestWithCVPixelBufferMessages.h" // NOLINT
++#include "TestWithDeferSendingOptionMessages.h" // NOLINT
++#include "TestWithDispatchedFromAndToMessages.h" // NOLINT
++#include "TestWithEnabledByMessages.h" // NOLINT
++#include "TestWithEnabledByAndConjunctionMessages.h" // NOLINT
++#include "TestWithEnabledByOrConjunctionMessages.h" // NOLINT
++#include "TestWithIfMessageMessages.h" // NOLINT
++#include "TestWithImageDataMessages.h" // NOLINT
++#if (ENABLE(WEBKIT2) && (NESTED_MASTER_CONDITION || MASTER_OR && MASTER_AND))
++#include "TestWithLegacyReceiverMessages.h" // NOLINT
++#endif
++#include "TestWithMultiLineExtendedAttributesMessages.h" // NOLINT
++#if (ENABLE(WEBKIT2) && (NESTED_MASTER_CONDITION || MASTER_OR && MASTER_AND))
++#include "TestWithoutAttributesMessages.h" // NOLINT
++#endif
++#include "TestWithoutUsingIPCConnectionMessages.h" // NOLINT
++#include "TestWithSemaphoreMessages.h" // NOLINT
++#include "TestWithSpanOfConstMessages.h" // NOLINT
++#include "TestWithStreamMessages.h" // NOLINT
++#include "TestWithStreamBatchedMessages.h" // NOLINT
++#include "TestWithStreamBufferMessages.h" // NOLINT
++#include "TestWithStreamServerConnectionHandleMessages.h" // NOLINT
++#include "TestWithSuperclassMessages.h" // NOLINT
++#include "TestWithSuperclassAndWantsAsyncDispatchMessages.h" // NOLINT
++#include "TestWithSuperclassAndWantsDispatchMessages.h" // NOLINT
++#include "TestWithValidatorMessages.h" // NOLINT
++#include "TestWithWantsAsyncDispatchMessages.h" // NOLINT
++#include "TestWithWantsDispatchMessages.h" // NOLINT
++#include "TestWithWantsDispatchNoSyncMessagesMessages.h" // NOLINT
++
+ namespace IPC {
+ 
+ #if ENABLE(IPC_TESTING_API)
+@@ -384,11 +544,168 @@ std::optional<JSC::JSValue> jsValueForReplyArguments(JSC::JSGlobalObject* global
+ 
+ Vector<ASCIILiteral> serializedIdentifiers()
+ {
++    static_assert(sizeof(uint64_t) == sizeof(IPC::AsyncReplyID));
++#if PLATFORM(COCOA)
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::AttributedStringTextListID));
++#endif
++#if PLATFORM(COCOA)
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::AttributedStringTextTableBlockID));
++#endif
++#if PLATFORM(COCOA)
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::AttributedStringTextTableID));
++#endif
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::BackForwardFrameItemIdentifierID));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::BackForwardItemIdentifierID));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::BackgroundFetchRecordIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::DOMCacheIdentifierID));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::DictationContext));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::ElementIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::FetchIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::FileSystemHandleIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::FileSystemSyncAccessHandleIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::FileSystemWritableFileStreamIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::FrameIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::IDBIndexIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::IDBObjectStoreIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::ImageDecoderIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::InbandGenericCueIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::LayerHostingContextIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::LibWebRTCSocketIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::MediaKeySystemRequestIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::MediaPlayerClientIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::MediaPlayerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::MediaSessionIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::ModelPlayerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::MediaUniqueIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::NavigationIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::OpaqueOriginIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::PageIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::PlatformLayerIdentifierID));
++#if ENABLE(WIRELESS_PLAYBACK_TARGET)
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::PlaybackTargetClientContextID));
++#endif
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::PortIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::ProcessIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::PushSubscriptionIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::RTCDataChannelLocalIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::RealtimeMediaSourceIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::RenderingResourceIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::ResourceLoaderIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::SWServerConnectionIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::ScrollingNodeIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::ServiceWorkerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::ServiceWorkerJobIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::ServiceWorkerRegistrationIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::SharedWorkerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::SharedWorkerObjectIdentifierID));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::SleepDisablerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::SnapshotIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::SpeechRecognitionConnectionClientIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::TextCheckingRequestIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::TextManipulationItemIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::TextManipulationTokenIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::IDBDatabaseConnectionIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::IDBResourceObjectIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::UserGestureTokenIdentifierID));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::UserMediaRequestIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::WebLockIdentifierID));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::WebSocketIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::WebTransportStreamIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebCore::WindowIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::AudioMediaStreamTrackRendererInternalUnitIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::AuthenticationChallengeIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::ContentWorldIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::DataTaskIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::DisplayLinkObserverID));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::DownloadID));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::DrawingAreaIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::GeolocationIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::GPUProcessConnectionIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::GraphicsContextGLIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::IPCConnectionTesterIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::IPCStreamTesterIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::JSObjectID));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::LegacyCustomProtocolID));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::LibWebRTCResolverIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::LogStreamIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::MarkSurfacesAsVolatileRequestIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::MessageBatchIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::NetworkResourceLoadIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::PDFPluginIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::PageGroupIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::PlaybackSessionContextIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::QuotaIncreaseRequestIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteAudioDestinationIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteAudioHardwareListenerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteImageBufferSetIdentifier));
++#if ENABLE(GPU_PROCESS) && ENABLE(ENCRYPTED_MEDIA)
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteCDMIdentifier));
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(ENCRYPTED_MEDIA)
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteCDMInstanceIdentifier));
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(ENCRYPTED_MEDIA)
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteCDMInstanceSessionIdentifier));
++#endif
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteDisplayListRecorderIdentifier));
++#if ENABLE(GPU_PROCESS) && ENABLE(LEGACY_ENCRYPTED_MEDIA)
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteLegacyCDMIdentifier));
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(LEGACY_ENCRYPTED_MEDIA)
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteLegacyCDMSessionIdentifier));
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(MEDIA_RECORDER)
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteMediaRecorderPrivateWriterIdentifier));
++#endif
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteMediaResourceIdentifier));
++#if ENABLE(GPU_PROCESS) && ENABLE(MEDIA_SOURCE)
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteMediaSourceIdentifier));
++#endif
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteRemoteCommandListenerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteSerializedImageBufferIdentifier));
++#if ENABLE(GPU_PROCESS) && ENABLE(MEDIA_SOURCE)
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteSourceBufferIdentifier));
++#endif
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RemoteVideoFrameIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RenderingBackendIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RenderingUpdateID));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::RetrieveRecordResponseBodyCallbackIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::SampleBufferDisplayLayerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::ScriptMessageHandlerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::ShapeDetectionIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::StorageAreaIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::StorageAreaImplIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::StorageAreaMapIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::StorageNamespaceIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::TapIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::TextCheckerRequestID));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::UserContentControllerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::UserScriptIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::UserStyleSheetIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::VideoDecoderIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::VideoEncoderIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::VisitedLinkTableIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebExtensionContextIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebExtensionControllerIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebExtensionFrameIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebExtensionPortChannelIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebExtensionTabIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebExtensionWindowIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebGPUIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebPageProxyIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebTransportSessionIdentifier));
++    static_assert(sizeof(uint64_t) == sizeof(WebKit::WebURLSchemeHandlerIdentifier));
+     return {
+         "IPC::AsyncReplyID"_s,
++#if PLATFORM(COCOA)
+         "WebCore::AttributedStringTextListID"_s,
++#endif
++#if PLATFORM(COCOA)
+         "WebCore::AttributedStringTextTableBlockID"_s,
++#endif
++#if PLATFORM(COCOA)
+         "WebCore::AttributedStringTextTableID"_s,
++#endif
+         "WebCore::BackForwardFrameItemIdentifierID"_s,
+         "WebCore::BackForwardItemIdentifierID"_s,
+         "WebCore::BackgroundFetchRecordIdentifier"_s,
+@@ -416,7 +733,9 @@ Vector<ASCIILiteral> serializedIdentifiers()
+         "WebCore::OpaqueOriginIdentifier"_s,
+         "WebCore::PageIdentifier"_s,
+         "WebCore::PlatformLayerIdentifierID"_s,
++#if ENABLE(WIRELESS_PLAYBACK_TARGET)
+         "WebCore::PlaybackTargetClientContextID"_s,
++#endif
+         "WebCore::PortIdentifier"_s,
+         "WebCore::ProcessIdentifier"_s,
+         "WebCore::PushSubscriptionIdentifier"_s,
+@@ -471,18 +790,34 @@ Vector<ASCIILiteral> serializedIdentifiers()
+         "WebKit::RemoteAudioDestinationIdentifier"_s,
+         "WebKit::RemoteAudioHardwareListenerIdentifier"_s,
+         "WebKit::RemoteImageBufferSetIdentifier"_s,
++#if ENABLE(GPU_PROCESS) && ENABLE(ENCRYPTED_MEDIA)
+         "WebKit::RemoteCDMIdentifier"_s,
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(ENCRYPTED_MEDIA)
+         "WebKit::RemoteCDMInstanceIdentifier"_s,
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(ENCRYPTED_MEDIA)
+         "WebKit::RemoteCDMInstanceSessionIdentifier"_s,
++#endif
+         "WebKit::RemoteDisplayListRecorderIdentifier"_s,
++#if ENABLE(GPU_PROCESS) && ENABLE(LEGACY_ENCRYPTED_MEDIA)
+         "WebKit::RemoteLegacyCDMIdentifier"_s,
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(LEGACY_ENCRYPTED_MEDIA)
+         "WebKit::RemoteLegacyCDMSessionIdentifier"_s,
++#endif
++#if ENABLE(GPU_PROCESS) && ENABLE(MEDIA_RECORDER)
+         "WebKit::RemoteMediaRecorderPrivateWriterIdentifier"_s,
++#endif
+         "WebKit::RemoteMediaResourceIdentifier"_s,
++#if ENABLE(GPU_PROCESS) && ENABLE(MEDIA_SOURCE)
+         "WebKit::RemoteMediaSourceIdentifier"_s,
++#endif
+         "WebKit::RemoteRemoteCommandListenerIdentifier"_s,
+         "WebKit::RemoteSerializedImageBufferIdentifier"_s,
++#if ENABLE(GPU_PROCESS) && ENABLE(MEDIA_SOURCE)
+         "WebKit::RemoteSourceBufferIdentifier"_s,
++#endif
+         "WebKit::RemoteVideoFrameIdentifier"_s,
+         "WebKit::RenderingBackendIdentifier"_s,
+         "WebKit::RenderingUpdateID"_s,
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithCVPixelBufferMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithCVPixelBufferMessages.h
+index 1f43fe3f5fee..c9f6a29ba70a 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithCVPixelBufferMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithCVPixelBufferMessages.h
+@@ -56,18 +56,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit SendCVPixelBuffer(const RetainPtr<CVPixelBufferRef>& s0)
+-        : m_s0(s0)
++        : m_arguments(s0)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_s0;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const RetainPtr<CVPixelBufferRef>& m_s0;
++    std::tuple<const RetainPtr<CVPixelBufferRef>&> m_arguments;
+ };
+ #endif
+ 
+@@ -87,16 +86,13 @@ public:
+     using ReplyArguments = std::tuple<RetainPtr<CVPixelBufferRef>>;
+     using Reply = CompletionHandler<void(RetainPtr<CVPixelBufferRef>&&)>;
+     using Promise = WTF::NativePromise<RetainPtr<CVPixelBufferRef>, IPC::Error>;
+-    ReceiveCVPixelBuffer()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ #endif
+ 
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithDeferSendingOptionMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithDeferSendingOptionMessages.h
+index ba8a116a4f46..bd6d3c1cc751 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithDeferSendingOptionMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithDeferSendingOptionMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit NoOptions(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class NoIndices {
+@@ -77,22 +76,22 @@ public:
+     static constexpr bool deferSendingIfSuspended = true;
+ 
+     explicit NoIndices(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
++    // Not valid to call this after arguments() is called.
+     void encodeCoalescingKey(IPC::Encoder&) const
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class OneIndex {
+@@ -106,23 +105,23 @@ public:
+     static constexpr bool deferSendingIfSuspended = true;
+ 
+     explicit OneIndex(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
++    // Not valid to call this after arguments() is called.
+     void encodeCoalescingKey(IPC::Encoder& encoder) const
+     {
+-        encoder << m_url;
++        encoder << std::get<0>(m_arguments);
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class MultipleIndices {
+@@ -136,34 +135,23 @@ public:
+     static constexpr bool deferSendingIfSuspended = true;
+ 
+     MultipleIndices(const String& url, const int& foo, const int& bar, const int& baz)
+-        : m_url(url)
+-        , m_foo(foo)
+-        , m_bar(bar)
+-        , m_baz(baz)
++        : m_arguments(url, foo, bar, baz)
+     {
+     }
+ 
++    // Not valid to call this after arguments() is called.
+     void encodeCoalescingKey(IPC::Encoder& encoder) const
+     {
+-        encoder << m_bar;
+-        encoder << m_url;
+-        encoder << m_foo;
++        encoder << std::get<2>(m_arguments) << std::get<0>(m_arguments) << std::get<1>(m_arguments);
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
+-        encoder << m_foo;
+-        encoder << m_bar;
+-        encoder << m_baz;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
+-    const int& m_foo;
+-    const int& m_bar;
+-    const int& m_baz;
++    std::tuple<const String&, const int&, const int&, const int&> m_arguments;
+ };
+ 
+ } // namespace TestWithDeferSendingOption
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithDispatchedFromAndToMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithDispatchedFromAndToMessages.h
+index 96cb30ec70be..89a4c756ee36 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithDispatchedFromAndToMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithDispatchedFromAndToMessages.h
+@@ -61,19 +61,18 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit AlwaysEnabled(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+         ASSERT(isInWebProcess());
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ } // namespace TestWithDispatchedFromAndTo
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByAndConjunctionMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByAndConjunctionMessages.h
+index 5947caa52273..a226c228a55c 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByAndConjunctionMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByAndConjunctionMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit AlwaysEnabled(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ } // namespace TestWithEnabledByAndConjunction
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByMessages.h
+index 345b7f7c7dca..1ec787f00a28 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit AlwaysEnabled(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class ConditionallyEnabled {
+@@ -77,18 +76,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit ConditionallyEnabled(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class ConditionallyEnabledAnd {
+@@ -101,16 +99,13 @@ public:
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+-    ConditionallyEnabledAnd()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ class ConditionallyEnabledOr {
+@@ -123,16 +118,13 @@ public:
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+-    ConditionallyEnabledOr()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ } // namespace TestWithEnabledBy
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByOrConjunctionMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByOrConjunctionMessages.h
+index 78b386d59b2a..6fb6063090ed 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByOrConjunctionMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithEnabledByOrConjunctionMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit AlwaysEnabled(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ } // namespace TestWithEnabledByOrConjunction
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithIfMessageMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithIfMessageMessages.h
+index 9267b68abfd2..6364cce824ca 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithIfMessageMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithIfMessageMessages.h
+@@ -53,18 +53,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadURL(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ #endif
+ 
+@@ -80,21 +79,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     LoadURL(const String& url, int64_t value)
+-        : m_url(url)
+-        , m_value(value)
++        : m_arguments(url, value)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
+-        encoder << m_value;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
+-    int64_t m_value;
++    std::tuple<const String&, int64_t> m_arguments;
+ };
+ #endif
+ 
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithImageDataMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithImageDataMessages.h
+index a387171544c6..376b39fc5452 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithImageDataMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithImageDataMessages.h
+@@ -27,6 +27,7 @@
+ #include "ArgumentCoders.h"
+ #include "Connection.h"
+ #include "MessageNames.h"
++#include <WebCore/ImageData.h>
+ #include <wtf/Forward.h>
+ #include <wtf/RefCounted.h>
+ #include <wtf/RuntimeApplicationChecks.h>
+@@ -52,18 +53,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit SendImageData(const RefPtr<WebCore::ImageData>& s0)
+-        : m_s0(s0)
++        : m_arguments(s0)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_s0;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const RefPtr<WebCore::ImageData>& m_s0;
++    std::tuple<const RefPtr<WebCore::ImageData>&> m_arguments;
+ };
+ 
+ class ReceiveImageData {
+@@ -81,16 +81,13 @@ public:
+     using ReplyArguments = std::tuple<RefPtr<WebCore::ImageData>>;
+     using Reply = CompletionHandler<void(RefPtr<WebCore::ImageData>&&)>;
+     using Promise = WTF::NativePromise<RefPtr<WebCore::ImageData>, IPC::Error>;
+-    ReceiveImageData()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ } // namespace TestWithImageData
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithLegacyReceiverMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithLegacyReceiverMessages.h
+index bba3c6099e57..1aad51dd24ad 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithLegacyReceiverMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithLegacyReceiverMessages.h
+@@ -32,6 +32,7 @@
+ #include "GestureTypes.h"
+ #endif
+ #include "MessageNames.h"
++#include "Plugin.h"
+ #include <WebCore/KeyboardEvent.h>
+ #include <WebCore/PlatformLayerIdentifier.h>
+ #include <WebCore/PluginData.h>
+@@ -73,18 +74,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadURL(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ #if ENABLE(TOUCH_EVENTS)
+@@ -99,18 +99,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadSomething(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ #endif
+ 
+@@ -126,18 +125,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit TouchEvent(const WebKit::WebTouchEvent& event)
+-        : m_event(event)
++        : m_arguments(event)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_event;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const WebKit::WebTouchEvent& m_event;
++    std::tuple<const WebKit::WebTouchEvent&> m_arguments;
+ };
+ #endif
+ 
+@@ -153,18 +151,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit AddEvent(const WebKit::WebTouchEvent& event)
+-        : m_event(event)
++        : m_arguments(event)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_event;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const WebKit::WebTouchEvent& m_event;
++    std::tuple<const WebKit::WebTouchEvent&> m_arguments;
+ };
+ #endif
+ 
+@@ -180,18 +177,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadSomethingElse(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ #endif
+ 
+@@ -206,24 +202,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     DidReceivePolicyDecision(uint64_t frameID, uint64_t listenerID, uint32_t policyAction)
+-        : m_frameID(frameID)
+-        , m_listenerID(listenerID)
+-        , m_policyAction(policyAction)
++        : m_arguments(frameID, listenerID, policyAction)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_frameID;
+-        encoder << m_listenerID;
+-        encoder << m_policyAction;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint64_t m_frameID;
+-    uint64_t m_listenerID;
+-    uint32_t m_policyAction;
++    std::tuple<uint64_t, uint64_t, uint32_t> m_arguments;
+ };
+ 
+ class Close {
+@@ -236,16 +225,13 @@ public:
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+-    Close()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ class PreferencesDidChange {
+@@ -259,18 +245,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit PreferencesDidChange(const WebKit::WebPreferencesStore& store)
+-        : m_store(store)
++        : m_arguments(store)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_store;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const WebKit::WebPreferencesStore& m_store;
++    std::tuple<const WebKit::WebPreferencesStore&> m_arguments;
+ };
+ 
+ class SendDoubleAndFloat {
+@@ -284,21 +269,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     SendDoubleAndFloat(double d, float f)
+-        : m_d(d)
+-        , m_f(f)
++        : m_arguments(d, f)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_d;
+-        encoder << m_f;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    double m_d;
+-    float m_f;
++    std::tuple<double, float> m_arguments;
+ };
+ 
+ class SendInts {
+@@ -312,21 +293,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     SendInts(const Vector<uint64_t>& ints, const Vector<Vector<uint64_t>>& intVectors)
+-        : m_ints(ints)
+-        , m_intVectors(intVectors)
++        : m_arguments(ints, intVectors)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_ints;
+-        encoder << m_intVectors;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const Vector<uint64_t>& m_ints;
+-    const Vector<Vector<uint64_t>>& m_intVectors;
++    std::tuple<const Vector<uint64_t>&, const Vector<Vector<uint64_t>>&> m_arguments;
+ };
+ 
+ class CreatePlugin {
+@@ -345,21 +322,17 @@ public:
+     using Reply = CompletionHandler<void(bool)>;
+     using Promise = WTF::NativePromise<bool, IPC::Error>;
+     CreatePlugin(uint64_t pluginInstanceID, const WebKit::Plugin::Parameters& parameters)
+-        : m_pluginInstanceID(pluginInstanceID)
+-        , m_parameters(parameters)
++        : m_arguments(pluginInstanceID, parameters)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_pluginInstanceID;
+-        encoder << m_parameters;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint64_t m_pluginInstanceID;
+-    const WebKit::Plugin::Parameters& m_parameters;
++    std::tuple<uint64_t, const WebKit::Plugin::Parameters&> m_arguments;
+ };
+ 
+ class RunJavaScriptAlert {
+@@ -378,21 +351,17 @@ public:
+     using Reply = CompletionHandler<void()>;
+     using Promise = WTF::NativePromise<void, IPC::Error>;
+     RunJavaScriptAlert(uint64_t frameID, const String& message)
+-        : m_frameID(frameID)
+-        , m_message(message)
++        : m_arguments(frameID, message)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_frameID;
+-        encoder << m_message;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint64_t m_frameID;
+-    const String& m_message;
++    std::tuple<uint64_t, const String&> m_arguments;
+ };
+ 
+ class GetPlugins {
+@@ -411,18 +380,17 @@ public:
+     using Reply = CompletionHandler<void(Vector<WebCore::PluginInfo>&&)>;
+     using Promise = WTF::NativePromise<Vector<WebCore::PluginInfo>, IPC::Error>;
+     explicit GetPlugins(bool refresh)
+-        : m_refresh(refresh)
++        : m_arguments(refresh)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_refresh;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    bool m_refresh;
++    std::tuple<bool> m_arguments;
+ };
+ 
+ class GetPluginProcessConnection {
+@@ -439,18 +407,17 @@ public:
+     using ReplyArguments = std::tuple<IPC::Connection::Handle>;
+     using Reply = CompletionHandler<void(IPC::Connection::Handle&&)>;
+     explicit GetPluginProcessConnection(const String& pluginPath)
+-        : m_pluginPath(pluginPath)
++        : m_arguments(pluginPath)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_pluginPath;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_pluginPath;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class TestMultipleAttributes {
+@@ -466,16 +433,13 @@ public:
+     static constexpr auto callbackThread = WTF::CompletionHandlerCallThread::ConstructionThread;
+     using ReplyArguments = std::tuple<>;
+     using Reply = CompletionHandler<void()>;
+-    TestMultipleAttributes()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ class TestParameterAttributes {
+@@ -489,24 +453,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     TestParameterAttributes(uint64_t foo, double bar, double baz)
+-        : m_foo(foo)
+-        , m_bar(bar)
+-        , m_baz(baz)
++        : m_arguments(foo, bar, baz)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_foo;
+-        encoder << m_bar;
+-        encoder << m_baz;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint64_t m_foo;
+-    double m_bar;
+-    double m_baz;
++    std::tuple<uint64_t, double, double> m_arguments;
+ };
+ 
+ class TemplateTest {
+@@ -520,18 +477,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit TemplateTest(const HashMap<String, std::pair<String, uint64_t>>& a)
+-        : m_a(a)
++        : m_arguments(a)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_a;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const HashMap<String, std::pair<String, uint64_t>>& m_a;
++    std::tuple<const HashMap<String, std::pair<String, uint64_t>>&> m_arguments;
+ };
+ 
+ class SetVideoLayerID {
+@@ -545,18 +501,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit SetVideoLayerID(const WebCore::PlatformLayerIdentifier& videoLayerID)
+-        : m_videoLayerID(videoLayerID)
++        : m_arguments(videoLayerID)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_videoLayerID;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const WebCore::PlatformLayerIdentifier& m_videoLayerID;
++    std::tuple<const WebCore::PlatformLayerIdentifier&> m_arguments;
+ };
+ 
+ #if PLATFORM(MAC)
+@@ -571,21 +526,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     DidCreateWebProcessConnection(MachSendRight&& connectionIdentifier, const OptionSet<WebKit::SelectionFlags>& flags)
+-        : m_connectionIdentifier(WTFMove(connectionIdentifier))
+-        , m_flags(flags)
++        : m_arguments(WTFMove(connectionIdentifier), flags)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << WTFMove(m_connectionIdentifier);
+-        encoder << m_flags;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    MachSendRight&& m_connectionIdentifier;
+-    const OptionSet<WebKit::SelectionFlags>& m_flags;
++    std::tuple<MachSendRight&&, const OptionSet<WebKit::SelectionFlags>&> m_arguments;
+ };
+ #endif
+ 
+@@ -606,18 +557,17 @@ public:
+     using Reply = CompletionHandler<void(Vector<WebCore::KeypressCommand>&&)>;
+     using Promise = WTF::NativePromise<Vector<WebCore::KeypressCommand>, IPC::Error>;
+     explicit InterpretKeyEvent(uint32_t type)
+-        : m_type(type)
++        : m_arguments(type)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_type;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint32_t m_type;
++    std::tuple<uint32_t> m_arguments;
+ };
+ #endif
+ 
+@@ -633,18 +583,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit DeprecatedOperation(const IPC::DummyType& dummy)
+-        : m_dummy(dummy)
++        : m_arguments(dummy)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_dummy;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const IPC::DummyType& m_dummy;
++    std::tuple<const IPC::DummyType&> m_arguments;
+ };
+ #endif
+ 
+@@ -660,18 +609,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit ExperimentalOperation(const IPC::DummyType& dummy)
+-        : m_dummy(dummy)
++        : m_arguments(dummy)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_dummy;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const IPC::DummyType& m_dummy;
++    std::tuple<const IPC::DummyType&> m_arguments;
+ };
+ #endif
+ 
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithMultiLineExtendedAttributesMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithMultiLineExtendedAttributesMessages.h
+index a7b8559b8024..113f2a9e9fef 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithMultiLineExtendedAttributesMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithMultiLineExtendedAttributesMessages.h
+@@ -61,19 +61,18 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit AlwaysEnabled(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+         ASSERT(isInGPUProcess());
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ } // namespace TestWithMultiLineExtendedAttributes
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithSemaphoreMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithSemaphoreMessages.h
+index 2ab0a11a2945..f23fa202632b 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithSemaphoreMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithSemaphoreMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit SendSemaphore(const IPC::Semaphore& s0)
+-        : m_s0(s0)
++        : m_arguments(s0)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_s0;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const IPC::Semaphore& m_s0;
++    std::tuple<const IPC::Semaphore&> m_arguments;
+ };
+ 
+ class ReceiveSemaphore {
+@@ -81,16 +80,13 @@ public:
+     using ReplyArguments = std::tuple<IPC::Semaphore>;
+     using Reply = CompletionHandler<void(IPC::Semaphore&&)>;
+     using Promise = WTF::NativePromise<IPC::Semaphore, IPC::Error>;
+-    ReceiveSemaphore()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ } // namespace TestWithSemaphore
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithSpanOfConstMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithSpanOfConstMessages.h
+index 9e819f07a93e..73bf3c9fee74 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithSpanOfConstMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithSpanOfConstMessages.h
+@@ -27,6 +27,7 @@
+ #include "ArgumentCoders.h"
+ #include "Connection.h"
+ #include "MessageNames.h"
++#include <WebCore/FloatSegment.h>
+ #include <span>
+ #include <wtf/Forward.h>
+ #include <wtf/RuntimeApplicationChecks.h>
+@@ -52,18 +53,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit TestSpanOfConstFloat(const std::span<const float>& floats)
+-        : m_floats(floats)
++        : m_arguments(floats)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_floats;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const std::span<const float>& m_floats;
++    std::tuple<const std::span<const float>&> m_arguments;
+ };
+ 
+ class TestSpanOfConstFloatSegments {
+@@ -77,18 +77,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit TestSpanOfConstFloatSegments(const std::span<const WebCore::FloatSegment>& floatSegments)
+-        : m_floatSegments(floatSegments)
++        : m_arguments(floatSegments)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_floatSegments;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const std::span<const WebCore::FloatSegment>& m_floatSegments;
++    std::tuple<const std::span<const WebCore::FloatSegment>&> m_arguments;
+ };
+ 
+ } // namespace TestWithSpanOfConst
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithStreamBatchedMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithStreamBatchedMessages.h
+index f2f008109da9..13ed4dc3b37f 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithStreamBatchedMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithStreamBatchedMessages.h
+@@ -54,18 +54,17 @@ public:
+     static constexpr bool isStreamBatched = true;
+ 
+     explicit SendString(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ } // namespace TestWithStreamBatched
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithStreamBufferMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithStreamBufferMessages.h
+index 93ebbe6b5947..5e6d19f0e6b8 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithStreamBufferMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithStreamBufferMessages.h
+@@ -54,18 +54,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit SendStreamBuffer(const IPC::StreamConnectionBuffer& stream)
+-        : m_stream(stream)
++        : m_arguments(stream)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_stream;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const IPC::StreamConnectionBuffer& m_stream;
++    std::tuple<const IPC::StreamConnectionBuffer&> m_arguments;
+ };
+ 
+ } // namespace TestWithStreamBuffer
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithStreamMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithStreamMessages.h
+index 6a77b9c9ac1f..2e25ae54d9e3 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithStreamMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithStreamMessages.h
+@@ -55,18 +55,17 @@ public:
+     static constexpr bool isStreamBatched = false;
+ 
+     explicit SendString(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class SendStringAsync {
+@@ -88,18 +87,17 @@ public:
+     using Reply = CompletionHandler<void(int64_t)>;
+     using Promise = WTF::NativePromise<int64_t, IPC::Error>;
+     explicit SendStringAsync(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class SendStringSync {
+@@ -119,18 +117,17 @@ public:
+     using ReplyArguments = std::tuple<int64_t>;
+     using Reply = CompletionHandler<void(int64_t)>;
+     explicit SendStringSync(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class CallWithIdentifier {
+@@ -151,16 +148,13 @@ public:
+     using ReplyArguments = std::tuple<>;
+     using Reply = CompletionHandler<void()>;
+     using Promise = WTF::NativePromise<void, IPC::Error>;
+-    CallWithIdentifier()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ #if PLATFORM(COCOA)
+@@ -177,18 +171,17 @@ public:
+     static constexpr bool isStreamBatched = false;
+ 
+     explicit SendMachSendRight(MachSendRight&& a1)
+-        : m_a1(WTFMove(a1))
++        : m_arguments(WTFMove(a1))
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << WTFMove(m_a1);
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    MachSendRight&& m_a1;
++    std::tuple<MachSendRight&&> m_arguments;
+ };
+ #endif
+ 
+@@ -209,16 +202,13 @@ public:
+     static constexpr auto callbackThread = WTF::CompletionHandlerCallThread::ConstructionThread;
+     using ReplyArguments = std::tuple<MachSendRight>;
+     using Reply = CompletionHandler<void(MachSendRight&&)>;
+-    ReceiveMachSendRight()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ #endif
+ 
+@@ -240,18 +230,17 @@ public:
+     using ReplyArguments = std::tuple<MachSendRight>;
+     using Reply = CompletionHandler<void(MachSendRight&&)>;
+     explicit SendAndReceiveMachSendRight(MachSendRight&& a1)
+-        : m_a1(WTFMove(a1))
++        : m_arguments(WTFMove(a1))
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << WTFMove(m_a1);
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    MachSendRight&& m_a1;
++    std::tuple<MachSendRight&&> m_arguments;
+ };
+ #endif
+ 
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithStreamServerConnectionHandleMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithStreamServerConnectionHandleMessages.h
+index 275a8498b3b3..2d2a4691ac7d 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithStreamServerConnectionHandleMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithStreamServerConnectionHandleMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit SendStreamServerConnection(IPC::StreamServerConnectionHandle&& handle)
+-        : m_handle(WTFMove(handle))
++        : m_arguments(WTFMove(handle))
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << WTFMove(m_handle);
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    IPC::StreamServerConnectionHandle&& m_handle;
++    std::tuple<IPC::StreamServerConnectionHandle&&> m_arguments;
+ };
+ 
+ } // namespace TestWithStreamServerConnectionHandle
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassAndWantsAsyncDispatchMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassAndWantsAsyncDispatchMessages.h
+index f407b723cf5c..d4c883802c85 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassAndWantsAsyncDispatchMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassAndWantsAsyncDispatchMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadURL(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class TestSyncMessage {
+@@ -80,18 +79,17 @@ public:
+     using ReplyArguments = std::tuple<uint8_t>;
+     using Reply = CompletionHandler<void(uint8_t)>;
+     explicit TestSyncMessage(uint32_t param)
+-        : m_param(param)
++        : m_arguments(param)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_param;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint32_t m_param;
++    std::tuple<uint32_t> m_arguments;
+ };
+ 
+ } // namespace TestWithSuperclassAndWantsAsyncDispatch
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassAndWantsDispatchMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassAndWantsDispatchMessages.h
+index 72973f0dd3ba..da852eb29e9f 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassAndWantsDispatchMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassAndWantsDispatchMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadURL(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class TestSyncMessage {
+@@ -80,18 +79,17 @@ public:
+     using ReplyArguments = std::tuple<uint8_t>;
+     using Reply = CompletionHandler<void(uint8_t)>;
+     explicit TestSyncMessage(uint32_t param)
+-        : m_param(param)
++        : m_arguments(param)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_param;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint32_t m_param;
++    std::tuple<uint32_t> m_arguments;
+ };
+ 
+ } // namespace TestWithSuperclassAndWantsDispatch
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassMessages.h
+index 008898daaf2c..ec0277f03c54 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithSuperclassMessages.h
+@@ -27,13 +27,14 @@
+ #include "ArgumentCoders.h"
+ #include "Connection.h"
+ #include "MessageNames.h"
++#include "TestClassName.h"
++#include <optional>
+ #include <wtf/Forward.h>
+ #include <wtf/RuntimeApplicationChecks.h>
+ #include <wtf/ThreadSafeRefCounted.h>
+ #include <wtf/text/WTFString.h>
+ 
+ namespace WebKit {
+-class TestClassName;
+ enum class TestTwoStateEnum : bool;
+ }
+ 
+@@ -56,18 +57,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadURL(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ #if ENABLE(TEST_FEATURE)
+@@ -87,18 +87,17 @@ public:
+     using Reply = CompletionHandler<void(uint64_t)>;
+     using Promise = WTF::NativePromise<uint64_t, IPC::Error>;
+     explicit TestAsyncMessage(WebKit::TestTwoStateEnum twoStateEnum)
+-        : m_twoStateEnum(twoStateEnum)
++        : m_arguments(twoStateEnum)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_twoStateEnum;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    WebKit::TestTwoStateEnum m_twoStateEnum;
++    std::tuple<WebKit::TestTwoStateEnum> m_arguments;
+ };
+ #endif
+ 
+@@ -118,16 +117,13 @@ public:
+     using ReplyArguments = std::tuple<>;
+     using Reply = CompletionHandler<void()>;
+     using Promise = WTF::NativePromise<void, IPC::Error>;
+-    TestAsyncMessageWithNoArguments()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ #endif
+ 
+@@ -147,16 +143,13 @@ public:
+     using ReplyArguments = std::tuple<bool, uint64_t>;
+     using Reply = CompletionHandler<void(bool, uint64_t)>;
+     using Promise = WTF::NativePromise<std::tuple<bool, uint64_t>, IPC::Error>;
+-    TestAsyncMessageWithMultipleArguments()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ #endif
+ 
+@@ -177,18 +170,17 @@ public:
+     using Reply = CompletionHandler<void(bool)>;
+     using Promise = WTF::NativePromise<bool, IPC::Error>;
+     explicit TestAsyncMessageWithConnection(const int& value)
+-        : m_value(value)
++        : m_arguments(value)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_value;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const int& m_value;
++    std::tuple<const int&> m_arguments;
+ };
+ #endif
+ 
+@@ -206,18 +198,17 @@ public:
+     using ReplyArguments = std::tuple<uint8_t>;
+     using Reply = CompletionHandler<void(uint8_t)>;
+     explicit TestSyncMessage(uint32_t param)
+-        : m_param(param)
++        : m_arguments(param)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_param;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint32_t m_param;
++    std::tuple<uint32_t> m_arguments;
+ };
+ 
+ class TestSynchronousMessage {
+@@ -234,18 +225,17 @@ public:
+     using ReplyArguments = std::tuple<std::optional<WebKit::TestClassName>>;
+     using Reply = CompletionHandler<void(std::optional<WebKit::TestClassName>&&)>;
+     explicit TestSynchronousMessage(bool value)
+-        : m_value(value)
++        : m_arguments(value)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_value;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    bool m_value;
++    std::tuple<bool> m_arguments;
+ };
+ 
+ } // namespace TestWithSuperclass
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithValidatorMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithValidatorMessages.h
+index 4669292b75d1..051f06d31222 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithValidatorMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithValidatorMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit AlwaysEnabled(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class EnabledIfPassValidation {
+@@ -77,18 +76,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit EnabledIfPassValidation(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class EnabledIfSomeFeatureEnabledAndPassValidation {
+@@ -102,18 +100,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit EnabledIfSomeFeatureEnabledAndPassValidation(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class MessageWithReply {
+@@ -132,18 +129,17 @@ public:
+     using Reply = CompletionHandler<void(String&&, double)>;
+     using Promise = WTF::NativePromise<std::tuple<String, double>, IPC::Error>;
+     explicit MessageWithReply(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ } // namespace TestWithValidator
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithWantsAsyncDispatchMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithWantsAsyncDispatchMessages.h
+index 9266fba2b7d2..1d38fff5d20b 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithWantsAsyncDispatchMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithWantsAsyncDispatchMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit TestMessage(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class TestSyncMessage {
+@@ -80,18 +79,17 @@ public:
+     using ReplyArguments = std::tuple<uint8_t>;
+     using Reply = CompletionHandler<void(uint8_t)>;
+     explicit TestSyncMessage(uint32_t param)
+-        : m_param(param)
++        : m_arguments(param)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_param;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint32_t m_param;
++    std::tuple<uint32_t> m_arguments;
+ };
+ 
+ } // namespace TestWithWantsAsyncDispatch
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithWantsDispatchMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithWantsDispatchMessages.h
+index 1138d33f073e..324d3e501c45 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithWantsDispatchMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithWantsDispatchMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit TestMessage(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class TestSyncMessage {
+@@ -80,18 +79,17 @@ public:
+     using ReplyArguments = std::tuple<uint8_t>;
+     using Reply = CompletionHandler<void(uint8_t)>;
+     explicit TestSyncMessage(uint32_t param)
+-        : m_param(param)
++        : m_arguments(param)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_param;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint32_t m_param;
++    std::tuple<uint32_t> m_arguments;
+ };
+ 
+ } // namespace TestWithWantsDispatch
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithWantsDispatchNoSyncMessagesMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithWantsDispatchNoSyncMessagesMessages.h
+index 4b691f3075bd..570eebbb5b84 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithWantsDispatchNoSyncMessagesMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithWantsDispatchNoSyncMessagesMessages.h
+@@ -52,18 +52,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit TestMessage(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ } // namespace TestWithWantsDispatchNoSyncMessages
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithoutAttributesMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithoutAttributesMessages.h
+index 1982e008cead..ce4a3e102231 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithoutAttributesMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithoutAttributesMessages.h
+@@ -32,6 +32,7 @@
+ #include "GestureTypes.h"
+ #endif
+ #include "MessageNames.h"
++#include "Plugin.h"
+ #include <WebCore/KeyboardEvent.h>
+ #include <WebCore/PlatformLayerIdentifier.h>
+ #include <WebCore/PluginData.h>
+@@ -73,18 +74,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadURL(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ #if ENABLE(TOUCH_EVENTS)
+@@ -99,18 +99,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadSomething(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ #endif
+ 
+@@ -126,18 +125,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit TouchEvent(const WebKit::WebTouchEvent& event)
+-        : m_event(event)
++        : m_arguments(event)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_event;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const WebKit::WebTouchEvent& m_event;
++    std::tuple<const WebKit::WebTouchEvent&> m_arguments;
+ };
+ #endif
+ 
+@@ -153,18 +151,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit AddEvent(const WebKit::WebTouchEvent& event)
+-        : m_event(event)
++        : m_arguments(event)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_event;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const WebKit::WebTouchEvent& m_event;
++    std::tuple<const WebKit::WebTouchEvent&> m_arguments;
+ };
+ #endif
+ 
+@@ -180,18 +177,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit LoadSomethingElse(const String& url)
+-        : m_url(url)
++        : m_arguments(url)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_url;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_url;
++    std::tuple<const String&> m_arguments;
+ };
+ #endif
+ 
+@@ -206,24 +202,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     DidReceivePolicyDecision(uint64_t frameID, uint64_t listenerID, uint32_t policyAction)
+-        : m_frameID(frameID)
+-        , m_listenerID(listenerID)
+-        , m_policyAction(policyAction)
++        : m_arguments(frameID, listenerID, policyAction)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_frameID;
+-        encoder << m_listenerID;
+-        encoder << m_policyAction;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint64_t m_frameID;
+-    uint64_t m_listenerID;
+-    uint32_t m_policyAction;
++    std::tuple<uint64_t, uint64_t, uint32_t> m_arguments;
+ };
+ 
+ class Close {
+@@ -236,16 +225,13 @@ public:
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+-    Close()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ class PreferencesDidChange {
+@@ -259,18 +245,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit PreferencesDidChange(const WebKit::WebPreferencesStore& store)
+-        : m_store(store)
++        : m_arguments(store)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_store;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const WebKit::WebPreferencesStore& m_store;
++    std::tuple<const WebKit::WebPreferencesStore&> m_arguments;
+ };
+ 
+ class SendDoubleAndFloat {
+@@ -284,21 +269,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     SendDoubleAndFloat(double d, float f)
+-        : m_d(d)
+-        , m_f(f)
++        : m_arguments(d, f)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_d;
+-        encoder << m_f;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    double m_d;
+-    float m_f;
++    std::tuple<double, float> m_arguments;
+ };
+ 
+ class SendInts {
+@@ -312,21 +293,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     SendInts(const Vector<uint64_t>& ints, const Vector<Vector<uint64_t>>& intVectors)
+-        : m_ints(ints)
+-        , m_intVectors(intVectors)
++        : m_arguments(ints, intVectors)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_ints;
+-        encoder << m_intVectors;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const Vector<uint64_t>& m_ints;
+-    const Vector<Vector<uint64_t>>& m_intVectors;
++    std::tuple<const Vector<uint64_t>&, const Vector<Vector<uint64_t>>&> m_arguments;
+ };
+ 
+ class CreatePlugin {
+@@ -345,21 +322,17 @@ public:
+     using Reply = CompletionHandler<void(bool)>;
+     using Promise = WTF::NativePromise<bool, IPC::Error>;
+     CreatePlugin(uint64_t pluginInstanceID, const WebKit::Plugin::Parameters& parameters)
+-        : m_pluginInstanceID(pluginInstanceID)
+-        , m_parameters(parameters)
++        : m_arguments(pluginInstanceID, parameters)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_pluginInstanceID;
+-        encoder << m_parameters;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint64_t m_pluginInstanceID;
+-    const WebKit::Plugin::Parameters& m_parameters;
++    std::tuple<uint64_t, const WebKit::Plugin::Parameters&> m_arguments;
+ };
+ 
+ class RunJavaScriptAlert {
+@@ -378,21 +351,17 @@ public:
+     using Reply = CompletionHandler<void()>;
+     using Promise = WTF::NativePromise<void, IPC::Error>;
+     RunJavaScriptAlert(uint64_t frameID, const String& message)
+-        : m_frameID(frameID)
+-        , m_message(message)
++        : m_arguments(frameID, message)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_frameID;
+-        encoder << m_message;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint64_t m_frameID;
+-    const String& m_message;
++    std::tuple<uint64_t, const String&> m_arguments;
+ };
+ 
+ class GetPlugins {
+@@ -411,18 +380,17 @@ public:
+     using Reply = CompletionHandler<void(Vector<WebCore::PluginInfo>&&)>;
+     using Promise = WTF::NativePromise<Vector<WebCore::PluginInfo>, IPC::Error>;
+     explicit GetPlugins(bool refresh)
+-        : m_refresh(refresh)
++        : m_arguments(refresh)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_refresh;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    bool m_refresh;
++    std::tuple<bool> m_arguments;
+ };
+ 
+ class GetPluginProcessConnection {
+@@ -439,18 +407,17 @@ public:
+     using ReplyArguments = std::tuple<IPC::Connection::Handle>;
+     using Reply = CompletionHandler<void(IPC::Connection::Handle&&)>;
+     explicit GetPluginProcessConnection(const String& pluginPath)
+-        : m_pluginPath(pluginPath)
++        : m_arguments(pluginPath)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_pluginPath;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_pluginPath;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class TestMultipleAttributes {
+@@ -466,16 +433,13 @@ public:
+     static constexpr auto callbackThread = WTF::CompletionHandlerCallThread::ConstructionThread;
+     using ReplyArguments = std::tuple<>;
+     using Reply = CompletionHandler<void()>;
+-    TestMultipleAttributes()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ class TestParameterAttributes {
+@@ -489,24 +453,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     TestParameterAttributes(uint64_t foo, double bar, double baz)
+-        : m_foo(foo)
+-        , m_bar(bar)
+-        , m_baz(baz)
++        : m_arguments(foo, bar, baz)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_foo;
+-        encoder << m_bar;
+-        encoder << m_baz;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint64_t m_foo;
+-    double m_bar;
+-    double m_baz;
++    std::tuple<uint64_t, double, double> m_arguments;
+ };
+ 
+ class TemplateTest {
+@@ -520,18 +477,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit TemplateTest(const HashMap<String, std::pair<String, uint64_t>>& a)
+-        : m_a(a)
++        : m_arguments(a)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_a;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const HashMap<String, std::pair<String, uint64_t>>& m_a;
++    std::tuple<const HashMap<String, std::pair<String, uint64_t>>&> m_arguments;
+ };
+ 
+ class SetVideoLayerID {
+@@ -545,18 +501,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit SetVideoLayerID(const WebCore::PlatformLayerIdentifier& videoLayerID)
+-        : m_videoLayerID(videoLayerID)
++        : m_arguments(videoLayerID)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_videoLayerID;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const WebCore::PlatformLayerIdentifier& m_videoLayerID;
++    std::tuple<const WebCore::PlatformLayerIdentifier&> m_arguments;
+ };
+ 
+ #if PLATFORM(MAC)
+@@ -571,21 +526,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     DidCreateWebProcessConnection(MachSendRight&& connectionIdentifier, const OptionSet<WebKit::SelectionFlags>& flags)
+-        : m_connectionIdentifier(WTFMove(connectionIdentifier))
+-        , m_flags(flags)
++        : m_arguments(WTFMove(connectionIdentifier), flags)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << WTFMove(m_connectionIdentifier);
+-        encoder << m_flags;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    MachSendRight&& m_connectionIdentifier;
+-    const OptionSet<WebKit::SelectionFlags>& m_flags;
++    std::tuple<MachSendRight&&, const OptionSet<WebKit::SelectionFlags>&> m_arguments;
+ };
+ #endif
+ 
+@@ -606,18 +557,17 @@ public:
+     using Reply = CompletionHandler<void(Vector<WebCore::KeypressCommand>&&)>;
+     using Promise = WTF::NativePromise<Vector<WebCore::KeypressCommand>, IPC::Error>;
+     explicit InterpretKeyEvent(uint32_t type)
+-        : m_type(type)
++        : m_arguments(type)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_type;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    uint32_t m_type;
++    std::tuple<uint32_t> m_arguments;
+ };
+ #endif
+ 
+@@ -633,18 +583,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit DeprecatedOperation(const IPC::DummyType& dummy)
+-        : m_dummy(dummy)
++        : m_arguments(dummy)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_dummy;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const IPC::DummyType& m_dummy;
++    std::tuple<const IPC::DummyType&> m_arguments;
+ };
+ #endif
+ 
+@@ -660,18 +609,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit ExperimentalOperation(const IPC::DummyType& dummy)
+-        : m_dummy(dummy)
++        : m_arguments(dummy)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_dummy;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const IPC::DummyType& m_dummy;
++    std::tuple<const IPC::DummyType&> m_arguments;
+ };
+ #endif
+ 
+diff --git a/Source/WebKit/Scripts/webkit/tests/TestWithoutUsingIPCConnectionMessages.h b/Source/WebKit/Scripts/webkit/tests/TestWithoutUsingIPCConnectionMessages.h
+index f21e85899aae..29ccac61536c 100644
+--- a/Source/WebKit/Scripts/webkit/tests/TestWithoutUsingIPCConnectionMessages.h
++++ b/Source/WebKit/Scripts/webkit/tests/TestWithoutUsingIPCConnectionMessages.h
+@@ -51,16 +51,13 @@ public:
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+-    MessageWithoutArgument()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ class MessageWithoutArgumentAndEmptyReply {
+@@ -78,16 +75,13 @@ public:
+     using ReplyArguments = std::tuple<>;
+     using Reply = CompletionHandler<void()>;
+     using Promise = WTF::NativePromise<void, IPC::Error>;
+-    MessageWithoutArgumentAndEmptyReply()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ class MessageWithoutArgumentAndReplyWithArgument {
+@@ -105,16 +99,13 @@ public:
+     using ReplyArguments = std::tuple<String>;
+     using Reply = CompletionHandler<void(String&&)>;
+     using Promise = WTF::NativePromise<String, IPC::Error>;
+-    MessageWithoutArgumentAndReplyWithArgument()
+-    {
+-    }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
++    std::tuple<> m_arguments;
+ };
+ 
+ class MessageWithArgument {
+@@ -128,18 +119,17 @@ public:
+     static constexpr bool deferSendingIfSuspended = false;
+ 
+     explicit MessageWithArgument(const String& argument)
+-        : m_argument(argument)
++        : m_arguments(argument)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_argument;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_argument;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class MessageWithArgumentAndEmptyReply {
+@@ -158,18 +148,17 @@ public:
+     using Reply = CompletionHandler<void()>;
+     using Promise = WTF::NativePromise<void, IPC::Error>;
+     explicit MessageWithArgumentAndEmptyReply(const String& argument)
+-        : m_argument(argument)
++        : m_arguments(argument)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_argument;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_argument;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ class MessageWithArgumentAndReplyWithArgument {
+@@ -188,18 +177,17 @@ public:
+     using Reply = CompletionHandler<void(String&&)>;
+     using Promise = WTF::NativePromise<String, IPC::Error>;
+     explicit MessageWithArgumentAndReplyWithArgument(const String& argument)
+-        : m_argument(argument)
++        : m_arguments(argument)
+     {
+     }
+ 
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_argument;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const String& m_argument;
++    std::tuple<const String&> m_arguments;
+ };
+ 
+ } // namespace TestWithoutUsingIPCConnection
+diff --git a/Source/WebKit/Shared/WebCoreArgumentCoders.serialization.in b/Source/WebKit/Shared/WebCoreArgumentCoders.serialization.in
+index de5dd7f10970..15f02baa00af 100644
+--- a/Source/WebKit/Shared/WebCoreArgumentCoders.serialization.in
++++ b/Source/WebKit/Shared/WebCoreArgumentCoders.serialization.in
+@@ -7328,6 +7328,7 @@ header: <WebCore/InspectorFrontendClient.h>
+     Light,
+     Dark,
+ };
++using WebCore::InspectorFrontendClient::Appearance = WebCore::InspectorFrontendClientAppearance;
+ 
+ [Nested] enum class WebCore::InspectorFrontendClient::SaveMode : uint8_t {
+     SingleFile,
+@@ -7341,6 +7342,7 @@ header: <WebCore/InspectorFrontendClient.h>
+     String content;
+     bool base64Encoded;
+ };
++using WebCore::InspectorFrontendClient::SaveData = WebCore::InspectorFrontendClientSaveData;
+ 
+ #if ENABLE(VIDEO)
+ header: <WebCore/PlatformTextTrack.h>
+diff --git a/Source/WebKit/UIProcess/API/glib/WebKitNetworkSession.cpp b/Source/WebKit/UIProcess/API/glib/WebKitNetworkSession.cpp
+index 4790dbbfb0c3..bde3a207119e 100644
+--- a/Source/WebKit/UIProcess/API/glib/WebKitNetworkSession.cpp
++++ b/Source/WebKit/UIProcess/API/glib/WebKitNetworkSession.cpp
+@@ -24,7 +24,6 @@
+ 
+ #include "APIDownloadClient.h"
+ #include "FrameInfoData.h"
+-#include "ITPThirdPartyData.h"
+ #include "NetworkProcessMessages.h"
+ #include "WebKitCookieManagerPrivate.h"
+ #include "WebKitDownloadPrivate.h"
+diff --git a/Source/WebKit/UIProcess/API/glib/WebKitUserContentManager.cpp b/Source/WebKit/UIProcess/API/glib/WebKitUserContentManager.cpp
+index d6f39456ee6f..39b066282553 100644
+--- a/Source/WebKit/UIProcess/API/glib/WebKitUserContentManager.cpp
++++ b/Source/WebKit/UIProcess/API/glib/WebKitUserContentManager.cpp
+@@ -22,7 +22,6 @@
+ 
+ #include "APISerializedScriptValue.h"
+ #include "InjectUserScriptImmediately.h"
+-#include "JavaScriptEvaluationResult.h"
+ #include "WebKitInitialize.h"
+ #include "WebKitUserContentManagerPrivate.h"
+ #include "WebKitUserContentPrivate.h"
+diff --git a/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h b/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h
+index 1bca45f83bcc..11160c7a90f1 100644
+--- a/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h
++++ b/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h
+@@ -341,18 +341,19 @@ bool AuxiliaryProcessProxy::send(T&& message, uint64_t destinationID, OptionSet<
+ 
+     if constexpr (T::deferSendingIfSuspended) {
+         if (UNLIKELY(m_isSuspended)) {
++            // encodeCoalescingKey must be called before arguments() below since arguments() takes ownership of the message's args tuple.
+             auto coalescingKeyEncoder = makeUniqueRef<IPC::Encoder>(T::name(), destinationID);
+             message.encodeCoalescingKey(coalescingKeyEncoder.get());
+             Vector<uint8_t> coalescingKey { coalescingKeyEncoder->mutableSpan() };
+ 
+             auto encoder = makeUniqueRef<IPC::Encoder>(T::name(), destinationID);
+-            message.encode(encoder.get());
++            encoder.get() << message.arguments();
+             return sendMessageAfterResuming(WTFMove(coalescingKey), WTFMove(encoder));
+         }
+     }
+ 
+     auto encoder = makeUniqueRef<IPC::Encoder>(T::name(), destinationID);
+-    message.encode(encoder.get());
++    encoder.get() << message.arguments();
+     return sendMessage(WTFMove(encoder), sendOptions);
+ }
+ 
+@@ -376,7 +377,7 @@ std::optional<AuxiliaryProcessProxy::AsyncReplyID> AuxiliaryProcessProxy::sendWi
+     static_assert(!T::isSync, "Async message expected");
+ 
+     auto encoder = makeUniqueRef<IPC::Encoder>(T::name(), destinationID);
+-    message.encode(encoder.get());
++    encoder.get() << message.arguments();
+     auto handler = IPC::Connection::makeAsyncReplyHandler<T>(std::forward<C>(completionHandler));
+     auto replyID = handler.replyID;
+     if (sendMessage(WTFMove(encoder), sendOptions, WTFMove(handler), shouldStartProcessThrottlerActivity))
+diff --git a/Source/WebKit/UIProcess/Inspector/RemoteWebInspectorUIProxy.messages.in b/Source/WebKit/UIProcess/Inspector/RemoteWebInspectorUIProxy.messages.in
+index 1564a63c9eaf..6633ad407b25 100644
+--- a/Source/WebKit/UIProcess/Inspector/RemoteWebInspectorUIProxy.messages.in
++++ b/Source/WebKit/UIProcess/Inspector/RemoteWebInspectorUIProxy.messages.in
+@@ -32,11 +32,11 @@ messages -> RemoteWebInspectorUIProxy {
+     ResetState()
+     BringToFront()
+ 
+-    Save(Vector<WebCore::InspectorFrontendClientSaveData> saveDatas, bool forceSaveAs)
++    Save(Vector<WebCore::InspectorFrontendClient::SaveData> saveDatas, bool forceSaveAs)
+     Load(String path) -> (String content)
+     PickColorFromScreen() -> (std::optional<WebCore::Color> color)
+ 
+-    SetForcedAppearance(enum:uint8_t WebCore::InspectorFrontendClientAppearance appearance)
++    SetForcedAppearance(WebCore::InspectorFrontendClient::Appearance appearance)
+ 
+     SetSheetRect(WebCore::FloatRect rect)
+ 
+diff --git a/Source/WebKit/UIProcess/Inspector/WebInspectorUIProxy.messages.in b/Source/WebKit/UIProcess/Inspector/WebInspectorUIProxy.messages.in
+index c114e0abab14..540492eb5c85 100644
+--- a/Source/WebKit/UIProcess/Inspector/WebInspectorUIProxy.messages.in
++++ b/Source/WebKit/UIProcess/Inspector/WebInspectorUIProxy.messages.in
+@@ -37,8 +37,8 @@ messages -> WebInspectorUIProxy {
+     Reopen()
+     ResetState()
+ 
+-    SetForcedAppearance(enum:uint8_t WebCore::InspectorFrontendClientAppearance appearance)
+-    EffectiveAppearanceDidChange(enum:uint8_t WebCore::InspectorFrontendClientAppearance appearance)
++    SetForcedAppearance(WebCore::InspectorFrontendClient::Appearance appearance)
++    EffectiveAppearanceDidChange(WebCore::InspectorFrontendClient::Appearance appearance)
+ 
+     OpenURLExternally(String url)
+     RevealFileExternally(String path)
+@@ -53,7 +53,7 @@ messages -> WebInspectorUIProxy {
+     SetEmulatedConditions(std::optional<int64_t> bytesPerSecondLimit)
+ #endif
+ 
+-    Save(Vector<WebCore::InspectorFrontendClientSaveData> saveDatas, bool forceSaveAs)
++    Save(Vector<WebCore::InspectorFrontendClient::SaveData> saveDatas, bool forceSaveAs)
+     Load(String path) -> (String content)
+     PickColorFromScreen() -> (std::optional<WebCore::Color> color)
+ 
+diff --git a/Tools/TestWebKitAPI/Tests/IPC/ConnectionTests.cpp b/Tools/TestWebKitAPI/Tests/IPC/ConnectionTests.cpp
+index b555b36ff540..96455416ba22 100644
+--- a/Tools/TestWebKitAPI/Tests/IPC/ConnectionTests.cpp
++++ b/Tools/TestWebKitAPI/Tests/IPC/ConnectionTests.cpp
+@@ -41,19 +41,12 @@ struct MockTestMessageWithConnection {
+     static constexpr bool canDispatchOutOfOrder = false;
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr IPC::MessageName name()  { return static_cast<IPC::MessageName>(123); }
++    auto&& arguments() { return WTFMove(m_arguments); }
+     MockTestMessageWithConnection(IPC::Connection::Handle&& handle)
+-        : m_handle(WTFMove(handle))
++        : m_arguments(WTFMove(handle))
+     {
+     }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
+-    {
+-        encoder << WTFMove(m_handle);
+-    }
+-
+-private:
+-    IPC::Connection::Handle&& m_handle;
++    std::tuple<IPC::Connection::Handle&&> m_arguments;
+ };
+ 
+ struct MockTestSyncMessage {
+@@ -62,8 +55,16 @@ struct MockTestSyncMessage {
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr IPC::MessageName name()  { return IPC::MessageName::IPCTester_SyncPing; }
+     using ReplyArguments = std::tuple<>;
++    auto&& arguments()
++    {
++        return WTFMove(m_arguments);
++    }
+ 
+-    template<typename Encoder> void encode(Encoder&) { }
++    MockTestSyncMessage()
++    {
++    }
++
++    std::tuple<> m_arguments;
+ };
+ 
+ struct MockTestSyncMessageWithDataReply {
+@@ -72,8 +73,16 @@ struct MockTestSyncMessageWithDataReply {
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr IPC::MessageName name()  { return IPC::MessageName::IPCTester_SyncPing; } // Needs to be sync.
+     using ReplyArguments = std::tuple<std::span<const uint8_t>>;
++    auto&& arguments()
++    {
++        return WTFMove(m_arguments);
++    }
++
++    MockTestSyncMessageWithDataReply()
++    {
++    }
+ 
+-    template<typename Encoder> void encode(Encoder&) { }
++    std::tuple<> m_arguments;
+ };
+ 
+ namespace {
+diff --git a/Tools/TestWebKitAPI/Tests/IPC/EventTests.cpp b/Tools/TestWebKitAPI/Tests/IPC/EventTests.cpp
+index 4c76b43062ff..b9354c039b9b 100644
+--- a/Tools/TestWebKitAPI/Tests/IPC/EventTests.cpp
++++ b/Tools/TestWebKitAPI/Tests/IPC/EventTests.cpp
+@@ -36,18 +36,12 @@ struct MockTestMessageWithSignal {
+     static constexpr bool canDispatchOutOfOrder = false;
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr IPC::MessageName name()  { return static_cast<IPC::MessageName>(123); }
++    auto&& arguments() { return WTFMove(m_arguments); }
+     MockTestMessageWithSignal(IPC::Signal&& signal)
+-        : m_signal(WTFMove(signal))
++        : m_arguments(WTFMove(signal))
+     {
+     }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
+-    {
+-        encoder << WTFMove(m_signal);
+-    }
+-private:
+-    IPC::Signal&& m_signal;
++    std::tuple<IPC::Signal&&> m_arguments;
+ };
+ 
+ class EventTestABBA : public testing::TestWithParam<std::tuple<ConnectionTestDirection>>, protected ConnectionTestBase {
+diff --git a/Tools/TestWebKitAPI/Tests/IPC/IPCSerialization.mm b/Tools/TestWebKitAPI/Tests/IPC/IPCSerialization.mm
+index 1119b59a248b..8ca04d71a540 100644
+--- a/Tools/TestWebKitAPI/Tests/IPC/IPCSerialization.mm
++++ b/Tools/TestWebKitAPI/Tests/IPC/IPCSerialization.mm
+@@ -698,17 +698,17 @@ public:
+     static constexpr bool isSync = false;
+ 
+     ObjCPingBackMessage(const ObjCHolderForTesting& holder)
+-        : m_holder(holder)
++        : m_arguments(holder)
+     {
+     }
+ 
+-    template<typename Encoder> void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_holder;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const ObjCHolderForTesting& m_holder;
++    std::tuple<const ObjCHolderForTesting&> m_arguments;
+ };
+ 
+ class CFPingBackMessage {
+@@ -723,17 +723,17 @@ public:
+     static constexpr bool isSync = false;
+ 
+     CFPingBackMessage(const CFHolderForTesting& holder)
+-        : m_holder(holder)
++        : m_arguments(holder)
+     {
+     }
+ 
+-    template<typename Encoder> void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_holder;
++        return WTFMove(m_arguments);
+     }
+ 
+ private:
+-    const CFHolderForTesting& m_holder;
++    std::tuple<const CFHolderForTesting&> m_arguments;
+ };
+ 
+ /*
+diff --git a/Tools/TestWebKitAPI/Tests/IPC/IPCTestUtilities.h b/Tools/TestWebKitAPI/Tests/IPC/IPCTestUtilities.h
+index e16b2f278042..fb5a02d12bed 100644
+--- a/Tools/TestWebKitAPI/Tests/IPC/IPCTestUtilities.h
++++ b/Tools/TestWebKitAPI/Tests/IPC/IPCTestUtilities.h
+@@ -52,7 +52,7 @@ struct MockTestMessage1 {
+     static constexpr bool canDispatchOutOfOrder = true;
+     static constexpr bool replyCanDispatchOutOfOrder = false;
+     static constexpr IPC::MessageName name()  { return static_cast<IPC::MessageName>(123); }
+-    template<typename Encoder> void encode(Encoder&) { }
++    std::tuple<> arguments() { return { }; }
+ };
+ 
+ struct MockTestMessageWithAsyncReply1 {
+@@ -63,8 +63,7 @@ struct MockTestMessageWithAsyncReply1 {
+     // Just using WebPage_GetBytecodeProfileReply as something that is async message name.
+     // If WebPage_GetBytecodeProfileReply is removed, just use another one.
+     static constexpr IPC::MessageName asyncMessageReplyName() { return IPC::MessageName::WebPage_GetBytecodeProfileReply; }
+-    template<typename Encoder> void encode(Encoder&) { }
+-
++    std::tuple<> arguments() { return { }; }
+     using ReplyArguments = std::tuple<uint64_t>;
+     using Promise = WTF::NativePromise<uint64_t, IPC::Error>;
+ };
+diff --git a/Tools/TestWebKitAPI/Tests/IPC/StreamConnectionTests.cpp b/Tools/TestWebKitAPI/Tests/IPC/StreamConnectionTests.cpp
+index 22ccfb27dda8..88d7adc1ed63 100644
+--- a/Tools/TestWebKitAPI/Tests/IPC/StreamConnectionTests.cpp
++++ b/Tools/TestWebKitAPI/Tests/IPC/StreamConnectionTests.cpp
+@@ -55,7 +55,7 @@ struct MockStreamTestMessage1 {
+     static constexpr bool isStreamEncodable = true;
+     static constexpr bool isStreamBatched = false;
+     static constexpr IPC::MessageName name()  { return IPC::MessageName::IPCStreamTester_EmptyMessage; }
+-    template<typename Encoder> void encode(Encoder&) { }
++    std::tuple<> arguments() { return { }; }
+ };
+ 
+ struct MockStreamTestMessage2 {
+@@ -66,12 +66,7 @@ struct MockStreamTestMessage2 {
+         : semaphore(WTFMove(s))
+     {
+     }
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
+-    {
+-        encoder << WTFMove(semaphore);
+-    }
+-
++    std::tuple<IPC::Semaphore> arguments() { return { WTFMove(semaphore) }; }
+     IPC::Semaphore semaphore;
+ };
+ 
+@@ -82,13 +77,7 @@ struct MockStreamTestMessageWithAsyncReply1 {
+     static constexpr IPC::MessageName name()  { return IPC::MessageName::IPCStreamTester_AsyncPing; }
+     // Just using IPCStreamTester_AsyncPingReply as something that is async message name.
+     static constexpr IPC::MessageName asyncMessageReplyName() { return IPC::MessageName::IPCStreamTester_AsyncPingReply; }
+-
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
+-    {
+-        encoder << contents;
+-    }
+-
++    std::tuple<uint64_t> arguments() { return { contents }; }
+     using ReplyArguments = std::tuple<uint64_t>;
+     MockStreamTestMessageWithAsyncReply1(uint64_t contents)
+         : contents(contents)
+@@ -110,10 +99,9 @@ public:
+         : m_arguments(value)
+     {
+     }
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_arguments;
++        return WTFMove(m_arguments);
+     }
+ private:
+     std::tuple<uint32_t> m_arguments;
+@@ -133,10 +121,9 @@ public:
+         : m_arguments(value)
+     {
+     }
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_arguments;
++        return WTFMove(m_arguments);
+     }
+ private:
+     std::tuple<uint32_t> m_arguments;
+@@ -156,10 +143,9 @@ public:
+         : m_arguments(value)
+     {
+     }
+-    template<typename Encoder>
+-    void encode(Encoder& encoder)
++    auto&& arguments()
+     {
+-        encoder << m_arguments;
++        return WTFMove(m_arguments);
+     }
+ private:
+     std::tuple<uint32_t> m_arguments;
+diff --git a/Tools/TestWebKitAPI/Tests/WebKitCocoa/WebPushDaemon.mm b/Tools/TestWebKitAPI/Tests/WebKitCocoa/WebPushDaemon.mm
+index e338afe1e69a..b9bf89145530 100644
+--- a/Tools/TestWebKitAPI/Tests/WebKitCocoa/WebPushDaemon.mm
++++ b/Tools/TestWebKitAPI/Tests/WebKitCocoa/WebPushDaemon.mm
+@@ -456,7 +456,7 @@ void WebPushXPCConnectionMessageSender::sendWithoutUsingIPCConnection(M&& messag
+ {
+     TestEncoder encoder;
+     encoder.encodeHeader<M>();
+-    message.encode(encoder);
++    encoder << message.arguments();
+     auto dictionary = messageDictionaryFromEncoder(WTFMove(encoder));
+     xpc_connection_send_message(m_connection.get(), dictionary.get());
+ }
+@@ -466,7 +466,7 @@ void WebPushXPCConnectionMessageSender::sendWithAsyncReplyWithoutUsingIPCConnect
+ {
+     TestEncoder encoder;
+     encoder.encodeHeader<M>();
+-    message.encode(encoder);
++    encoder << message.arguments();
+     auto dictionary = messageDictionaryFromEncoder(WTFMove(encoder));
+     xpc_connection_send_message_with_reply(m_connection.get(), dictionary.get(), dispatch_get_main_queue(), makeBlockPtr([this, completionHandler = WTFMove(completionHandler)] (xpc_object_t reply) mutable {
+         if (xpc_get_type(reply) == XPC_TYPE_ERROR) {
+-- 
+2.43.0
+
