@@ -1,0 +1,79 @@
+From ef45240ae34ad4c35ebcfa6e0e09ee4fdc9d2c55 Mon Sep 17 00:00:00 2001
+From: Adrian Perez de Castro <aperez@igalia.com>
+Date: Wed, 2 Apr 2025 06:18:23 -0700
+Subject: =?UTF-8?q?Introduce=20OS(ANDROID)=20to=20simplify=20preprocessor?=
+ =?UTF-8?q?=20guards=0Ahttps://bugs.webkit.org/show=5Fbug.cgi=3Fid=3D29091?=
+ =?UTF-8?q?3?=
+
+Reviewed by Carlos Garcia Campos.
+
+Introduce a new WTF_OS_ANDROID macro, and use OS(ANDROID) guards
+to replace (and simplify) the existing ones.
+
+* Source/WTF/wtf/PlatformOS.h:
+* Source/WebCore/platform/graphics/angle/PlatformDisplayANGLE.cpp:
+(WebCore::PlatformDisplay::angleEGLDisplay const):
+* Source/WebCore/platform/graphics/skia/FontCacheSkia.cpp:
+(WebCore::FontCache::fontManager const):
+
+Canonical link: https://commits.webkit.org/293096@main
+---
+ Source/WTF/wtf/PlatformOS.h                                  | 5 +++++
+ .../WebCore/platform/graphics/angle/PlatformDisplayANGLE.cpp | 2 +-
+ Source/WebCore/platform/graphics/skia/FontCacheSkia.cpp      | 4 ++--
+ 3 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/Source/WTF/wtf/PlatformOS.h b/Source/WTF/wtf/PlatformOS.h
+index 1113f5411eb3..9da44bc4ef6f 100644
+--- a/Source/WTF/wtf/PlatformOS.h
++++ b/Source/WTF/wtf/PlatformOS.h
+@@ -52,6 +52,11 @@
+ #define WTF_OS_AIX 1
+ #endif
+ 
++/* OS(ANDROID) - Android */
++#if defined(__ANDROID__) || defined(ANDROID)
++#define WTF_OS_ANDROID 1
++#endif
++
+ /* OS(DARWIN) - Any Darwin-based OS, including macOS, iOS, iPadOS, macCatalyst, tvOS, watchOS and visionOS */
+ #if defined(__APPLE__)
+ #define WTF_OS_DARWIN 1
+diff --git a/Source/WebCore/platform/graphics/angle/PlatformDisplayANGLE.cpp b/Source/WebCore/platform/graphics/angle/PlatformDisplayANGLE.cpp
+index a6959bf5afd0..10643eac40e2 100644
+--- a/Source/WebCore/platform/graphics/angle/PlatformDisplayANGLE.cpp
++++ b/Source/WebCore/platform/graphics/angle/PlatformDisplayANGLE.cpp
+@@ -44,7 +44,7 @@ EGLDisplay PlatformDisplay::angleEGLDisplay() const
+ 
+     Vector<EGLint> displayAttributes {
+         EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE,
+-#if !defined(__ANDROID__) && !defined(ANDROID)
++#if !OS(ANDROID)
+         EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_EGL_ANGLE,
+         EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE, m_anglePlatform.value(),
+ #endif
+diff --git a/Source/WebCore/platform/graphics/skia/FontCacheSkia.cpp b/Source/WebCore/platform/graphics/skia/FontCacheSkia.cpp
+index 4fcbf9f5bbcf..15348161c378 100644
+--- a/Source/WebCore/platform/graphics/skia/FontCacheSkia.cpp
++++ b/Source/WebCore/platform/graphics/skia/FontCacheSkia.cpp
+@@ -38,7 +38,7 @@
+ #include "SystemSettings.h"
+ #endif
+ 
+-#if defined(__ANDROID__) || defined(ANDROID)
++#if OS(ANDROID)
+ #include <skia/ports/SkFontMgr_android.h>
+ #elif PLATFORM(WIN)
+ #include <dwrite.h>
+@@ -56,7 +56,7 @@ void FontCache::platformInit()
+ SkFontMgr& FontCache::fontManager() const
+ {
+     if (!m_fontManager) {
+-#if defined(__ANDROID__) || defined(ANDROID)
++#if OS(ANDROID)
+         m_fontManager = SkFontMgr_New_Android(nullptr);
+ #elif OS(WINDOWS)
+         auto result = createDWriteFactory();
+-- 
+2.49.0
+

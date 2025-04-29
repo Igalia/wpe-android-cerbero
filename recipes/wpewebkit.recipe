@@ -2,11 +2,11 @@
 
 class Recipe(recipe.Recipe):
     name = 'wpewebkit'
-    version = '2.46.7'
+    version = '2.48.1'
     stype = SourceType.TARBALL
     btype = BuildType.CMAKE
     url = 'https://wpewebkit.org/releases/wpewebkit-{0}.tar.xz'.format(version)
-    tarball_checksum = 'cf3e47638595d86de96abdb94db69a836c8aa509fc063be714f52c5a24bb5cd5'
+    tarball_checksum = '2f411b692bb4c2a924d9bddf0c794fd69a24931ad836d6a93c9a65f5adb0357f'
     deps = [
         'icu',
         'cairo',
@@ -28,7 +28,7 @@ class Recipe(recipe.Recipe):
         'libwpe',
         'openjpeg',
     ]
-    # TODO: support accessibility woff2
+    # TODO: support accessibility woff2 opentype-svg
     configure_options = '\
         -DPORT=WPE \
         -DENABLE_ACCESSIBILITY=OFF \
@@ -48,9 +48,11 @@ class Recipe(recipe.Recipe):
         -DUSE_LIBDRM=OFF \
         -DUSE_JPEGXL=OFF \
         -DUSE_LIBBACKTRACE=OFF \
+        -DUSE_SKIA_OPENTYPE_SVG=OFF \
         -DUSE_SYSPROF_CAPTURE=OFF \
         -DENABLE_WEBDRIVER=ON \
         -DENABLE_WPE_PLATFORM=OFF \
+        -DENABLE_SPEECH_SYNTHESIS=OFF \
         -DCMAKE_BUILD_TYPE=Release \
     '
     cmake_generator = 'ninja'
@@ -61,8 +63,8 @@ class Recipe(recipe.Recipe):
     ]
 
     files_misc = [
-        'lib/wpe-webkit-2.0/libWPEWebInspectorResources.so',
-        'lib/wpe-webkit-2.0/injected-bundle/libWPEInjectedBundle.so'
+        'lib/wpe-webkit-2.0/injected-bundle/libWPEInjectedBundle.so',
+        'share/wpe-webkit-2.0/inspector.gresource',
     ]
 
     files_devel = [
@@ -83,8 +85,9 @@ class Recipe(recipe.Recipe):
         'include/wpe-webkit-2.0/wpe/WebKitBackForwardList.h',
         'include/wpe-webkit-2.0/wpe/WebKitBackForwardListItem.h',
         'include/wpe-webkit-2.0/wpe/WebKitColor.h',
-        'include/wpe-webkit-2.0/wpe/WebKitContextMenuActions.h',
+        'include/wpe-webkit-2.0/wpe/WebKitConsoleMessage.h',
         'include/wpe-webkit-2.0/wpe/WebKitContextMenu.h',
+        'include/wpe-webkit-2.0/wpe/WebKitContextMenuActions.h',
         'include/wpe-webkit-2.0/wpe/WebKitContextMenuItem.h',
         'include/wpe-webkit-2.0/wpe/WebKitCookieManager.h',
         'include/wpe-webkit-2.0/wpe/WebKitCredential.h',
@@ -130,8 +133,8 @@ class Recipe(recipe.Recipe):
         'include/wpe-webkit-2.0/wpe/WebKitURISchemeRequest.h',
         'include/wpe-webkit-2.0/wpe/WebKitURISchemeResponse.h',
         'include/wpe-webkit-2.0/wpe/WebKitURIUtilities.h',
-        'include/wpe-webkit-2.0/wpe/WebKitUserContentFilterStore.h',
         'include/wpe-webkit-2.0/wpe/WebKitUserContent.h',
+        'include/wpe-webkit-2.0/wpe/WebKitUserContentFilterStore.h',
         'include/wpe-webkit-2.0/wpe/WebKitUserContentManager.h',
         'include/wpe-webkit-2.0/wpe/WebKitUserMediaPermissionRequest.h',
         'include/wpe-webkit-2.0/wpe/WebKitUserMessage.h',
@@ -144,16 +147,16 @@ class Recipe(recipe.Recipe):
         'include/wpe-webkit-2.0/wpe/WebKitWebProcessEnumTypes.h',
         'include/wpe-webkit-2.0/wpe/WebKitWebProcessExtension.h',
         'include/wpe-webkit-2.0/wpe/WebKitWebResource.h',
-        'include/wpe-webkit-2.0/wpe/WebKitWebsiteDataAccessPermissionRequest.h',
+        'include/wpe-webkit-2.0/wpe/WebKitWebView.h',
+        'include/wpe-webkit-2.0/wpe/WebKitWebViewBackend.h',
+        'include/wpe-webkit-2.0/wpe/WebKitWebViewSessionState.h',
         'include/wpe-webkit-2.0/wpe/WebKitWebsiteData.h',
+        'include/wpe-webkit-2.0/wpe/WebKitWebsiteDataAccessPermissionRequest.h',
         'include/wpe-webkit-2.0/wpe/WebKitWebsiteDataManager.h',
         'include/wpe-webkit-2.0/wpe/WebKitWebsitePolicies.h',
-        'include/wpe-webkit-2.0/wpe/WebKitWebViewBackend.h',
-        'include/wpe-webkit-2.0/wpe/WebKitWebView.h',
-        'include/wpe-webkit-2.0/wpe/WebKitWebViewSessionState.h',
         'include/wpe-webkit-2.0/wpe/WebKitWindowProperties.h',
-        'include/wpe-webkit-2.0/wpe/webkit.h',
         'include/wpe-webkit-2.0/wpe/webkit-web-process-extension.h',
+        'include/wpe-webkit-2.0/wpe/webkit.h',
         'lib/pkgconfig/wpe-webkit-2.0.pc',
         'lib/pkgconfig/wpe-web-process-extension-2.0.pc'
     ]
@@ -164,37 +167,30 @@ class Recipe(recipe.Recipe):
     ]
 
     def prepare(self):
-        self.configure_options += f' \
-            -DICU_ROOT={self.config.prefix} \
-            -DZLIB_ROOT={self.config.prefix} \
-            -DFREETYPE_LIBRARY={self.config.prefix}/lib/libfreetype.so \
-            -DFREETYPE_INCLUDE_DIR_ft2build={self.config.prefix}/include/freetype2 \
-            -DFREETYPE_INCLUDE_DIR_freetype2={self.config.prefix}/include/freetype2 \
-            -DJPEG_LIBRARY={self.config.prefix}/lib/libjpeg.so \
-            -DJPEG_INCLUDE_DIR={self.config.prefix}/include \
-            -DPNG_LIBRARY={self.config.prefix}/lib/libpng.so \
-            -DPNG_INCLUDE_DIR={self.config.prefix}/include \
-            '
+        from os import path
+        glib_compile_resources_path = \
+            path.join(self.config.build_tools_prefix, 'bin', 'glib-compile-resources')
+        self.configure_options += \
+            f' -DGLIB_COMPILE_RESOURCES_EXECUTABLE={glib_compile_resources_path}'
+
         if self.config.target_platform in (Platform.ANDROID):
             arch_src_name = self.config.target_arch
             if self.config.target_arch == Architecture.ARMv7:
                 arch_src_name = 'arm'
             self.configure_options += ' -DCMAKE_SYSTEM_PROCESSOR=' + arch_src_name
-            self.configure_options += ' -DANDROID=1'
-            self.append_env('LDFLAGS', '-landroid -llog -lm -lintl -lc++_shared -O2')
+            self.configure_options += ' -DANDROID=TRUE'
             # Android libc does not have bcmp()
             self.append_env('CXXFLAGS', ' -Dbcmp=memcmp ')
             self.append_env('CFLAGS', ' -Dbcmp=memcmp ')
-            # XXX: CMake fails to check for this properly
-            self.append_env('CXXFLAGS', ' -DHAVE_MISSING_STD_FILESYSTEM_PATH_CONSTRUCTOR=1')
-            self.append_env('CXXFLAGS', ' -DWPE_ENABLE_PROCESS=1 -Dis_android=1 -DLOG_DISABLED=1 -D__ANDROID__=1 -DANDROID=1')
             # Placeholder to allow enabling debug externally
             self.append_env('WEBKIT_DEBUG', '')
             self.patches += [
-                'wpewebkit/0001-Android-logging-macro.patch',
-                'wpewebkit/0002-Allow-setting-injected-bundle-and-inspector-lib-path.patch',
-                'wpewebkit/0003-Use-ASharedMemory-instead-of-shm.patch',
-                'wpewebkit/0004-Compile-WebDriver-as-a-library.patch',
+                'wpewebkit/0001-Introduce-OS-ANDROID-to-simplify-preprocessor-guards.patch',
+                'wpewebkit/0002-WPE-Use-ASharedMemory-when-targeting-Android.patch',
+                'wpewebkit/0003-Compile-WebDriver-as-a-library.patch',
+                # To be dropped after 2.48.2
+                'wpewebkit/0004-GTK-WPE-Build-fails-with-ENABLE_RESOURCE_USAGE-OFF.patch',
+                'wpewebkit/0005-REGRESSION-286721-main-CMake-WPE-Android-builds-with.patch',
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')

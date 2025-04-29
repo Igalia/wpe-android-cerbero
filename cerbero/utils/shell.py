@@ -29,9 +29,6 @@ import time
 import glob
 import shutil
 import hashlib
-import urllib.request
-import urllib.error
-import urllib.parse
 import collections
 from pathlib import Path, PurePath
 
@@ -197,23 +194,40 @@ def check_output(cmd, cmd_dir=None, fail=True, logfile=None, env=None, quiet=Fal
 
     if sys.stdout.encoding:
         o = o.decode(sys.stdout.encoding, errors='replace')
+    elif isinstance(o, bytes):
+        o = o.decode()
     return o
 
 
-def new_call(cmd, cmd_dir=None, fail=True, logfile=None, env=None, verbose=False, interactive=False, shell=False):
+def new_call(
+    cmd, cmd_dir=None, fail=True, logfile=None, env=None, verbose=False, interactive=False, shell=False, input=None
+):
     cmd = _cmd_string_to_array(cmd, env)
     if logfile:
-        logfile.write(f'Running command {cmd!r} in {cmd_dir}\n')
+        if input:
+            logfile.write(f'Running command {cmd!r} with stdin {input} in {cmd_dir}\n')
+        else:
+            logfile.write(f'Running command {cmd!r} in {cmd_dir}\n')
         logfile.flush()
     if verbose:
         m.message('Running {!r}\n'.format(cmd))
-    if not interactive:
+    if input:
+        stdin = None
+    elif not interactive:
         stdin = subprocess.DEVNULL
     else:
         stdin = None
     try:
         subprocess.run(
-            cmd, cwd=cmd_dir, env=env, stdout=logfile, stderr=subprocess.STDOUT, stdin=stdin, shell=shell, check=True
+            cmd,
+            cwd=cmd_dir,
+            env=env,
+            stdout=logfile,
+            stderr=subprocess.STDOUT,
+            stdin=stdin,
+            input=input,
+            shell=shell,
+            check=True,
         )
     except SUBPROCESS_EXCEPTIONS as e:
         returncode = getattr(e, 'returncode', -1)
@@ -383,7 +397,7 @@ async def unpack(filepath, output_dir, logfile=None, force_tarfile=False):
         raise FatalError('Unknown tarball format %s' % filepath)
 
 
-async def download(url, dest, check_cert=True, overwrite=False, logfile=None, mirrors=None):
+async def download(url, dest, check_cert=True, overwrite=False, logfile=None, fallback_urls=None):
     """
     Downloads a file
 
@@ -397,10 +411,11 @@ async def download(url, dest, check_cert=True, overwrite=False, logfile=None, mi
     @type check_cert: bool
     @param logfile: path to the file to log instead of stdout
     @type logfile: str
-    @param mirrors: list of mirrors to use as fallback
-    @type logfile: list
     """
     user_agent = 'GStreamerCerbero/' + CERBERO_VERSION
+    urls = [url]
+    if fallback_urls:
+        urls += fallback_urls
 
     if not overwrite and os.path.exists(dest):
         if logfile is None:
@@ -411,13 +426,6 @@ async def download(url, dest, check_cert=True, overwrite=False, logfile=None, mi
             os.makedirs(os.path.dirname(dest))
         m.log('Downloading {}'.format(url), logfile)
 
-    urls = [url]
-    if mirrors is not None:
-        filename = os.path.basename(url)
-        # Add a traling '/' the url so that urljoin joins correctly urls
-        # in case users provided it without the trailing '/'
-        urls += [urllib.parse.urljoin(u + '/', filename) for u in mirrors]
-
     if sys.platform.startswith('win'):
         cmd = [
             'powershell',
@@ -427,16 +435,6 @@ async def download(url, dest, check_cert=True, overwrite=False, logfile=None, mi
             f'Invoke-WebRequest -UserAgent {user_agent} -OutFile {dest} '
             '-Method Get -Uri %s',
         ]
-    elif shutil.which('wget2'):
-        cmd = ['wget2', '--user-agent', user_agent, '--tries=2', '--timeout=20', '-O', dest]
-        if not check_cert:
-            cmd += ['--no-check-certificate']
-        cmd += ['%s']
-    elif shutil.which('wget'):
-        cmd = ['wget', '--user-agent', user_agent, '--tries=2', '--timeout=20', '--progress=dot:giga', '-O', dest]
-        if not check_cert:
-            cmd += ['--no-check-certificate']
-        cmd += ['%s']
     elif shutil.which('curl'):
         cmd = [
             'curl',
@@ -454,6 +452,16 @@ async def download(url, dest, check_cert=True, overwrite=False, logfile=None, mi
         ]
         if not check_cert:
             cmd += ['-k']
+        cmd += ['%s']
+    elif shutil.which('wget2'):
+        cmd = ['wget2', '--user-agent', user_agent, '--tries=2', '--timeout=20', '-O', dest]
+        if not check_cert:
+            cmd += ['--no-check-certificate']
+        cmd += ['%s']
+    elif shutil.which('wget'):
+        cmd = ['wget', '--user-agent', user_agent, '--tries=2', '--timeout=20', '--progress=dot:giga', '-O', dest]
+        if not check_cert:
+            cmd += ['--no-check-certificate']
         cmd += ['%s']
     else:
         raise FatalError('Need either wget or curl to download things')
@@ -526,8 +534,10 @@ def find_files(pattern, prefix):
     return glob.glob(os.path.join(prefix, pattern))
 
 
-def prompt(message, options=[]):
+def prompt(message, options=None):
     """Prompts the user for input with the message and options"""
+    if options is None:
+        options = []
     if len(options) != 0:
         message = '%s [%s] ' % (message, '/'.join(options))
     res = input(message)
@@ -653,23 +663,24 @@ C:\\msys64\\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -c '
             bat_tpl = MSYSBAT
         else:
             bat_tpl = MSYS2BAT
-        msysbatdir = tempfile.mkdtemp()
-        msysbat = os.path.join(msysbatdir, 'msys.bat')
-        bashrc = os.path.join(msysbatdir, 'bash.rc')
-        with open(msysbat, 'w+') as f:
-            f.write(bat_tpl % bashrc)
-        with open(bashrc, 'w+') as f:
-            f.write(shellrc)
-        subprocess.check_call(msysbat, shell=True, env=env)
-        # We should remove the temporary directory
-        # but there is a race with the bash process
+        with tempfile.TemporaryDirectory() as msysbatdir:
+            bashrc = os.path.join(msysbatdir, 'bash.rc')
+            with open(bashrc, 'w+') as f:
+                f.write(shellrc)
+            if os.environ['MSYSTEM'] == 'UCRT64':
+                subprocess.check_call([os.environ['SHELL'], '--rcfile', bashrc], shell=False, env=env)
+            else:
+                msysbat = os.path.join(msysbatdir, 'msys.bat')
+                with open(msysbat, 'w+') as f:
+                    f.write(bat_tpl % bashrc)
+                subprocess.check_call(msysbat, shell=True, env=env)
     else:
         with tempfile.TemporaryDirectory() as tmp:
             rc_tmp = open(os.path.join(tmp, rc_file), 'w+')
             rc_tmp.write(shellrc)
             rc_tmp.flush()
             if 'zsh' in shell:
-                env['ZDOTDIR'] = tmp.name
+                env['ZDOTDIR'] = tmp
                 os.execlpe(shell, shell, env)
             else:
                 # Check if the shell supports passing the rcfile

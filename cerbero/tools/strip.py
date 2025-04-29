@@ -18,23 +18,25 @@
 # Boston, MA 02111-1307, USA.
 
 import os
-import shlex
 from cerbero.config import Platform
 from cerbero.utils import shell, run_until_complete, messages as m
 
 
 class Strip(object):
-    """Wrapper for the strip tool"""
+    """
+    Wrapper for the strip tool.
+    Warning: This wrapper should never be used for msvc-built binaries since it usually corrupts them.
+    Please, check using_msvc == False.
+    """
 
     def __init__(self, config, excludes=None, keep_symbols=None):
         self.config = config
         self.excludes = excludes or []
         self.keep_symbols = keep_symbols or []
-        self.strip_cmd = []
-        if 'STRIP' in config.env:
-            self.strip_cmd = shlex.split(config.env['STRIP'])
+        self.build_env = self.config.get_build_env()
+        self.strip_cmd = self.build_env.get('STRIP', 'strip')
 
-    async def _async_strip_file(self, path):
+    async def async_strip_file(self, path):
         if not self.strip_cmd:
             m.warning('Strip command is not defined')
             return
@@ -55,12 +57,13 @@ class Strip(object):
             cmd += ['--strip-unneeded', path]
 
         try:
-            await shell.async_call(cmd)
+            # async_call() is not adapted for EnvValues in env
+            await shell.async_call(cmd, env={'PATH': self.build_env['PATH'].get()})
         except Exception as e:
             m.warning(e)
 
     def strip_file(self, path):
-        run_until_complete(self._async_strip_file(path))
+        run_until_complete(self.async_strip_file(path))
 
     def strip_dir(self, dir_path):
         if not self.strip_cmd:
@@ -70,5 +73,5 @@ class Strip(object):
         tasks = []
         for dirpath, dirnames, filenames in os.walk(dir_path):
             for f in filenames:
-                tasks.append(self._async_strip_file(os.path.join(dirpath, f)))
+                tasks.append(self.async_strip_file(os.path.join(dirpath, f)))
         run_until_complete(tasks)

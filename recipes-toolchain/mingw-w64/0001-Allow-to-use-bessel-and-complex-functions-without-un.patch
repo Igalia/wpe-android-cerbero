@@ -1,0 +1,26 @@
+From 7e98084e6bd440a912727103c452bbc39a368094 Mon Sep 17 00:00:00 2001
+From: Alexey Pavlov <alexpux@gmail.com>
+Date: Thu, 14 Sep 2017 11:13:45 +0300
+Subject: [PATCH 1/2] Allow to use bessel and complex functions without
+ undefining
+
+---
+ mingw-w64-headers/crt/math.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/mingw-w64-headers/crt/math.h b/mingw-w64-headers/crt/math.h
+index b3e0408..e29102a 100644
+--- a/mingw-w64-headers/crt/math.h
++++ b/mingw-w64-headers/crt/math.h
+@@ -258,7 +258,7 @@ extern "C" {
+ #define EDOM 33
+ #define ERANGE 34
+ 
+-#ifndef __STRICT_ANSI__
++#if !defined(__STRICT_ANSI__) || defined(_POSIX_C_SOURCE) || defined(_POSIX_SOURCE) || defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
+ 
+ #ifndef _COMPLEX_DEFINED
+ #define _COMPLEX_DEFINED
+-- 
+2.45.1
+

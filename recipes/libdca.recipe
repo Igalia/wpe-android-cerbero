@@ -1,38 +1,27 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
 from pathlib import Path
+from cerbero.tools.libtool import LibtoolLibrary
 
 class Recipe(recipe.Recipe):
     name = 'libdca'
-    version = '0.0.5'
+    version = '0.0.7'
     stype = SourceType.TARBALL
+    btype = BuildType.MESON
     url = 'https://download.videolan.org/pub/videolan/libdca/%(version)s/libdca-%(version)s.tar.bz2'
-    tarball_checksum = 'dba022e022109a5bacbe122d50917769ff27b64a7bba104bd38ced8de8510642'
+    tarball_checksum = '3a0b13815f582c661d2388ffcabc2f1ea82f471783c400f765f2ec6c81065f6a'
     licenses = [License.GPLv2Plus]
 
     files_libs = ['libdca']
-    files_bins = ['extract_dca', 'extract_dcs', 'dcadec', 'dcsdec']
     files_devel = ['include/dca.h', 'include/dts.h',
                    '%(libdir)s/pkgconfig/libdca.pc', '%(libdir)s/pkgconfig/libdts.pc']
-
-    def prepare(self):
-        if self.config.target_platform == Platform.ANDROID:
-            self.configure_options += ' --disable-oss'
-        if self.config.platform != Platform.WINDOWS:
-            self.autoreconf = True
-        # Don't enable always-inline, breaks the build on macos (space is significant)
-        self.set_env('ac_cv_c_inline', 'inline ')
+    patches = [
+        f'{name}/0001-Add-Meson-build.patch',
+        f'{name}/0002-Add-shared-library-support.patch',
+        f'{name}/0003-Allow-building-with-MSVC.patch',
+    ]
 
     def post_install(self):
-        # Create relative symlinks to prevent breakage during packaging
-        if self.config.platform != Platform.WINDOWS:
-            dangling = [
-                ('libdca.a', self.config.libdir + '/libdts.a'),
-                ('extract_dca.1', 'share/man/man1/extract_dts.1'),
-                ('dcadec.1', 'share/man/man1/dtsdec.1'),
-            ]
-            prefix = Path(self.config.prefix)
-            for src, dest in dangling:
-                dest = prefix / dest
-                dest.unlink()
-                dest.symlink_to(src)
+        # Meson does not generate la files
+        libtool_la = LibtoolLibrary('libdca', None, None, None, self.config.libdir, self.config.target_platform)
+        libtool_la.save()
         super().post_install()

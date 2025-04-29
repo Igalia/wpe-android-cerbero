@@ -1,0 +1,32 @@
+From 25111996286443d393df8ccee4929d9a58ab15b9 Mon Sep 17 00:00:00 2001
+From: Adrian Perez de Castro <aperez@igalia.com>
+Date: Fri, 4 Apr 2025 03:19:52 +0300
+Subject: [PATCH 6/6] Remove CMake policy tweaks
+
+---
+ source/CMakeLists.txt | 9 ---------
+ 1 file changed, 9 deletions(-)
+
+diff --git a/source/CMakeLists.txt b/source/CMakeLists.txt
+index 37c5aa8..f07e743 100755
+--- a/source/CMakeLists.txt
++++ b/source/CMakeLists.txt
+@@ -6,15 +6,6 @@ if(NOT CMAKE_BUILD_TYPE)
+         FORCE)
+ endif()
+ message(STATUS "cmake version ${CMAKE_VERSION}")
+-if(POLICY CMP0025)
+-    cmake_policy(SET CMP0025 OLD) # report Apple's Clang as just Clang
+-endif()
+-if(POLICY CMP0042)
+-    cmake_policy(SET CMP0042 NEW) # MACOSX_RPATH
+-endif()
+-if(POLICY CMP0054)
+-    cmake_policy(SET CMP0054 OLD) # Only interpret if() arguments as variables or keywords when unquoted
+-endif()
+ 
+ project (x265)
+ cmake_minimum_required (VERSION 2.8.8) # OBJECT libraries require 2.8.8
+-- 
+2.49.0
+

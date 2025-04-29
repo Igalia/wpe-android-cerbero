@@ -1,0 +1,109 @@
+From aac29cb837c9348e7e7aea393ebd7890a67ab567 Mon Sep 17 00:00:00 2001
+From: Adrian Perez de Castro <aperez@igalia.com>
+Date: Mon, 7 Apr 2025 04:10:03 -0700
+Subject: =?UTF-8?q?REGRESSION(286721@main):=20[CMake][WPE]=20Android=20bui?=
+ =?UTF-8?q?lds=20with=20Skia=20enabled=20fail=0Ahttps://bugs.webkit.org/sh?=
+ =?UTF-8?q?ow=5Fbug.cgi=3Fid=3D291176?=
+
+Reviewed by Carlos Garcia Campos.
+
+With the update done in 286721@main plus additional changes from 288086@main
+Skia has been refactored to use some platform-independent FreeType code on
+Android as well. Therefore, reorganize the CMake build system to reflect
+this change.
+
+While at it link, also to libintl on Android, which has always been needed
+and its lack was being workarounded in the Cerbero build system [1].
+
+[1] https://github.com/Igalia/wpe-android-cerbero/blob/28cb1f1686842826590b1b6936d0fd7b4f37364e/recipes/wpewebkit.recipe#L184
+
+* Source/ThirdParty/skia/CMakeLists.txt: Move most Android bits under
+  the Unix (non-Windows) part, keeping the addition of the Freetype related
+  sources and library under the common part.
+* Source/WebKit/PlatformWPE.cmake: Add linking to libintl on Android,
+  needed by WebKitWebContext to use bindtextdomain().
+
+Canonical link: https://commits.webkit.org/293351@main
+---
+ Source/ThirdParty/skia/CMakeLists.txt | 37 ++++++++++++++-------------
+ Source/WebKit/PlatformWPE.cmake       |  4 +++
+ 2 files changed, 23 insertions(+), 18 deletions(-)
+
+diff --git a/Source/ThirdParty/skia/CMakeLists.txt b/Source/ThirdParty/skia/CMakeLists.txt
+index 74b12c3ccae8..724b9ee421fb 100644
+--- a/Source/ThirdParty/skia/CMakeLists.txt
++++ b/Source/ThirdParty/skia/CMakeLists.txt
+@@ -789,16 +789,7 @@ add_library(Skia STATIC
+     modules/skcms/src/skcms_TransformSkx.cc
+ )
+ 
+-if (ANDROID)
+-    target_sources(Skia PRIVATE
+-        src/ports/SkDebug_android.cpp
+-        src/ports/SkFontMgr_android.cpp
+-        src/ports/SkFontMgr_android_parser.cpp
+-    )
+-    target_link_libraries(Skia PRIVATE
+-        EXPAT::EXPAT
+-    )
+-elseif (WIN32)
++if (WIN32)
+     target_sources(Skia PRIVATE
+         src/ports/SkDebug_win.cpp
+         src/ports/SkFontHost_win.cpp
+@@ -813,19 +804,29 @@ elseif (WIN32)
+ else ()
+     target_sources(Skia PRIVATE
+         src/ports/SkDebug_stdio.cpp
+-        src/ports/SkFontConfigInterface.cpp
+-        src/ports/SkFontConfigInterface_direct.cpp
+-        src/ports/SkFontConfigInterface_direct_factory.cpp
+         src/ports/SkFontHost_FreeType.cpp
+         src/ports/SkFontHost_FreeType_common.cpp
+-        src/ports/SkFontMgr_fontconfig.cpp
+         src/ports/SkOSFile_posix.cpp
+         src/ports/SkTypeface_proxy.cpp
+     )
+-    target_link_libraries(Skia PRIVATE
+-        Fontconfig::Fontconfig
+-        Freetype::Freetype
+-    )
++    target_link_libraries(Skia PRIVATE Freetype::Freetype)
++
++    if (ANDROID)
++        target_sources(Skia PRIVATE
++            src/ports/SkDebug_android.cpp
++            src/ports/SkFontMgr_android.cpp
++            src/ports/SkFontMgr_android_parser.cpp
++        )
++        target_link_libraries(Skia PRIVATE EXPAT::EXPAT android log)
++    else ()
++        target_sources(Skia PRIVATE
++            src/ports/SkFontConfigInterface.cpp
++            src/ports/SkFontConfigInterface_direct.cpp
++            src/ports/SkFontConfigInterface_direct_factory.cpp
++            src/ports/SkFontMgr_fontconfig.cpp
++        )
++        target_link_libraries(Skia PRIVATE Fontconfig::Fontconfig)
++    endif ()
+ endif ()
+ 
+ if (USE_LIBEPOXY)
+diff --git a/Source/WebKit/PlatformWPE.cmake b/Source/WebKit/PlatformWPE.cmake
+index 9cbe09a219b0..7aa780875b83 100644
+--- a/Source/WebKit/PlatformWPE.cmake
++++ b/Source/WebKit/PlatformWPE.cmake
+@@ -438,6 +438,10 @@ list(APPEND WebKit_LIBRARIES
+     ${LIBSOUP_LIBRARIES}
+ )
+ 
++if (ANDROID)
++    list(APPEND WebKit_PRIVATE_LIBRARIES intl)
++endif ()
++
+ if (USE_ATK)
+     list(APPEND WebKit_SYSTEM_INCLUDE_DIRECTORIES
+         ${ATK_INCLUDE_DIRS}
+-- 
+2.49.0
+

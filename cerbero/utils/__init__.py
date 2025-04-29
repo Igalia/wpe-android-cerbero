@@ -119,9 +119,25 @@ def determine_total_ram() -> int:
         ram_size_query = subprocess.run([shutil.which('sysctl'), '-n', 'hw.memsize'], stdout=subprocess.PIPE, text=True)
         if ram_size_query.returncode == 0:
             return int(ram_size_query.stdout.strip())
-    elif platform == Platform.WINDOWS:
+    elif platform == Platform.WINDOWS and shutil.which('wmic'):
         ram_size_query = subprocess.run(
             [shutil.which('wmic'), 'computersystem', 'get', 'totalphysicalmemory'], stdout=subprocess.PIPE, text=True
+        )
+        if ram_size_query.returncode == 0:
+            return int(ram_size_query.stdout.strip().splitlines()[-1])
+    elif platform == Platform.WINDOWS and shutil.which('powershell'):
+        ram_size_query = subprocess.run(
+            [
+                shutil.which('powershell'),
+                '(Get-CimInstance',
+                '-ClassName',
+                'Win32_ComputerSystem',
+                '-Property',
+                'TotalPhysicalMemory',
+                ').TotalPhysicalMemory',
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
         )
         if ram_size_query.returncode == 0:
             return int(ram_size_query.stdout.strip().splitlines()[-1])
@@ -252,19 +268,16 @@ Terminating.""",
                 d = ('arch', 'Arch', 'Linux')
             elif os.path.exists('/etc/os-release'):
                 with open('/etc/os-release', 'r') as f:
-                    if 'ID="amzn"\n' in f.readlines():
-                        d = ('RedHat', 'amazon', '')
-                    else:
-                        f.seek(0, 0)
-                        for line in f:
-                            # skip empty lines and comment lines
-                            if line.strip() and not line.lstrip().startswith('#'):
-                                k, v = line.rstrip().split('=')
-                                if k == 'NAME':
-                                    name = v.strip('"')
-                                elif k == 'VERSION_ID':
-                                    version = v.strip('"')
-                        d = (name, version, '')
+                    f.seek(0, 0)
+                    for line in f:
+                        # skip empty lines and comment lines
+                        if line.strip() and not line.lstrip().startswith('#'):
+                            k, v = line.rstrip().split('=')
+                            if k == 'NAME':
+                                name = v.strip('"')
+                            elif k == 'VERSION_ID':
+                                version = v.strip('"')
+                    d = (name, version, '')
 
         if d[0] in ['Ubuntu', 'debian', 'Debian GNU/Linux', 'LinuxMint', 'Linux Mint']:
             distro = Distro.DEBIAN
@@ -337,69 +350,28 @@ Terminating.""",
                 distro_version = 'ubuntu_24_04_noble'
             else:
                 raise FatalError("Distribution '%s' not supported" % str(d))
-        elif d[0] in [
-            'RedHat',
-            'Fedora',
-            'Fedora Linux',
-            'CentOS',
-            'Red Hat Enterprise Linux Server',
-            'CentOS Linux',
-            'Amazon Linux',
-            'Rocky Linux',
-        ]:
+        elif d[0].startswith('Fedora'):
             distro = Distro.REDHAT
-            if d[1] == '16':
-                distro_version = DistroVersion.FEDORA_16
-            elif d[1] == '17':
-                distro_version = DistroVersion.FEDORA_17
-            elif d[1] == '18':
-                distro_version = DistroVersion.FEDORA_18
-            elif d[1] == '19':
-                distro_version = DistroVersion.FEDORA_19
-            elif d[1] == '20':
-                distro_version = DistroVersion.FEDORA_20
-            elif d[1] == '21':
-                distro_version = DistroVersion.FEDORA_21
-            elif d[1] == '22':
-                distro_version = DistroVersion.FEDORA_22
-            elif d[1] == '23':
-                distro_version = DistroVersion.FEDORA_23
-            elif d[1] == '24':
-                distro_version = DistroVersion.FEDORA_24
-            elif d[1] == '25':
-                distro_version = DistroVersion.FEDORA_25
-            elif d[1] == '26':
-                distro_version = DistroVersion.FEDORA_26
-            elif d[1] == '27':
-                distro_version = DistroVersion.FEDORA_27
-            elif d[1] == '28':
-                distro_version = DistroVersion.FEDORA_28
-            elif d[1] == '29':
-                distro_version = DistroVersion.FEDORA_29
-            elif d[1] == '30':
-                distro_version = DistroVersion.FEDORA_30
-            elif d[1] == '31':
-                distro_version = DistroVersion.FEDORA_31
-            elif d[1] == '32':
-                distro_version = DistroVersion.FEDORA_32
-            elif d[0].startswith('Fedora'):
-                # str(int()) is for ensuring that the fedora version is
-                # actually a number
-                distro_version = 'fedora_' + str(int(d[1]))
-            elif d[1] == '6' or d[1].startswith('6.'):
+            # str(int()) is for ensuring that the fedora version is
+            # actually a number
+            distro_version = 'fedora_' + str(int(d[1]))
+        elif d[0].startswith(('RedHat', 'CentOS', 'Red Hat', 'Rocky Linux', 'AlmaLinux')):
+            distro = Distro.REDHAT
+            if d[1] == '6' or d[1].startswith('6.'):
                 distro_version = DistroVersion.REDHAT_6
             elif d[1] == '7' or d[1].startswith('7.'):
                 distro_version = DistroVersion.REDHAT_7
-            elif d[1] == '8' or d[1].startswith('8.'):
-                distro_version = DistroVersion.REDHAT_8
-            elif d[1] == '9' or d[1].startswith('9.'):
-                distro_version = DistroVersion.REDHAT_9
-            elif d[0] == 'Amazon Linux' and d[1].startswith('2'):
-                distro_version = DistroVersion.AMAZON_LINUX_2
-            elif d[1] == 'amazon':
-                distro_version = DistroVersion.AMAZON_LINUX
             else:
-                # FIXME Fill this
+                distro_version = 'redhat_' + d[1]
+        elif d[0].startswith('Amazon Linux'):
+            distro = Distro.REDHAT
+            if d[0].endswith('AMI'):
+                distro_version = DistroVersion.REDHAT_6
+            elif d[1] == '2':
+                distro_version = DistroVersion.REDHAT_7
+            elif d[1] == '2023':
+                distro_version = DistroVersion.AMAZON_LINUX_2023
+            else:
                 raise FatalError("Distribution '%s' not supported" % str(d))
         elif d[0].strip() in ['openSUSE']:
             distro = Distro.SUSE
@@ -518,26 +490,47 @@ def parse_file(filename, dict):
 
 
 def escape_path(path):
-    path = path.replace('\\', '/')
-    path = path.replace('(', r'\\(').replace(')', r'\\)')
-    path = path.replace(' ', r'\\ ')
-    return path
+    return Path(path).as_posix()
 
 
+def decorator_escape_path(fn):
+    def wrapper(*args, **kwargs):
+        return escape_path(fn(*args, **kwargs))
+
+    return wrapper
+
+
+@decorator_escape_path
 def get_wix_prefix(config):
-    if 'WIX' in config.env:
-        wix_prefix = os.path.join(config.env['WIX'], 'bin')
+    from cerbero.utils import shell
+
+    if config.platform != Platform.WINDOWS:
+        err_msg = ', please run bootstrap again'
     else:
-        wix_prefix = 'C:/Program Files%s/Windows Installer XML v3.5/bin'
-        if not os.path.exists(wix_prefix):
-            wix_prefix = wix_prefix % ' (x86)'
-    if not os.path.exists(wix_prefix):
-        wix_prefix = 'C:/Program Files%s/Wix Toolset v3.11/bin'
-        if not os.path.exists(wix_prefix):
-            wix_prefix = wix_prefix % ' (x86)'
-    if not os.path.exists(wix_prefix):
-        raise FatalError("The required packaging tool 'WiX' was not found")
-    return escape_path(to_unixpath(wix_prefix))
+        err_msg = ', please update it'
+    wix_path, found, newer = shell.check_tool_version('wix', '5.0.1', env=config.env)
+    if found:
+        if newer:
+            return os.path.dirname(wix_path)
+        raise FatalError(f'Need WiX 5.0, found {found} which is too old{err_msg}')
+    if config.cross_compiling():
+        return 'C:/Program Files/WiX Toolset v5.0/bin'
+    progfiles = ('C:/Program Files/', 'C:/Program Files (x86)/')
+    if 'WIX5' in os.environ:
+        return os.environ['WIX5']
+    # The hunt for WiX 5.0
+    wixdir = 'WiX Toolset v5.0/bin'
+    for d in progfiles:
+        wix_prefix = d + wixdir
+        if os.path.exists(wix_prefix):
+            return wix_prefix
+    # If the user has WiX 3 installed, give a better error message
+    for d in progfiles:
+        for wixdir in ('Windows Installer XML v3.5/bin', 'Wix Toolset v3.11/bin'):
+            wix_prefix = d + wixdir
+            if os.path.exists(wix_prefix):
+                raise FatalError(f'Need WiX 5.0, found WiX 3 which is too old{err_msg}')
+    raise FatalError('The required packaging tool WiX 5.0 was not found')
 
 
 def add_system_libs(config, new_env, old_env=None):
@@ -965,3 +958,83 @@ class EnvValuePath(EnvValue):
         if len(values) == 1 and not isinstance(values[0], list):
             values = (values[0].split(os.pathsep),)
         super().__init__(os.pathsep, *values)
+
+
+def merge_str_env(old_env, new_env, override_env=()):
+    """
+    Returns a new env dict with the `old_env` as a base, where vars are overridden
+    by vars from `new_env` dict using `EnvVar.is_*(k)` checks,
+    or without checks if var name is in `override_env` tuple.
+
+    Values are checked for being `str` type.
+    """
+    ret_env = {}
+    for k in new_env.keys():
+        new_v = new_env[k]
+        # Must not accidentally use this with EnvValue objects
+        if not isinstance(new_v, str):
+            raise AssertionError('new value {!r}: {!r}'.format(k, new_v))
+        if k not in old_env or k in override_env:
+            ret_env[k] = new_v
+            continue
+        old_v = old_env[k]
+        if not isinstance(old_v, str):
+            raise AssertionError('old value {!r}: {!r}'.format(k, new_v))
+        if new_v == old_v:
+            ret_env[k] = new_v
+        elif EnvVar.is_path(k) or EnvVar.is_arg(k) or EnvVar.is_cmd(k):
+            ret_env[k] = new_v
+        else:
+            raise FatalError(
+                "Don't know how to combine the environment "
+                "variable '%s' with values '%s' and '%s'" % (k, new_v, old_v)
+            )
+    for k in old_env.keys():
+        if k not in new_env:
+            ret_env[k] = old_env[k]
+    return ret_env
+
+
+def merge_env_value_env(old_env, new_env):
+    """
+    Returns a new env dict with the `old_env` as a base, where vars are overridden
+    by vars from `new_env` dict if they are not `EnvValuePath` or `EnvValueArg`,
+    otherwise, values are concatenated.
+
+    Changed values from `old_env` are checked for being `EnvValue` type.
+
+    Values from `new_env` are converted to `EnvValue` using `EnvValue.from_key(k, new_v)`.
+    """
+    ret_env = {}
+    # Set/merge new values
+    for k, new_v in new_env.items():
+        new_v = EnvValue.from_key(k, new_v)
+        if k not in old_env:
+            ret_env[k] = new_v
+            continue
+        old_v = old_env[k]
+        assert isinstance(old_v, EnvValue)
+        if isinstance(old_v, (EnvValueSingle, EnvValueCmd)) or (new_v == old_v):
+            ret_env[k] = new_v
+        elif isinstance(old_v, (EnvValuePath, EnvValueArg)):
+            ret_env[k] = new_v + old_v
+        else:
+            raise FatalError(
+                "Don't know how to combine the environment "
+                "variable '%s' with values '%s' and '%s'" % (k, new_v, old_v)
+            )
+    # Set remaining old values
+    for k in old_env.keys():
+        if k not in new_env:
+            ret_env[k] = old_env[k]
+    return ret_env
+
+
+### XML Hacks ###
+def xmlwrite(tree: etree.ElementTree, filepath, encoding='utf-8'):
+    import xml
+    from xml.dom import minidom
+
+    xmlstr = xml.etree.ElementTree.tostring(tree.getroot())
+    xmlstr = minidom.parseString(xmlstr).toprettyxml(indent='\t')
+    open(filepath, 'w', encoding=encoding).write(xmlstr)

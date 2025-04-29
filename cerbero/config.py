@@ -29,7 +29,7 @@ from cerbero.enums import Architecture, Platform, Distro, DistroVersion, License
 from cerbero.errors import FatalError, ConfigurationError
 from cerbero.utils import _, system_info, validate_packager, shell
 from cerbero.utils import to_unixpath, to_winepath, parse_file, detect_qt5, detect_qt6
-from cerbero.utils import EnvVar, EnvValue
+from cerbero.utils import merge_str_env, merge_env_value_env
 from cerbero.utils import messages as m
 from cerbero.ide.pkgconfig import PkgConfig
 from cerbero.ide.vs.env import get_vs_year_version
@@ -43,7 +43,7 @@ DEFAULT_GIT_ROOT = 'https://gitlab.freedesktop.org/gstreamer'
 DEFAULT_ALLOW_PARALLEL_BUILD = True
 DEFAULT_PACKAGER = 'Default <default@change.me>'
 CERBERO_UNINSTALLED = 'CERBERO_UNINSTALLED'
-DEFAULT_MIRRORS = ['https://gstreamer.freedesktop.org/src/mirror/']
+DEFAULT_MIRRORS = ['https://gstreamer.freedesktop.org/src/mirror']
 RUST_TRIPLE_MAPPING = {
     (Platform.ANDROID, Architecture.ARM64): 'aarch64-linux-android',
     (Platform.ANDROID, Architecture.ARMv7): 'armv7-linux-androideabi',
@@ -106,7 +106,7 @@ class Variants(object):
         'rust',
         'qt6',
     ]
-    __enabled_variants = ['debug', 'optimization', 'testspackage']
+    __enabled_variants = ['debug', 'optimization', 'testspackage', 'assert', 'checks']
     __bool_variants = __enabled_variants + __disabled_variants
     # Variants that are `key: (values)`, with the first value in the tuple
     # being the default
@@ -117,29 +117,44 @@ class Variants(object):
     }
 
     def __init__(self, variants):
+        # Keeps a list of variants overriden by the user after initialization
+        self.__overridden_variants = set()
         # Set default values
+        self.reset()
+        self.override(variants)
+
+    def reset(self):
         for v in self.__enabled_variants:
             setattr(self, v, True)
         for v in self.__disabled_variants:
             setattr(self, v, False)
         for v, choices in self.__mapping_variants.items():
             setattr(self, v, choices[0])
-        self.override(variants)
+        # reset after all inits
+        self.__overridden_variants.clear()
 
     def set_bool(self, key):
+        val = True
         if key.startswith('no'):
             key = key[2:]
-            if key not in self.__bool_variants:
-                m.warning('Variant {!r} is unknown or obsolete'.format(key))
-            setattr(self, key, False)
-        else:
-            if key not in self.__bool_variants:
-                m.warning('Variant {!r} is unknown or obsolete'.format(key))
-            setattr(self, key, True)
+            val = False
+        if key not in self.__bool_variants:
+            m.warning('Variant {!r} is unknown or obsolete'.format(key))
+        setattr(self, key, val)
 
-    def override(self, variants):
+    def override(self, variants, force=True):
+        """
+        Override existing variants using value (str) or values (list) from `variants`.
+
+        If `force` is `False`, do not override those variants that are already overridden
+        after the object initialization.
+        """
+
         if not isinstance(variants, list):
             variants = [variants]
+        if not force:
+            variants = [v for v in variants if not self._is_overridden(v)]
+
         # Set the configured values
         for v in variants:
             if '=' in v:
@@ -164,10 +179,16 @@ class Variants(object):
         if '-' in attr:
             raise AssertionError("Variant name {!r} must not contain '-'".format(attr))
         super().__setattr__(attr, value)
+        if attr in ['_Variants__overridden_variants']:
+            return
+
+        self.__overridden_variants.add(attr)
         # UWP implies Visual Studio
         if attr == 'uwp' and value:
             self.visualstudio = True
+            self.__overridden_variants.add('visualstudio')
             self.mingw = False
+            self.__overridden_variants.add('mingw')
 
     def __getattr__(self, name):
         if name.startswith('no') and name[2:] in self.bools():
@@ -184,6 +205,17 @@ class Variants(object):
 
     def mappings(self):
         return sorted(self.__mapping_variants)
+
+    def _is_overridden(self, variant):
+        if not isinstance(variant, str):
+            return False
+        if variant.startswith('no'):
+            real_name = variant[2:]
+            if real_name not in self.bools():
+                return False
+        else:
+            real_name = variant
+        return real_name in self.__overridden_variants
 
 
 class Config(object):
@@ -242,8 +274,8 @@ class Config(object):
         'use_ccache',
         'force_git_commit',
         'universal_archs',
+        'universal_prefix',
         'osx_target_sdk_version',
-        'variants',
         'build_tools_prefix',
         'build_tools_sources',
         'build_tools_logs',
@@ -279,6 +311,7 @@ class Config(object):
         'package_tarball_compression',
         'extra_mirrors',
         'extra_bootstrap_packages',
+        'override_bootstrap_packages',
         'moltenvk_prefix',
         'vs_install_path',
         'vs_install_version',
@@ -314,6 +347,8 @@ class Config(object):
         # Store raw os.environ data
         self._pre_environ = os.environ.copy()
         self.config_env = os.environ.copy()
+        # Initialize variants
+        self.variants = Variants([])
 
     def _copy(self, arch):
         c = copy.deepcopy(self)
@@ -329,18 +364,16 @@ class Config(object):
         if variants_override is None:
             variants_override = []
 
-        # Initialize variants
-        self.variants = Variants(variants_override)
+        # Reset variants
+        self.variants.reset()
+        self.variants.override(variants_override)
 
         # First load the default configuration
         self.load_defaults()
 
         # Use Visual Studio by default when building on Windows
-        if not self.variants.mingw and not self.variants.visualstudio:
-            if self.platform == Platform.WINDOWS:
-                self.variants.override(['visualstudio'])
-            else:
-                self.variants.override(['mingw'])
+        if not self.variants.mingw and not self.variants.visualstudio and self.platform == Platform.WINDOWS:
+            self.variants.override(['visualstudio'])
 
         # Next parse the user configuration file USER_CONFIG_FILE
         # which overrides the defaults
@@ -396,7 +429,10 @@ class Config(object):
         for config in list(self.arch_config.values()):
             if self.target_arch == Architecture.UNIVERSAL:
                 config.sources = os.path.join(self.sources, config.target_arch)
-                config.prefix = os.path.join(self.prefix)
+                config.prefix = os.path.join(self.prefix, config.target_arch)
+                # A universal prefix is only available if arch-prefixes are merged during build
+                if self.cross_universal_type() == 'merged':
+                    config.universal_prefix = self.prefix
             # qmake_path is different for each arch in android-universal, but
             # not in ios-universal.
             qtpkgdir, qmake5 = detect_qt5(
@@ -417,8 +453,8 @@ class Config(object):
 
         # Ensure that variants continue to override all other configuration
         self.variants.override(variants_override)
-        if not self.prefix_is_executable() and self.variants.gi:
-            m.warning(_('gobject introspection requires an executable ' "prefix, 'gi' variant will be removed"))
+        if self.variants.gi and not self.gi_supported():
+            m.warning(_("gobject introspection requires an executable target, 'gi' variant will be removed"))
             self.variants.gi = False
 
         for c in list(self.arch_config.values()):
@@ -485,41 +521,17 @@ class Config(object):
             'GST_PLUGIN_PATH_1_0',
             'GST_REGISTRY',
             'GST_REGISTRY_1_0',
+            'MONO_PATH',
+            'MONO_GAC_PREFIX',
         )
         for each in runtime_env:
             env[each] = to_winepath(env[each])
-        env['WIX'] = os.path.join(self.build_tools_prefix, 'lib', 'wix')
         # NOTE: Ensure that whatever directory this goes into is ignored by the
         # .cerbero deps CI job otherwise we will tar up ~1GB of generated data.
         env['WINEPREFIX'] = os.path.join(self.build_tools_prefix, 'var', 'tmp', 'wine')
         env['WINEPATH'] = to_winepath(os.path.join(prefix, 'bin'))
         env['WINEDEBUG'] = 'fixme-all'
         return env
-
-    def _merge_env(self, old_env, new_env, override_env=()):
-        ret_env = {}
-        for k in new_env.keys():
-            new_v = new_env[k]
-            # Must not accidentally use this with EnvValue objects
-            if isinstance(new_v, EnvValue):
-                raise AssertionError('{!r}: {!r}'.format(k, new_v))
-            if k not in old_env or k in override_env:
-                ret_env[k] = new_v
-                continue
-            old_v = old_env[k]
-            if new_v == old_v:
-                ret_env[k] = new_v
-            elif EnvVar.is_path(k) or EnvVar.is_arg(k) or EnvVar.is_cmd(k):
-                ret_env[k] = new_v
-            else:
-                raise FatalError(
-                    "Don't know how to combine the environment "
-                    "variable '%s' with values '%s' and '%s'" % (k, new_v, old_v)
-                )
-        for k in old_env.keys():
-            if k not in new_env:
-                ret_env[k] = old_env[k]
-        return ret_env
 
     @lru_cache(maxsize=None)
     def get_env(self, prefix, libdir):
@@ -585,6 +597,9 @@ class Config(object):
         if self.toolchain_prefix is not None:
             ld_library_path = self._join_path(ld_library_path, os.path.join(self.toolchain_prefix, 'lib'))
             includedir = self._join_path(includedir, os.path.join(self.toolchain_prefix, 'include'))
+        if self.lib_suffix and self.variants.python:
+            # if there is a lib_suffix and a Python build is present it would sit "next" to the lib_suffix dir rather than in it
+            ld_library_path = self._join_path(os.path.join(self.prefix, 'lib'), ld_library_path)
         # Most of these variables are extracted from jhbuild
         env = {
             'LD_LIBRARY_PATH': ld_library_path,
@@ -626,7 +641,7 @@ class Config(object):
 
         # merge the config env with this new env
         # LDFLAGS and PATH were already merged above
-        new_env = self._merge_env(self.config_env, env, override_env=('LDFLAGS', 'PATH'))
+        new_env = merge_str_env(self.config_env, env, override_env=('LDFLAGS', 'PATH'))
 
         if self.target_platform == Platform.WINDOWS and self.platform != Platform.WINDOWS:
             new_env = self.get_wine_runtime_env(prefix, new_env)
@@ -639,7 +654,6 @@ class Config(object):
         self.set_property('prefix', None)
         self.set_property('sources', None)
         self.set_property('local_sources', None)
-        self.set_property('cached_sources', self._relative_path('sources'))
         self.set_property('git_root', DEFAULT_GIT_ROOT)
         self.set_property('allow_parallel_build', DEFAULT_ALLOW_PARALLEL_BUILD)
         self.set_property('allow_universal_parallel_build', DEFAULT_ALLOW_PARALLEL_BUILD)
@@ -669,6 +683,7 @@ class Config(object):
         self.set_property('lib_suffix', '')
         self.set_property('exe_suffix', self._get_exe_suffix())
         self.set_property('data_dir', self._find_data_dir())
+        self.set_property('cached_sources', self._relative_path('sources'))
         self.set_property('environ_dir', self._relative_path('config'))
         self.set_property('recipes_dir', self._relative_path('recipes'))
         self.set_property('packages_dir', self._relative_path('packages'))
@@ -677,7 +692,6 @@ class Config(object):
         self.set_property('external_recipes', {})
         self.set_property('external_packages', {})
         self.set_property('universal_archs', None)
-        self.set_property('variants', None)
         self.set_property('build_tools_prefix', None)
         self.set_property('build_tools_sources', None)
         self.set_property('build_tools_cache', None)
@@ -693,6 +707,7 @@ class Config(object):
         self.set_property('extra_properties', {})
         self.set_property('extra_mirrors', [])
         self.set_property('extra_bootstrap_packages', {})
+        self.set_property('override_bootstrap_packages', {})
         self.set_property('bash_completions', set())
         # Increase open-files limits
         set_nofile_ulimit()
@@ -742,15 +757,12 @@ class Config(object):
         )
 
     def cross_universal_type(self):
-        if not self.cross_compiling():
+        if not self.cross_compiling() or self.target_arch != Architecture.UNIVERSAL:
             return None
-        # cross-ios-universal, each arch prefix is merged and flattened into one prefix
-        if isinstance(self.universal_archs, list):
-            return 'flat'
-        # cross-android-universal, each arch prefix is separate
-        if isinstance(self.universal_archs, dict):
-            return 'normal'
-        return None
+        # cross-{macos,ios}-universal, each arch prefix is merged and flattened into one prefix
+        if self.target_platform in (Platform.IOS, Platform.DARWIN):
+            return 'merged'
+        return 'split'
 
     def prefix_is_executable(self):
         """Can the binaries from the target platform can be executed in the
@@ -763,6 +775,25 @@ class Config(object):
         if self.target_arch != self.arch:
             if self.target_arch == Architecture.X86 and self.arch == Architecture.X86_64:
                 return True
+            if self.target_platform == Platform.DARWIN and self.target_arch == Architecture.X86_64:
+                return True
+            if self.target_arch == Architecture.UNIVERSAL and self.cross_universal_type() == 'merged':
+                return True
+            return False
+        return True
+
+    def gi_supported(self):
+        if not self.prefix_is_executable():
+            return False
+        # When building cross-macos-universal, the merged prefix is executable
+        # on both arm64 and x86_64, but introspection runs executables before
+        # merging, so we only support it when running on arm64, where we have
+        # Rosetta available.
+        if (
+            self.target_platform == Platform.DARWIN
+            and self.target_arch == Architecture.UNIVERSAL
+            and self.arch != Architecture.ARM64
+        ):
             return False
         return True
 
@@ -808,6 +839,8 @@ class Config(object):
         self.build_tools_config.build_tools_cache = self.build_tools_cache
         self.build_tools_config.system_build_tools = self.system_build_tools
         self.build_tools_config.external_recipes = self.external_recipes
+        self.build_tools_config.recipes_remotes = self.recipes_remotes
+        self.build_tools_config.recipes_commits = self.recipes_commits
         self.build_tools_config.extra_mirrors = self.extra_mirrors
         self.build_tools_config.cached_sources = self.cached_sources
         self.build_tools_config.vs_install_path = self.vs_install_path
@@ -829,26 +862,39 @@ class Config(object):
         # Make sure we also include the default non-versioned path on
         # Windows in addition to the posix path.
         self.py_win_prefix = sysconfig.get_path('purelib', 'nt', vars=pyvars)
+        # And the system prefix for Xcode Python
+        # (making it relative as it's appended to the Cerbero root folder)
+        self.py_macos_prefix = os.path.splitdrive(sysconfig.get_path('purelib'))[1].lstrip('/')
 
         self.py_prefixes = [self.py_prefix, self.py_plat_prefix]
         if self.platform == Platform.WINDOWS:
             self.py_prefixes.append(self.py_win_prefix)
         self.py_prefixes = list(set(self.py_prefixes))
 
+        if self.platform == Platform.WINDOWS:
+            # pythonpaths start with 'Lib' on Windows, which is extremely
+            # undesirable since our libdir is 'lib'. Windows APIs are
+            # case-preserving case-insensitive.
+            # Running this fix first is necessary because otherwise the WiX
+            # logic will enumerate lib/ first, and then Lib/ for the Python
+            # package, thus double defining the same artifact folder.
+            self.py_prefixes = [path.lower() for path in self.py_prefixes]
+
         # Ensure python paths exists because setup.py won't create them
         for path in self.py_prefixes:
             path = os.path.join(self.prefix, path)
-            if self.platform == Platform.WINDOWS:
-                # pythonpaths start with 'Lib' on Windows, which is extremely
-                # undesirable since our libdir is 'lib'. Windows APIs are
-                # case-preserving case-insensitive.
-                path = path.lower()
             # dict universal arches do not have an active prefix
             if not isinstance(self.universal_archs, dict):
                 self._create_path(path)
 
     def _parse(self, filename, reset=True):
-        config = {'os': os, '__file__': filename, 'env': self.config_env, 'cross': self.cross_compiling()}
+        config = {
+            'os': os,
+            '__file__': filename,
+            'env': self.config_env,
+            'cross': self.cross_compiling(),
+            'variants': self.variants,
+        }
         if not reset:
             for prop in self._properties:
                 if hasattr(self, prop):
@@ -918,19 +964,23 @@ class Config(object):
             if os.path.exists(config_path):
                 self._parse(config_path, reset=False)
 
-    def _get_toolchain_target_platform_arch(self):
+    def _get_toolchain_target_platform_arch(self, readable=False):
+        mingw = 'MinGW' if readable else 'mingw'
+        msvc = 'MSVC' if readable else 'msvc'
+        uwp = 'UWP' if readable else 'uwp'
+        debug = ' Debug' if readable else '-debug'
         if self.target_platform != Platform.WINDOWS or self._is_build_tools_config:
             return (self.target_platform, self.target_arch)
         if not self.variants.visualstudio:
-            return ('mingw', self.target_arch)
+            return (mingw, self.target_arch)
         # When building with Visual Studio, we can target (MSVC, UWP) x (debug, release)
         if self.variants.uwp:
-            target_platform = 'uwp'
+            target_platform = uwp
         else:
-            target_platform = 'msvc'
+            target_platform = msvc
         # Debug CRT needs a separate prefix
         if self.variants.vscrt == 'mdd':
-            target_platform += '-debug'
+            target_platform += debug
         # Check for invalid configuration of a custom Visual Studio path
         if self.vs_install_path and not self.vs_install_version:
             raise ConfigurationError('vs_install_path was set, but vs_install_version was not')
@@ -958,6 +1008,13 @@ class Config(object):
             self.python_exe = Path(self.build_tools_prefix, 'bin', 'python').as_posix()
         else:
             self.python_exe = Path(sys.executable).as_posix()
+        if (
+            self.platform == Platform.DARWIN
+            and self.arch == Architecture.ARM64
+            and self.target_arch == Architecture.X86_64
+        ):
+            # Created by the build-tools bootstrapper
+            self.python_exe = os.path.join(self.build_tools_prefix, 'bin', 'python3-x86_64')
 
     def _get_exe_suffix(self):
         if self.platform != Platform.WINDOWS:
@@ -1065,4 +1122,73 @@ class Config(object):
             tomli_dir = os.path.join(self.tomllib_path, 'src')
             sys.path.insert(0, os.path.abspath(tomli_dir))
             return importlib.import_module('tomli')
+        return None
+
+    def get_build_env(self, in_env=None, using_msvc=False):
+        """
+        Override/merge toolchain env with `in_env` and return a new dict
+        with values as EnvValue objects
+        if `in_env` is empty, `self.env` is used.
+        """
+
+        # Extract toolchain config for the build system from the appropriate
+        # config env dict. Start with `in_env`, since it contains toolchain
+        # config set by the recipe and when building for target platforms other
+        # than Windows, it also contains build tools and the env for the
+        # toolchain set by config/*.config.
+        #
+        # On Windows, the toolchain config is `msvc_env_for_build_system`
+        # or `mingw_env_for_build_system` depending on which toolchain
+        # this recipe will use.
+        if self.target_platform == Platform.WINDOWS:
+            if using_msvc:
+                build_env = dict(self.msvc_env_for_build_system)
+            else:
+                build_env = dict(self.mingw_env_for_build_system)
+        else:
+            build_env = {}
+
+        return merge_env_value_env(build_env, in_env or self.env)
+
+    # config helpers for recipes with Python dependencies:
+
+    def get_python_ext_suffix(self):
+        return sysconfig.get_config_vars().get('EXT_SUFFIX', '%(pext)s')
+
+    def get_python_framework(self):
+        """
+        Get framework prefix for RPATH
+        """
+        return sysconfig.get_config_vars().get('PYTHONFRAMEWORKPREFIX', None)
+
+    def get_python_version(self):
+        return self.extra_properties.get('python_version', sysconfig.get_python_version())
+
+    def get_python_name(self):
+        return f'python{self.get_python_version()}'
+
+    def get_build_python_exe(self):
+        py_name = self.get_python_name()
+        path = self._get_build_python_path('scripts', py_name)
+        if path:
+            return path.joinpath(py_name)
+        return self.python_exe
+
+    def get_python_prefix(self):
+        if self.target_platform == Platform.WINDOWS:
+            return Path(self.py_win_prefix)
+        else:
+            return Path(self.py_plat_prefix)
+
+    def _get_build_python_path(self, path_name, testfile):
+        py_version = self.get_python_version()
+        py_name = f'python{py_version}'
+        if path_name == 'scripts':
+            glue = 'bin'
+        elif path_name in ['include', 'platinclude']:
+            glue = Path('include', py_name)
+        else:
+            glue = Path('lib', py_name)
+        if Path(self.prefix, glue, testfile).exists():
+            return Path(self.prefix, glue)
         return None

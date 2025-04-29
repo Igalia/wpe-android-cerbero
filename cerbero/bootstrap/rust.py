@@ -17,9 +17,18 @@
 # Boston, MA 02111-1307, USA.
 
 import os
+import sys
 import stat
 import shutil
 from urllib.parse import urlparse
+
+if __name__ == '__main__':
+    # Add cerbero dir to path when invoked as a script so
+    # that the cerbero imports below resolve correctly.
+    parent = os.path.dirname(__file__)
+    parent = os.path.dirname(parent)
+    parent = os.path.dirname(parent)
+    sys.path.append(parent)
 
 from cerbero.bootstrap import BootstrapperBase
 from cerbero.utils import shell
@@ -34,8 +43,8 @@ class RustBootstrapper(BootstrapperBase):
     """
 
     SERVER = 'https://static.rust-lang.org'
-    RUSTUP_VERSION = '1.26.0'
-    RUST_VERSION = '1.76.0'
+    RUSTUP_VERSION = '1.27.1'
+    RUST_VERSION = '1.85.0'
     RUSTUP_URL_TPL = '{server}/rustup/archive/{version}/{triple}/rustup-init{exe_suffix}'
     RUSTUP_NAME_TPL = 'rustup-init-{version}-{triple}{exe_suffix}'
     CHANNEL_URL_TPL = '{server}/dist/channel-rust-{version}.toml'
@@ -44,18 +53,17 @@ class RustBootstrapper(BootstrapperBase):
     TOMLI_URL = 'https://files.pythonhosted.org/packages/c0/3f/d7af728f075fb08564c5949a9c95e44352e23dee646869fa104a3b2060a3/tomli-2.0.1.tar.gz'
     DOWNLOAD_CHECKSUMS = {
         # Rust packages metadata
-        'channel-rust-1.76.0.toml': '7b89a56897a1581ca66312468276ee08e6d596a3254128a567c1658c6f733c76',
+        'channel-rust-1.85.0.toml': '009e8b5ff43f12bf644b5e5b9fd89f96453072062a450c623882f64e85405da5',
         # Tomli Python module
         'tomli-2.0.1.tar.gz': 'de526c12914f0c550d15924c62d72abc48d6fe7364aa87328337a31007fe8a4f',
         # Rustup
-        'rustup-init-1.26.0-aarch64-unknown-linux-gnu': '673e336c81c65e6b16dcdede33f4cc9ed0f08bde1dbe7a935f113605292dc800',
-        'rustup-init-1.26.0-x86_64-unknown-linux-gnu': '0b2f6c8f85a3d02fde2efc0ced4657869d73fccfce59defb4e8d29233116e6db',
-        'rustup-init-1.26.0-aarch64-apple-darwin': 'ed299a8fe762dc28161a99a03cf62836977524ad557ad70e13882d2f375d3983',
-        'rustup-init-1.26.0-x86_64-apple-darwin': 'f6d1a9fac1a0d0802d87c254f02369a79973bc8c55aa0016d34af4fcdbd67822',
-        'rustup-init-1.26.0-i686-pc-windows-msvc.exe': '3fcfaf0018c12b96c49dc7e13e8638bd8de686ab27dd14238c3f11d0a936c003',
-        'rustup-init-1.26.0-x86_64-pc-windows-msvc.exe': '365d072ac4ef47f8774f4d2094108035e2291a0073702db25fa7797a30861fc9',
-        'rustup-init-1.26.0-i686-pc-windows-gnu.exe': 'f2cb7bb1e662a74bd9fa071cc0799dc4c814b3a56af979d6eba1169c3d98338b',
-        'rustup-init-1.26.0-x86_64-pc-windows-gnu.exe': '32e9128a82ac130043012463ca5f9cb507c349a3f16e3c2b98a3f7a32e294e59',
+        'rustup-init-1.27.1-x86_64-unknown-linux-gnu': '6aeece6993e902708983b209d04c0d1dbb14ebb405ddb87def578d41f920f56d',
+        'rustup-init-1.27.1-aarch64-unknown-linux-gnu': '1cffbf51e63e634c746f741de50649bbbcbd9dbe1de363c9ecef64e278dba2b2',
+        'rustup-init-1.27.1-x86_64-apple-darwin': 'f547d77c32d50d82b8228899b936bf2b3c72ce0a70fb3b364e7fba8891eba781',
+        'rustup-init-1.27.1-aarch64-apple-darwin': '760b18611021deee1a859c345d17200e0087d47f68dfe58278c57abe3a0d3dd0',
+        'rustup-init-1.27.1-x86_64-pc-windows-gnu.exe': 'b272587f5bf4b8be1396353d22829245955873425110398f110959c866296b2b',
+        'rustup-init-1.27.1-x86_64-pc-windows-msvc.exe': '193d6c727e18734edbf7303180657e96e9d5a08432002b4e6c5bbe77c60cb3e8',
+        'rustup-init-1.27.1-aarch64-pc-windows-msvc.exe': '5f4697ee3ea5d4592bffdbe9dc32d6a8865762821b14fdd1cf870e585083a2f0',
     }
     # The triple for the build platform/arch
     build_triple = None
@@ -68,23 +76,26 @@ class RustBootstrapper(BootstrapperBase):
     channel = None
 
     def __init__(self, config, offline):
-        super().__init__(config, offline)
+        super().__init__(config, offline, 'rust')
         self.offline = offline
         self.build_triple = self.config.rust_build_triple
         self.target_triples = self.config.rust_target_triples
         if self.config.platform == Platform.WINDOWS:
-            # On Windows, build-tools always use MSVC so we need to always
-            # bootstrap $arch-windows-msvc
-            bs_triple = self.config.rust_triple(self.config.arch, self.config.platform, True)
-            if bs_triple not in self.target_triples:
-                self.target_triples.append(bs_triple)
+            tgt = set(self.target_triples)
+            # On Windows, build tools must be built using MSVC. However,
+            # the current variant determines the default target.
+            # So we need to always bootstrap $arch-windows-msvc,
+            # and override the build triple accordingly
+            self.build_triple = self.config.rust_triple(self.config.arch, self.config.platform, True)
+            tgt.add(self.build_triple)
             # rustup-init wants to always install both 64-bit and 32-bit
             # toolchains, so ensure that we fetch and install both
             archs = {Architecture.X86_64, Architecture.X86}
             other_arch = (archs - {self.config.arch}).pop()
-            arch_triple = self.config.rust_triple(other_arch, self.config.platform, self.config.variants.visualstudio)
-            if arch_triple not in self.target_triples:
-                self.target_triples.append(arch_triple)
+            # in both MSVC and MinGW ABIs
+            tgt.add(self.config.rust_triple(other_arch, self.config.platform, True))
+            tgt.add(self.config.rust_triple(other_arch, self.config.platform, False))
+            self.target_triples = list(tgt)
         self.fetch_urls = self.get_fetch_urls()
         self.fetch_urls_func = self.get_more_fetch_urls
         self.extract_steps = []
@@ -171,10 +182,14 @@ class RustBootstrapper(BootstrapperBase):
             entry = channel_data['pkg'][c]['target'][self.build_triple]
             urls += list(get_entry_urls(entry))
 
-        # And then maybe also rust-std for the target machine
+        # Then maybe also rust-std for the target machine
         for triple in self.target_triples:
             if triple != self.build_triple:
                 entry = channel_data['pkg']['rust-std']['target'][triple]
+                urls += list(get_entry_urls(entry))
+            # And rust-mingw for any MinGW targets
+            if 'windows-gnu' in triple:
+                entry = channel_data['pkg']['rust-mingw']['target'][triple]
                 urls += list(get_entry_urls(entry))
 
         return (urls, self.install_toolchain_for_cargoc_fetch)
@@ -229,3 +244,95 @@ class RustBootstrapper(BootstrapperBase):
 
     async def start(self, jobs=0):
         await self.install_toolchain()
+
+
+if __name__ == '__main__':
+    import re
+    import argparse
+    import urllib.request
+    from hashlib import sha256
+    from cerbero.config import RUST_TRIPLE_MAPPING
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('rust_version', nargs='?', help='Rust version to update to')
+    parser.add_argument('rustup_version', nargs='?', help='Rustup version to update to')
+    args = parser.parse_args()
+
+    def get_rustup_version():
+        d = urllib.request.urlopen('https://sh.rustup.rs', timeout=20)
+        s = d.read().decode('utf-8')
+        m = re.search('rustup-init ([0-9.]+)', s)
+        return m.groups(0)[0]
+
+    def get_tomllib():
+        import importlib
+
+        if sys.version_info >= (3, 11, 0):
+            return importlib.import_module('tomllib')
+        for mod in ('tomli', 'toml', 'tomlkit'):
+            try:
+                return importlib.import_module(mod)
+            except ModuleNotFoundError:
+                continue
+        raise RuntimeError('No toml python module available')
+
+    def get_rust_version():
+        d = urllib.request.urlopen('https://static.rust-lang.org/dist/channel-rust-stable.toml', timeout=20)
+        tomllib = get_tomllib()
+        data = tomllib.loads(d.read().decode('utf-8'))
+        return data['pkg']['rust']['version'].split()[0]
+
+    def get_checksum(url):
+        print(url + ' ', end='', flush=True)
+        d = urllib.request.urlopen(url, timeout=20)
+        h = sha256()
+        while True:
+            chunk = d.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+            print('.', end='', flush=True)
+        print('')
+        return h.hexdigest()
+
+    cls = RustBootstrapper
+    kwargs = {'server': cls.SERVER}
+    checksums = {}
+
+    rust_version = args.rust_version
+    if not rust_version:
+        rust_version = get_rust_version()
+    if rust_version != cls.RUST_VERSION:
+        kwargs['version'] = rust_version
+        name = f'channel-rust-{rust_version}.toml'
+        checksums[name] = get_checksum(cls.CHANNEL_URL_TPL.format(**kwargs))
+
+    rustup_version = args.rustup_version
+    if not rustup_version:
+        rustup_version = get_rustup_version()
+    if rustup_version != cls.RUSTUP_VERSION:
+        kwargs['version'] = rustup_version
+        kwargs['exe_suffix'] = ''
+        for platform in (Platform.LINUX, Platform.DARWIN):
+            for arch in (Architecture.X86_64, Architecture.ARM64):
+                kwargs['triple'] = RUST_TRIPLE_MAPPING[(platform, arch)]
+                name = cls.RUSTUP_NAME_TPL.format(**kwargs)
+                checksums[name] = get_checksum(cls.RUSTUP_URL_TPL.format(**kwargs))
+
+        platform = Platform.WINDOWS
+        kwargs['exe_suffix'] = '.exe'
+        for toolchain in ('gnu', 'msvc'):
+            for arch in (Architecture.X86_64, Architecture.ARM64):
+                if toolchain == 'gnu' and arch == Architecture.ARM64:
+                    continue
+                kwargs['triple'] = RUST_TRIPLE_MAPPING[(platform, arch, toolchain)]
+                name = cls.RUSTUP_NAME_TPL.format(**kwargs)
+                checksums[name] = get_checksum(cls.RUSTUP_URL_TPL.format(**kwargs))
+
+    for key, value in checksums.items():
+        print(' ' * 8, end='')
+        print(f"'{key}': '{value}',")
+    if rustup_version != cls.RUSTUP_VERSION:
+        print(f"RUSTUP_VERSION = '{rustup_version}'")
+    if rust_version != cls.RUST_VERSION:
+        print(f"RUST_VERSION = '{rust_version}'")

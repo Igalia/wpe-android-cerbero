@@ -6,10 +6,10 @@ from cerbero.tools.libtool import get_libtool_versions
 
 class Recipe(recipe.Recipe):
     name = 'fontconfig'
-    version = '2.14.1'
+    version = '2.16.1'
     stype = SourceType.TARBALL
-    url = 'https://www.freedesktop.org/software/fontconfig/release/fontconfig-%(version)s.tar.xz'
-    tarball_checksum = '298e883f6e11d2c5e6d53c8a8394de58d563902cfab934e6be12fb5a5f361ef0'
+    url = 'https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.16.1/fontconfig-%(version)s.tar.xz'
+    tarball_checksum = 'f4577b62f3a909597c9fb032c6a7a2ae39649ed8ce7048b615a48f32abc0d53a'
     licenses = [{License.MIT: ['COPYING']}]
     btype = BuildType.MESON
     meson_options = {'doc': 'disabled', 'tests': 'disabled', 'tools': 'disabled'}

@@ -11,7 +11,7 @@ do
     if test "x$WIPE" = "x1"; then
       ./cerbero-uninstalled -c config/mingw-multilib-$p.cbc wipe --force
     fi
-  ./cerbero-uninstalled -c config/mingw-multilib-$p.cbc bootstrap --build-tools-only
+  ./cerbero-uninstalled -c config/mingw-multilib-$p.cbc bootstrap --system=no --toolchains=no
   ./cerbero-uninstalled -c config/mingw-multilib-$p.cbc build toolchain
 
   ARCH=x86_64
@@ -20,7 +20,7 @@ do
   else
       PLAT=linux
   fi
-  TC=mingw-6.0.0-gcc-8.2.0-$PLAT-multilib.tar.xz
+  TC=mingw-12.0.0-gcc-14.2.0-$PLAT-multilib.tar.xz
   echo "Creating tarball $TC"
   cd  ~/mingw/$PLAT/multilib
   XZ_OPT=-9 tar cJf $CURDIR/$TC *

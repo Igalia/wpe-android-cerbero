@@ -4,24 +4,21 @@ from cerbero.tools.libtool import LibtoolLibrary
 
 class Recipe(recipe.Recipe):
     name = 'sqlite3'
-    version = '3320300'
+    version = '3490100'
     stype = SourceType.TARBALL
     btype = BuildType.MESON
-    url = 'https://sqlite.org/2020/sqlite-amalgamation-%(version)s.zip'
+    url = 'https://sqlite.org/2025/sqlite-amalgamation-%(version)s.zip'
     tarball_dirname = 'sqlite-amalgamation-%(version)s'
-    tarball_checksum = 'e9cec01d4519e2d49b3810615237325263fe1feaceae390ee12b4a29bd73dbe2'
+    tarball_checksum = '6cebd1d8403fc58c30e93939b246f3e6e58d0765a5cd50546f16c00fd805d2c3'
     licenses = [License.PublicDomain]
 
-    patches = [
-        # https://github.com/mesonbuild/sqlite/pull/16
-        'sqlite3/0001-Add-meson-build-file-from-wrapdb.patch',
-    ]
+    patches = ['sqlite3/0001-Add-meson-build-file-from-wrapdb.patch']
 
     files_libs = ['libsqlite3']
     files_devel = ['include/sqlite3.h', '%(libdir)s/pkgconfig/sqlite3.pc']
 
     def post_install(self):
-        libtool_la = LibtoolLibrary('sqlite3', 0, 0, 0, self.config.libdir,
-                self.config.target_platform)
+        libtool_la = LibtoolLibrary('sqlite3', None, None, None,
+                self.config.libdir, self.config.target_platform)
         libtool_la.save()
         super().post_install()

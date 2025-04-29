@@ -4,7 +4,7 @@ from cerbero.utils import shell
 class Recipe(custom.GStreamer):
     name = 'gst-editing-services-1.0'
     btype = BuildType.MESON
-    tarball_checksum = 'b30a82e496975a9d821ce1c5b0cb846fd53e038bb390f9e1e0aa5e01efc217e2'
+    tarball_checksum = 'af5b27f5c9363027372100cac0baf19055280729df1cc58dd4e454ef698eb1ff'
     deps = ['gstreamer-1.0', 'gst-plugins-base-1.0', 'gst-plugins-good-1.0', 'gst-devtools-1.0']
 
     files_bins = ['ges-launch-1.0']
@@ -20,4 +20,9 @@ class Recipe(custom.GStreamer):
     files_validate = ['%(libdir)s/gst-validate-launcher/python/launcher/apps/geslaunch.py',
                       'share/gstreamer-1.0/validate/scenarios/ges-edit-clip-while-paused.scenario']
 
-#    files_python = ['site-packages/ges%(pext)s']
+    files_python = []
+
+    def prepare(self):
+        if self.config.variants.python:
+            self.files_python.append('%(pydir)s/gi/overrides/GES.py')
+            self.meson_options['python-exe'] = self.config.get_build_python_exe()

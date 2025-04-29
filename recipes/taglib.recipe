@@ -18,7 +18,8 @@ class Recipe(recipe.Recipe):
         -DBUILD_SHARED_LIBS=1 \
         -DBUILD_STATIC_LIBS=1 \
         -DBUILD_TESTING=0 \
-        -DCMAKE_DISABLE_FIND_PACKAGE_Boost=TRUE'
+        -DCMAKE_DISABLE_FIND_PACKAGE_Boost=TRUE \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5'
     deps = ['zlib']
 
     can_msvc = True
@@ -36,7 +37,6 @@ class Recipe(recipe.Recipe):
             self.configure_options += ' -DWIN32=1'
         if self.config.target_platform == Platform.ANDROID:
             # configure for android
-            self.configure_options += ' -DANDROID_NDK=1 '
             self.append_env('CXXFLAGS', '-frtti', '-fexceptions')
         self.configure_options += ' -DZLIB_ROOT=%s ' % self.config.prefix
 
