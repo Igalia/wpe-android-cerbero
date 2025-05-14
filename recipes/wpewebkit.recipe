@@ -2,11 +2,11 @@
 
 class Recipe(recipe.Recipe):
     name = 'wpewebkit'
-    version = '2.46.7'
+    version = '2.47.1'
     stype = SourceType.TARBALL
     btype = BuildType.CMAKE
     url = 'https://wpewebkit.org/releases/wpewebkit-{0}.tar.xz'.format(version)
-    tarball_checksum = 'cf3e47638595d86de96abdb94db69a836c8aa509fc063be714f52c5a24bb5cd5'
+    tarball_checksum = 'c1f16b0aca0b349fa6ca615267276efdf5151e1e7554e60fa7d3460c568e8f3c'
     deps = [
         'icu',
         'cairo',
@@ -28,7 +28,7 @@ class Recipe(recipe.Recipe):
         'libwpe',
         'openjpeg',
     ]
-    # TODO: support accessibility woff2
+    # TODO: support accessibility woff2, flite
     configure_options = '\
         -DPORT=WPE \
         -DENABLE_ACCESSIBILITY=OFF \
@@ -52,6 +52,7 @@ class Recipe(recipe.Recipe):
         -DENABLE_WEBDRIVER=ON \
         -DENABLE_WPE_PLATFORM=OFF \
         -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_SPEECH_SYNTHESIS=OFF \
     '
     cmake_generator = 'ninja'
 
@@ -61,8 +62,8 @@ class Recipe(recipe.Recipe):
     ]
 
     files_misc = [
-        'lib/wpe-webkit-2.0/libWPEWebInspectorResources.so',
-        'lib/wpe-webkit-2.0/injected-bundle/libWPEInjectedBundle.so'
+        'lib/wpe-webkit-2.0/injected-bundle/libWPEInjectedBundle.so',
+        'share/wpe-webkit-2.0/inspector.gresource'
     ]
 
     files_devel = [
@@ -164,6 +165,11 @@ class Recipe(recipe.Recipe):
     ]
 
     def prepare(self):
+        from os import path
+        glib_compile_resources_path = \
+        path.join(self.config.build_tools_prefix, 'bin', 'glib-compile-resources')
+        self.configure_options += \
+            f' -DGLIB_COMPILE_RESOURCES_EXECUTABLE={glib_compile_resources_path}'
         self.configure_options += f' \
             -DICU_ROOT={self.config.prefix} \
             -DZLIB_ROOT={self.config.prefix} \
@@ -180,7 +186,7 @@ class Recipe(recipe.Recipe):
             if self.config.target_arch == Architecture.ARMv7:
                 arch_src_name = 'arm'
             self.configure_options += ' -DCMAKE_SYSTEM_PROCESSOR=' + arch_src_name
-            self.configure_options += ' -DANDROID=1'
+            self.configure_options += ' -DANDROID=TRUE'
             self.append_env('LDFLAGS', '-landroid -llog -lm -lintl -lc++_shared -O2')
             # Android libc does not have bcmp()
             self.append_env('CXXFLAGS', ' -Dbcmp=memcmp ')
@@ -191,13 +197,15 @@ class Recipe(recipe.Recipe):
             # Placeholder to allow enabling debug externally
             self.append_env('WEBKIT_DEBUG', '')
             self.patches += [
-                'wpewebkit/0001-Make-UnixFileDescriptor-noncopyable-again.patch',
+# Already applied
+#                'wpewebkit/0001-Make-UnixFileDescriptor-noncopyable-again.patch',
                 'wpewebkit/0002-WPE-Use-ASharedMemory-when-targeting-Android.patch',
                 'wpewebkit/0003-Introduce-OS-ANDROID-to-simplify-preprocessor-guards.patch',
                 'wpewebkit/0004-Android-Build-WebDriver-as-a-library.patch',
                 'wpewebkit/0005-Android-Declare-namespace-when-building-WebDriver-as.patch',
                 'wpewebkit/0006-WPE-Android-build-WebDriver-as-a-shared-library.patch',
-                'wpewebkit/0007-Allow-setting-injected-bundle-and-inspector-lib-path.patch',
+# No longer used in this way
+#                'wpewebkit/0007-Allow-setting-injected-bundle-and-inspector-lib-path.patch',
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')
