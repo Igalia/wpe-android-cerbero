@@ -191,6 +191,8 @@ class Recipe(recipe.Recipe):
                 # To be dropped after 2.48.2
                 'wpewebkit/0004-GTK-WPE-Build-fails-with-ENABLE_RESOURCE_USAGE-OFF.patch',
                 'wpewebkit/0005-REGRESSION-286721-main-CMake-WPE-Android-builds-with.patch',
+                # To be fixed upstream
+                'wpewebkit/0006-Revert-Use-UnixFileDescriptor-in-IPC-and-ProcessLaun.patch',
             ]
         else:
             self.append_env('LDFLAGS', '-lrt')
