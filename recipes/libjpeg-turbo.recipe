@@ -9,8 +9,7 @@ class Recipe(recipe.Recipe):
     url = 'sf://.tar.gz'
     tarball_checksum = 'b24890e2bb46e12e72a79f7e965f409f4e16466d00e1dd15d93d73ee6b592523'
 
-    configure_tpl = "%(config-sh)s --prefix=%(prefix)s "\
-                    "--libdir=%(libdir)s"
+    configure_tpl = ["%(config-sh)s", "--prefix=%(prefix)s", "--libdir=%(libdir)s"]
     configure_options = " --with-jpeg8"
     patches = []
 

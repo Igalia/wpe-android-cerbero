@@ -410,7 +410,7 @@ class MakefilesBase (Build, ModifyEnvBase):
     '''
 
     config_sh = ''
-    configure_tpl = ''
+    configure_tpl = []
     configure_options = ''
     make = None
     make_install = None
@@ -468,7 +468,7 @@ class MakefilesBase (Build, ModifyEnvBase):
         # Construct a command list when possible
         if not self.config_sh_needs_shell:
             configure_cmd = []
-            for arg in self.configure_tpl.split():
+            for arg in self.configure_tpl:
                 if arg == '%(options)s':
                     options = self.configure_options
                     if isinstance(options, str):
@@ -579,9 +579,9 @@ class Autotools (MakefilesBase):
         # config_sh run from self.config_build_dir located at self.config_src_dir
 
         # Build with PIC for static linking
-        self.configure_tpl += ' --with-pic '
+        self.configure_tpl.append('--with-pic')
         # Disable automatic dependency tracking, speeding up one-time builds
-        self.configure_tpl += ' --disable-dependency-tracking '
+        self.configure_tpl.append('--disable-dependency-tracking')
         # Only use --disable-maintainer mode for real autotools based projects
         if os.path.exists(os.path.join(self.src_dir, 'configure.in')) or os.path.exists(
             os.path.join(self.src_dir, 'configure.ac')
@@ -589,13 +589,13 @@ class Autotools (MakefilesBase):
             self.configure_tpl.append('--disable-maintainer-mode')
             self.configure_tpl.append('--disable-silent-rules')
             # Never build gtk-doc documentation
-            self.configure_tpl += " --disable-gtk-doc "
+            self.configure_tpl.append('--disable-gtk-doc')
 
         if self.config.variants.gi and not self.disable_introspection \
                 and self.use_gobject_introspection():
-            self.configure_tpl += " --enable-introspection "
+            self.configure_tpl.append('--enable-introspection')
         else:
-            self.configure_tpl += " --disable-introspection "
+            self.configure_tpl.append('--disable-introspection')
 
         if self.autoreconf:
             await shell.async_call(self.autoreconf_sh, self.config_src_dir,
@@ -628,15 +628,15 @@ class Autotools (MakefilesBase):
             # configure and autogen.sh
             for k, v in self.env.items():
                 if k[2:6] == '_cv_':
-                    self.configure_tpl += ' %s="%s"' % (k, v)
+                    self.configure_tpl.append('%s="%s"' % (k, v))
 
         if self.add_host_build_target:
             if self.config.host is not None:
-                self.configure_tpl += ' --host=%(host)s'
+                self.configure_tpl.append('--host=%(host)s')
             if self.config.build is not None:
-                self.configure_tpl += ' --build=%(build)s'
+                self.configure_tpl.append('--build=%(build)s')
             if self.config.target is not None:
-                self.configure_tpl += ' --target=%(target)s'
+                self.configure_tpl.append('--target=%(target)s')
 
         use_configure_cache = self.config.use_configure_cache
         if self.use_system_libs and self.config.allow_system_libs:
@@ -647,10 +647,10 @@ class Autotools (MakefilesBase):
 
         if use_configure_cache and self.can_use_configure_cache:
             cache = os.path.join(self.config.sources, '.configure.cache')
-            self.configure_tpl += ' --cache-file=%s' % cache
+            self.configure_tpl.append('--cache-file=%s' % cache)
 
         # Add at the very end to allow recipes to override defaults
-        self.configure_tpl += "  %(options)s "
+        self.configure_tpl.append('%(options)s')
 
         await MakefilesBase.configure(self)
 
