@@ -17,6 +17,8 @@ class Recipe(recipe.Recipe):
     files_lang = ['libgpg-error']
     autoreconf = True
 
+    can_build_out_of_tree = False
+
     async def configure(self):
         if self.config.cross_compiling():
             if self.config.target_arch in (Architecture.ARM64, Architecture.X86_64):

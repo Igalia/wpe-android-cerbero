@@ -554,12 +554,15 @@ class Autotools (MakefilesBase):
     configure_tpl = ['%(config-sh)s', '--prefix %(prefix)s', '--libdir %(libdir)s']
     add_host_build_target = True
     can_use_configure_cache = True
+    can_build_out_of_tree = True
     supports_cache_variables = True
     disable_introspection = False
     override_libtool = True
 
     def __init__(self):
         MakefilesBase.__init__(self)
+        if self.can_build_out_of_tree:
+            self.build_dir = os.path.join(self.build_dir, 'b')
         self.make_check = self.make_check or ['make', 'check']
 
     def get_config_sh(self):
