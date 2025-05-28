@@ -16,6 +16,8 @@ class Recipe(recipe.Recipe):
     files_libs = ['libtasn1']
     files_devel = ['include/libtasn1.h', 'lib/pkgconfig/libtasn1.pc']
 
+    can_build_out_of_tree = False
+
     def prepare(self):
         # Don't make compiler warnings errors, there are quite a few
         # depending on the compiler used

@@ -37,6 +37,7 @@ class Recipe(recipe.Recipe):
     tarball_checksum = '8d205428c17bf13bb535300669ed28b338a157b1c01ae66d31d0d3e2d47c3fd5'
     stype = SourceType.TARBALL
     tarball_dirname = 'icu'
+    can_build_out_of_tree = False
     srcdir = 'source'
     configure_options = '\
         --disable-debug \
@@ -69,7 +70,7 @@ class Recipe(recipe.Recipe):
         await super().configure()
         # Prepend the contents of uconfig.h.prepend to uconfig.h and replace the header in-place.
         uconfigh = Path(self.build_dir, self.srcdir, 'common', 'unicode', 'uconfig.h')
-        contents = Path(self.build_dir, self.srcdir, 'uconfig.h.prepend').read_bytes() + uconfigh.read_bytes()
+        contents = Path(self.build_dir, 'uconfig.h.prepend').read_bytes() + uconfigh.read_bytes()
         uconfigh.write_bytes(contents)
 
     def post_install(self):

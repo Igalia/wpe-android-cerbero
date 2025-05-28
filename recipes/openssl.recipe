@@ -21,6 +21,8 @@ class Recipe(recipe.Recipe):
     # Can build for MSVC and UWP
     can_msvc = True
 
+    can_build_out_of_tree = False
+
     patches = [
         # Portable prefix with SSL certs
         'openssl/0001-Load-ca-certificate.crt-from-PREFIX-etc-ssl-on-macOS.patch',
