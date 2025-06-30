@@ -27,6 +27,7 @@ class Recipe(recipe.Recipe):
         'libwebp',
         'libwpe',
         'openjpeg',
+        'shared-mime-info'
     ]
     # TODO: support accessibility woff2
     configure_options = '\
