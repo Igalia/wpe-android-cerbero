@@ -58,7 +58,8 @@ class Package(package.Package):
         'sqlite3:libs',
         'xkbcommon:libs',
         'wpewebkit',
-        'zlib:libs'
+        'zlib:libs',
+        'shared-mime-info:share'
     ]
 
     files_devel = ['glib']
