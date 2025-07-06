@@ -1,0 +1,26 @@
+From f461d228bd61f9fa4fad7b8932e2462d0ead5015 Mon Sep 17 00:00:00 2001
+From: Nirbheek Chauhan <nirbheek@centricular.com>
+Date: Sat, 22 Jan 2022 14:01:04 +0530
+Subject: [PATCH 2/2] cmake: Set SOVERSION to match Autotools
+
+Nothing is ever simple, is it.
+---
+ CMakeLists.txt | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 625c183..a4f0c06 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -216,6 +216,8 @@ target_compile_definitions(wavpack
+         $<$<AND:$<BOOL:${WAVPACK_ENABLE_ASM}>,$<BOOL:${WavPack_CPU_ARM32}>>:OPT_ASM_ARM32>
+ )
+ 
++set_target_properties(wavpack PROPERTIES VERSION ${PROJECT_VERSION})
++
+ if(WAVPACK_ENABLE_ASM AND HAVE_MASM AND WavPack_CPU_X86)
+ 	set_source_files_properties(src/pack_x86.asm src/unpack_x86.asm PROPERTIES COMPILE_FLAGS "/safeseh")
+ endif()
+-- 
+2.47.2
+

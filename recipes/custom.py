@@ -21,7 +21,7 @@ def running_on_cerbero_ci():
 
 class GStreamer(recipe.Recipe):
     licenses = [License.LGPLv2Plus]
-    version = '1.24.8'
+    version = '1.26.3'
     tagged_for_release = True
 
     # Decide what stype to use

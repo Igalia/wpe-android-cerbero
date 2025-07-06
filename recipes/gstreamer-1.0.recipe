@@ -4,7 +4,7 @@ from cerbero.utils import shell
 class Recipe(custom.GStreamer):
     name = 'gstreamer-1.0'
     btype = BuildType.MESON
-    tarball_checksum = 'b807dbf36c5d2b3ce1c604133ed0c737350f9523ce4d8d644a1177c5f9d6ded3'
+    tarball_checksum = 'dc661603221293dccc740862425eb54fbbed60fb29d08c801d440a6a3ff82680'
     deps = ['glib']
     bash_completions = ['gst-inspect-1.0', 'gst-launch-1.0']
 
@@ -37,11 +37,8 @@ class Recipe(custom.GStreamer):
             '%(libdir)s/pkgconfig/gstreamer-base-1.0.pc',
             '%(libdir)s/pkgconfig/gstreamer-controller-1.0.pc',
             '%(libdir)s/pkgconfig/gstreamer-net-1.0.pc',
+            'share/cmake/FindGStreamer.cmake',
     ]
-
-    platform_files_devel = {
-        Platform.ANDROID: ['share/gst-android/ndk-build/GStreamer.java'],
-    }
 
     files_lang = ['gstreamer-1.0']
 

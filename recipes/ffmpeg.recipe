@@ -3,13 +3,16 @@ from cerbero.tools.libtool import LibtoolLibrary
 
 class Recipe(recipe.Recipe):
     name = 'ffmpeg'
-    version = '6.0'
+    version = '7.1'
     licenses = [License.LGPLv2_1Plus]
     stype = SourceType.TARBALL
     url = 'https://ffmpeg.org/releases/%(name)s-%(version)s.tar.xz'
-    tarball_checksum = '57be87c22d9b49c112b6d24bc67d42508660e6b718b3db89c44e47e289137082'
+    tarball_checksum = '40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6'
     patches = [
+        # https://gitlab.freedesktop.org/gstreamer/meson-ports/ffmpeg/-/tree/a66a916f069fe490a3fe418ec54f9cd05dd608be
         name + '/0001-Add-Meson-build.patch',
+        # https://gitlab.freedesktop.org/gstreamer/meson-ports/ffmpeg/-/merge_requests/151
+        name + '/fix-textrels.patch',
     ]
 
     btype = BuildType.MESON
@@ -42,7 +45,6 @@ class Recipe(recipe.Recipe):
         'cuvid': 'disabled',
         'libmfx': 'disabled',
         'libnpp': 'disabled',
-        'libnpp': 'disabled',
         'iconv': 'disabled',
         'jni': 'disabled',
         'v4l2_m2m': 'disabled',
@@ -57,19 +59,16 @@ class Recipe(recipe.Recipe):
 
     deps = ['bzip2', 'zlib']
 
-    files_libs = ['libavcodec', 'libavformat', 'libavutil', 'libswresample', 'libavfilter', 'libpostproc', 'libswscale']
+    files_libs = ['libavcodec', 'libavformat', 'libavutil', 'libswresample', 'libavfilter', 'libswscale']
     files_devel = []
 
     def prepare(self):
         # Arch-specific flags
-        if self.config.target_arch == Architecture.X86:
-            if self.config.target_platform == Platform.IOS:
-                # Simulator doesn't like shared libs
-                self.library_type = LibraryType.STATIC
-            elif self.config.target_platform == Platform.ANDROID:
-                # ld.lld: error: relocation R_386_32 cannot be used against local symbol; recompile with -fPIC
-                # See https://github.com/FFmpeg/FFmpeg/blob/n6.0/libavutil/x86/x86inc.asm#L104-L108
-                self.meson_options['asm'] = 'disabled'
+        if self.config.target_arch == Architecture.X86 and self.config.target_platform == Platform.IOS:
+            # Simulator doesn't like shared libs
+            self.library_type = LibraryType.STATIC
+        if self.config.target_arch == Architecture.X86 and self.config.target_platform == Platform.ANDROID:
+            self.meson_options['asm'] = 'disabled'
 
         # Populate self.files_devel
         files_devel_tpl = ['%(libdir)s/{}.la', '%(libdir)s/pkgconfig/{}.pc', 'include/{}']
@@ -93,9 +92,6 @@ class Recipe(recipe.Recipe):
                        deps=['avcodec', 'swresample', 'avutil', 'bz2', 'z'],
                        static_only=self.library_type == LibraryType.STATIC).save()
         LibtoolLibrary('avutil', None, None, None,
-                       self.config.libdir, self.config.target_platform,
-                       static_only=self.library_type == LibraryType.STATIC).save()
-        LibtoolLibrary('postproc', None, None, None,
                        self.config.libdir, self.config.target_platform,
                        static_only=self.library_type == LibraryType.STATIC).save()
         LibtoolLibrary('swresample', None, None, None,

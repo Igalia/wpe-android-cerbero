@@ -3,21 +3,15 @@ from cerbero.tools.libtool import LibtoolLibrary
 
 class Recipe(recipe.Recipe):
     name = 'orc'
-    version = '0.4.38'
+    version = '0.4.41'
 
     stype = SourceType.TARBALL
     # These properties are only used when stype is TARBALL
     url = 'https://gstreamer.freedesktop.org/src/orc/orc-%(version)s.tar.xz'
-    tarball_checksum = 'a55a98d4772567aa3faed8fb84d540c3db77eaba16d3e2e10b044fbc9228668d'
+    tarball_checksum = 'cb1bfd4f655289cd39bc04642d597be9de5427623f0861c1fc19c08d98467fa2'
     # These properties are only used when stype is GIT
     remotes = {'origin': 'https://gitlab.freedesktop.org/gstreamer/orc.git'}
     commit = 'origin/main'
-
-    patches = [
-        # Remove after the iOS Orc situation is resolved
-        # https://gitlab.freedesktop.org/gstreamer/orc/-/merge_requests/175
-        'orc/0001-orccpu-arm-Only-enable-on-Apple-arm64-if-running-on-.patch',
-    ]
 
     btype = BuildType.MESON
     licenses = [{License.BSD_like: ['COPYING']}]

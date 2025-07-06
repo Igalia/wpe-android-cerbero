@@ -173,16 +173,7 @@ class Recipe(recipe.Recipe):
         glib_compile_resources_path = \
             path.join(self.config.build_tools_prefix, 'bin', 'glib-compile-resources')
         self.configure_options += f' \
-            -DICU_ROOT={self.config.prefix} \
-            -DZLIB_ROOT={self.config.prefix} \
-            -DFREETYPE_LIBRARY={self.config.prefix}/lib/libfreetype.so \
-            -DFREETYPE_INCLUDE_DIR_ft2build={self.config.prefix}/include/freetype2 \
-            -DFREETYPE_INCLUDE_DIR_freetype2={self.config.prefix}/include/freetype2 \
             -DGLIB_COMPILE_RESOURCES_EXECUTABLE={glib_compile_resources_path} \
-            -DJPEG_LIBRARY={self.config.prefix}/lib/libjpeg.so \
-            -DJPEG_INCLUDE_DIR={self.config.prefix}/include \
-            -DPNG_LIBRARY={self.config.prefix}/lib/libpng.so \
-            -DPNG_INCLUDE_DIR={self.config.prefix}/include \
             '
         if self.config.target_platform in (Platform.ANDROID):
             arch_src_name = self.config.target_arch

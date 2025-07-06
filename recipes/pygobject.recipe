@@ -1,0 +1,60 @@
+# -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+
+class Recipe(recipe.Recipe):
+    name = 'pygobject'
+    version = '3.50.0'
+    stype = SourceType.TARBALL
+    btype = BuildType.MESON
+    url = f'https://download.gnome.org/sources/pygobject/{version[0:4]}/pygobject-{version}.tar.xz'
+    url = 'gnome://'
+    licenses = [{License.LGPLv2_1Plus: ['COPYING']}]
+
+    deps = ['pycairo', 'gobject-introspection', 'libffi']
+    tarball_checksum = '8d836e75b5a881d457ee1622cae4a32bcdba28a0ba562193adb3bbb472472212'
+    meson_options = {
+        'tests': False,
+    }
+
+    files_python = [
+        f'%(pydir)s/PyGObject-{version}.dist-info',
+        '%(pydir)s/gi/__init__.py',
+        '%(pydir)s/gi/_constants.py',
+        '%(pydir)s/gi/_error.py',
+        '%(pydir)s/gi/_gi%(pext)s',
+        '%(pydir)s/gi/_gi_cairo%(pext)s',
+        '%(pydir)s/gi/_gtktemplate.py',
+        '%(pydir)s/gi/_option.py',
+        '%(pydir)s/gi/_ossighelper.py',
+        '%(pydir)s/gi/_propertyhelper.py',
+        '%(pydir)s/gi/_signalhelper.py',
+        '%(pydir)s/gi/docstring.py',
+        '%(pydir)s/gi/events.py',
+        '%(pydir)s/gi/importer.py',
+        '%(pydir)s/gi/module.py',
+        '%(pydir)s/gi/pygtkcompat.py',
+        '%(pydir)s/gi/types.py',
+        '%(pydir)s/gi/repository/__init__.py',
+        '%(pydir)s/gi/overrides/GIMarshallingTests.py',
+        '%(pydir)s/gi/overrides/GLib.py',
+        '%(pydir)s/gi/overrides/GObject.py',
+        '%(pydir)s/gi/overrides/Gdk.py',
+        '%(pydir)s/gi/overrides/GdkPixbuf.py',
+        '%(pydir)s/gi/overrides/Gio.py',
+        '%(pydir)s/gi/overrides/Gtk.py',
+        '%(pydir)s/gi/overrides/Pango.py',
+        '%(pydir)s/gi/overrides/__init__.py',
+        '%(pydir)s/gi/overrides/keysyms.py',
+        'pygtkcompat',
+    ]
+    files_devel = [
+        'include/pygobject-3.0/pygobject.h',
+        '%(libdir)s/pkgconfig/pygobject-3.0.pc',
+    ]
+
+    patches = [
+        # https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/415
+        'pygobject/0001-gi-Call-os.add_dll_directory-on-Windows-when-possibl.patch',
+    ]
+
+    def prepare(self):
+        self.meson_options['python'] = self.config.get_build_python_exe()
