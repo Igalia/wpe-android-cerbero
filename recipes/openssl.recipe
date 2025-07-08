@@ -26,8 +26,6 @@ class Recipe(recipe.Recipe):
         # Portable prefix with SSL certs
         'openssl/0001-Load-ca-certificate.crt-from-PREFIX-etc-ssl-on-macOS.patch',
         # MSVC and UWP support
-        # TODO: Android support
-        # TODO: 'openssl/0003-openssl-Support-loading-ca-certificates-on-Android.patch',
         'openssl/0002-windows-makefile.tmpl-Generate-and-install-pkgconfig.patch',
     ]
 
@@ -178,6 +176,10 @@ class Recipe(recipe.Recipe):
         if self.config.target_platform == Platform.IOS:
             self.library_type = LibraryType.STATIC
         if self.config.target_platform == Platform.ANDROID:
+            self.patches += [
+                'openssl/0001-Android-Use-etc-system-security-cacerts-for-CA-certi.patch',
+                'openssl/0005-get_cert_by_subject-backward-compatibility.patch',
+            ]
             self.prepend_env('PATH', self.get_env('ANDROID_NDK_TOOLCHAIN_BIN'), sep=os.pathsep)
             self.set_env('ANDROID_NDK_ROOT', self.get_env('ANDROID_NDK_HOME'))
 
