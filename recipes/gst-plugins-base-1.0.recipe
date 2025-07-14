@@ -4,7 +4,7 @@
 class Recipe(custom.GStreamer):
     name = 'gst-plugins-base-1.0'
     btype = BuildType.MESON
-    tarball_checksum = '10fb31743750ccd498d3933e8aaecda563ebc65596a6ab875b47ee936e4b9599'
+    tarball_checksum = '4ef9f9ef09025308ce220e2dd22a89e4c992d8ca71b968e3c70af0634ec27933'
     meson_options = {# enabled plugins
                      'gl': 'enabled',
                      'gl-graphene': 'enabled',
@@ -43,6 +43,7 @@ class Recipe(custom.GStreamer):
              '%(libdir)s/gstreamer-1.0/libgstgio%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstoverlaycomposition%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstpango%(mext)s',
+             '%(libdir)s/gstreamer-1.0/libgstpbtypes%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstrawparse%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgsttypefindfunctions%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstvideoconvertscale%(mext)s',
@@ -63,6 +64,7 @@ class Recipe(custom.GStreamer):
              '%(libdir)s/gstreamer-1.0/libgstgio.a', '%(libdir)s/gstreamer-1.0/libgstgio.la',
              '%(libdir)s/gstreamer-1.0/libgstoverlaycomposition.a', '%(libdir)s/gstreamer-1.0/libgstoverlaycomposition.la',
              '%(libdir)s/gstreamer-1.0/libgstpango.a', '%(libdir)s/gstreamer-1.0/libgstpango.la',
+             '%(libdir)s/gstreamer-1.0/libgstpbtypes.a', '%(libdir)s/gstreamer-1.0/libgstpbtypes.la',
              '%(libdir)s/gstreamer-1.0/libgstrawparse.a', '%(libdir)s/gstreamer-1.0/libgstrawparse.la',
              '%(libdir)s/gstreamer-1.0/libgsttypefindfunctions.a', '%(libdir)s/gstreamer-1.0/libgsttypefindfunctions.la',
              '%(libdir)s/gstreamer-1.0/libgstvideoconvertscale.a', '%(libdir)s/gstreamer-1.0/libgstvideoconvertscale.la',
@@ -174,7 +176,8 @@ class Recipe(custom.GStreamer):
         self.enable_plugin('cdparanoia', 'sys', 'cdparanoia', dep='cdparanoia')
         self.enable_plugin('ximagesink', 'sys', 'x11', option='x11')
         self.enable_plugin('xvimagesink', 'sys', 'x11', option='xvideo')
-        self.enable_plugin('alsa', 'sys', 'alsa')
+        if self.config.target_platform == Platform.LINUX:
+            self.enable_plugin('alsa', 'sys', 'alsa')
 
         if self.using_uwp():
             # All these can be ported to Meson/UWP

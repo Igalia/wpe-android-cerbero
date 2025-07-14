@@ -1,23 +1,25 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
-from custom import GStreamer
+from custom import GStreamer, running_on_cerbero_ci
 from cerbero.errors import FatalError
 from cerbero.utils import messages as m
 from cerbero.utils import shell, determine_num_cargo_jobs, determine_total_ram
 from pathlib import Path
 import re
+import shlex
 import shutil
 import tempfile
 
 
 class Recipe(recipe.Recipe):
     name = 'gst-plugins-rs'
-    version = '0.12.9'
+    version = '0.14.0-alpha.1'
     stype = SourceType.GIT
     remotes = {'origin': 'https://gitlab.freedesktop.org/gstreamer/%(name)s.git'}
     if GStreamer.tagged_for_release:
         commit = f'gstreamer-{GStreamer.version}'
     else:
-        commit = 'origin/0.12'
+        # For 1.26 we'll track the main branch until it branches for 0.14
+        commit = 'origin/main'
     # Each plugin uses one or more of these licenses.
     licenses = [{
         License.Apachev2: ['LICENSE-APACHE'],
@@ -27,25 +29,32 @@ class Recipe(recipe.Recipe):
 
     btype = BuildType.CARGO_C
     cargo_packages = [
+        'analytics',
         'audiofx',
         'aws',
         'cdg',
         'claxon',
         'closedcaption',
         'dav1d',
+        'elevenlabs',
         'fallbackswitch',
         'ffv1',
         'fmp4',
         'gif',
+        'gopbuffer',
+        'hlsmultivariantsink',
         'hlssink3',
         'hsv',
         'inter',
         'json',
         'livesync',
         'lewton',
+        'mpegtslive',
         'mp4',
         'ndi',
         'onvif',
+        'originalbuffer',
+        'quinn',
         'rav1e',
         'regex',
         'reqwest',
@@ -53,6 +62,7 @@ class Recipe(recipe.Recipe):
         'png',
         'rtp',
         'rtsp',
+        'streamgrouper',
         'textahead',
         'textwrap',
         'threadshare',
@@ -69,12 +79,9 @@ class Recipe(recipe.Recipe):
     if determine_num_cargo_jobs() == 1:
         allow_parallel_build = False
         allow_universal_parallel_build = False
-    elif determine_total_ram() <= (32 << 30):
-        # gst-plugins-rs peaks at ~17GB per architectural build.
-        # Let's assume that > 32GB is enough, but that can be upped
-        # afterwards. Currently a 32GB box freezes when trying the
-        # universal build, as soon as it reaches the gstrswebrtc and
-        # gstaws crates.
+    elif determine_total_ram() <= (64 << 30):
+        # gst-plugins-rs has bloated to the point where a 64GB machine OOMs if
+        # too many architectures are built in parallel.
         allow_universal_parallel_build = False
 
     # Needed for openssl
@@ -90,11 +97,12 @@ class Recipe(recipe.Recipe):
                 self.update_categories()
             f = getattr(self, attr)
             f += [f'%(libdir)s/gstreamer-1.0/libgst{name}%(mext)s']
+        attr = f'files_plugins_{category}_devel'
+        if not hasattr(self, attr):
+            setattr(self, attr, [])
+        d = getattr(self, attr)
+        d.append(f'%(libdir)s/gstreamer-1.0/pkgconfig/gst{name}.pc')
         if self.library_type in (LibraryType.STATIC, LibraryType.BOTH):
-            attr = f'files_plugins_{category}_devel'
-            if not hasattr(self, attr):
-                setattr(self, attr, [])
-            d = getattr(self, attr)
             d += [
                 f'%(libdir)s/gstreamer-1.0/libgst{name}.a',
                 f'%(libdir)s/gstreamer-1.0/libgst{name}.la',
@@ -110,15 +118,59 @@ class Recipe(recipe.Recipe):
             self.deps.append('openssl')
 
         plugin_files = {
-            'core': ['fallbackswitch', 'livesync', 'rsinter', 'rstracers',
-                     'threadshare', 'togglerecord'],
-            'net': ['aws', 'hlssink3', 'ndi', 'rsonvif', 'raptorq', 'reqwest',
-                    'rsrtp', 'rsrtsp', 'webrtchttp', 'rswebrtc'],
-            'effects': ['rsaudiofx', 'rsvideofx'],
-            'codecs': ['cdg', 'claxon', 'dav1d', 'rsclosedcaption', 'ffv1',
-                       'fmp4', 'mp4', 'gif', 'hsv', 'lewton', 'rav1e', 'json',
-                       'rspng', 'regex', 'textwrap', 'textahead'],
-            'playback': ['uriplaylistbin'],
+            'core': [
+                'fallbackswitch',
+                'gopbuffer',
+                'livesync',
+                'originalbuffer',
+                'rsanalytics',
+                'rsinter',
+                'rstracers',
+                'streamgrouper',
+                'threadshare',
+                'togglerecord',
+            ],
+            'net': [
+                'aws',
+                'elevenlabs',
+                'hlssink3',
+                'hlsmultivariantsink',
+                'mpegtslive',
+                'ndi',
+                'quinn',
+                'rsonvif',
+                'raptorq',
+                'reqwest',
+                'rsrtp',
+                'rsrtsp',
+                'webrtchttp',
+                'rswebrtc',
+            ],
+            'effects': [
+                'rsaudiofx',
+                'rsvideofx',
+            ],
+            'codecs': [
+                'cdg',
+                'claxon',
+                'dav1d',
+                'rsclosedcaption',
+                'ffv1',
+                'fmp4',
+                'mp4',
+                'gif',
+                'hsv',
+                'lewton',
+                'rav1e',
+                'json',
+                'rspng',
+                'regex',
+                'textwrap',
+                'textahead',
+            ],
+            'playback': [
+                'uriplaylistbin',
+            ],
         }
         for category, names in plugin_files.items():
             for name in names:
@@ -134,43 +186,152 @@ class Recipe(recipe.Recipe):
                       '-plugin-tracers', '-rtp', '-sdp', '-utils', '-video', '-webrtc')
         for each in components:
             self.cargo_features.append(f'gst{each}/v1_22')
-        self.cargo_features.append('gst-plugin-webrtc/v1_22')
+        self.cargo_features.append('gst-plugin-webrtc/aws')
+        self.cargo_features.append('gst-plugin-webrtc/livekit')
+
+
+        # The LIBRARY_PATH setting affects all invocations of GCC underneath
+        # Cargo, in particular those that link build scripts (that are meant to
+        # run on the host machine, not through wine).
+        # When creating these, a value for LIBRARY_PATH present will cause
+        # cross-mingw GCC to prefer libpthread.a for MinGW-w64 over the system
+        # libpthread, and hell breaks loose.
+        if self.config.target_platform == Platform.WINDOWS and \
+            self.config.platform != self.config.target_platform:
+            self.set_env('LDFLAGS')
+            self.set_env('LIBRARY_PATH')
 
     async def configure(self):
         # Check that the Cargo.toml version matches the recipe version
         toml_version = self.get_cargo_toml_version()
-        if toml_version != self.version:
+        if toml_version != self.version and running_on_cerbero_ci():
             msg = f'{self.name} version {self.version} doesn\'t match Cargo.toml version {toml_version}'
             if GStreamer.tagged_for_release:
                 raise FatalError(msg)
             else:
                 m.warning(msg)
+
+        if self.config.target_platform == Platform.WINDOWS and self.library_type != LibraryType.SHARED:
+            if 'gst-plugin-webrtc' in self.cargo_packages:
+                # Buy some extra space for the MSI
+                self.append_config_toml('\n[profile.release.package."gst-plugin-webrtc"]\n'
+                                        'opt-level = "s"\n\n'
+                                        '[profile.release.package."gst-plugin-aws"]\n'
+                                        'opt-level = "s"\n')
+
         await super().configure()
 
     def post_install(self):
         # Cargo-C currently can't install pc files into custom dirs, so we need
         # to move these plugin pkgconfig files to the right place.
-        for f in self.files_list_by_category(self.DEVEL_CAT):
-            if not f.endswith('.pc') or not 'gstreamer-1.0' in f:
+        for f in self.files_list_by_category(self.DEVEL_CAT, only_existing=False):
+            if not f.endswith('.pc') or 'gstreamer-1.0' not in f:
                 continue
             name = os.path.basename(f)
             src = os.path.join(self.config.libdir, 'pkgconfig', name)
             dst = os.path.join(self.config.prefix, f)
             if os.path.exists(src):
-                shutil.copy(src, dst)
+                shutil.move(src, dst)
         # Cargo-C names MinGW DLLs as foo.dll instead of libfoo.dll
         # https://github.com/lu-zero/cargo-c/issues/280
         # It also follows MSVC convention for static/import libraries
         if self.using_msvc():
-            for f in self.files_list_by_category(self.DEVEL_CAT):
+            for f in self.files_list_by_category(self.DEVEL_CAT, only_existing=False):
                 if not f.endswith('.a'):
                     continue
                 dst = Path(self.config.prefix) / f
                 src = dst.with_name(f'{dst.stem[3:]}.lib')
                 if src.exists():
                     shutil.copy(src, dst)
+
+            # Try single-object prelinking (but with no symbol visibility
+            # changing)
+            # objcopy (from GNU binutils) is needed but it causes
+            # https://github.com/llvm/llvm-project/issues/62182
+            libraries = [f for f in self.files_list_by_category(self.DEVEL_CAT, only_existing=False)
+                         if f.endswith('.a')]
+            for f in libraries:
+                source = Path(self.config.prefix) / f
+
+                manifest = shell.check_output(
+                    [self.get_llvm_tool("llvm-nm.exe"), "-gjPUA", "--quiet", source.absolute()],
+                    env=self.env,
+                )
+
+                symbol_pattern = re.compile('gst_plugin_*')
+
+                with tempfile.TemporaryDirectory(prefix='cerbero', dir=self.config.home_dir) as tmp:
+                    # List those symbols that will be kept
+                    symbols_to_keep = set()
+
+                    for line in manifest.splitlines():
+                        data = line.split(sep=" ")
+                        symbol = data[1]
+
+                        if symbol_pattern.match(symbol):
+                            symbols_to_keep.add(symbol)
+
+                    ar = self.get_llvm_tool("llvm-ar.exe")
+                    m.log(f"Unpacking {source.absolute()} with ar", self.logfile)
+                    shell.new_call(
+                        [ar, 'xv', source.absolute()], cmd_dir=tmp, logfile=self.logfile)
+
+                    # Now everything is flat in the pwd
+                    m.log("Performing Single-Object Prelinking", self.logfile)
+                    prelinked_obj = (
+                        Path(tmp) / source.name).with_suffix('.prelinked.o')
+
+                    # lld doesn't support this, their drivers are per-OS
+                    ld = shutil.which("ld.bfd.exe")
+
+                    if ld is None:
+                        raise FatalError('ld.bfd not found')
+
+                    rsp = (
+                        Path(tmp) / source.name).with_suffix('.rsp')
+
+                    with rsp.open('w', encoding='utf-8') as f:
+                        files = set(str(f.relative_to(tmp)) for f in Path(tmp).glob('*.o'))
+
+                        flags = ['--relocatable']
+                        if self.config.target_arch == Architecture.X86:
+                            flags.extend(['-m', 'i386pe'])
+                        flags.extend(f'--export-dynamic-symbol={i}' for i in symbols_to_keep)
+                        flags.extend(['-o', prelinked_obj.name])
+                        flags.extend(files)
+
+                        f.write(' '.join(flags))
+
+                    shell.new_call(
+                        [
+                            ld,
+                            f"@{rsp.name}"
+                        ],
+                        cmd_dir=tmp,
+                        logfile=self.logfile,
+                    )
+
+                    dest = Path(tmp) / source.name
+                    m.log(f"Repacking library to {dest.absolute()}", self.logfile)
+
+                    shell.new_call(
+                        [
+                            ar,
+                            'rs',
+                            dest.absolute(),
+                            prelinked_obj.absolute()
+                        ],
+                        cmd_dir=tmp,
+                        logfile=self.logfile
+                    )
+
+                    # And now we paper over
+                    backup_source = source.absolute().with_suffix('.original.a')
+                    backup_source.unlink(missing_ok=True)
+                    source.rename(backup_source)
+                    os.replace(dest.absolute(), source.absolute())
         else:
-            for f in self.dist_files_list():
+            for f in self.dist_files_list(only_existing=False):
                 if not f.endswith('.dll'):
                     continue
                 name = os.path.basename(f)
@@ -182,7 +343,7 @@ class Recipe(recipe.Recipe):
                 # if there's a .dll.a it also needs renaming
                 if os.path.exists(src + '.a'):
                     shutil.copy(src + '.a', dst + '.a')
-            libraries = [f for f in self.devel_files_list()
+            libraries = [f for f in self.devel_files_list(only_existing=False)
                          if f.endswith('.a')]
             for f in libraries:
                 if self.config.target_platform in (Platform.IOS, Platform.DARWIN):
@@ -195,7 +356,7 @@ class Recipe(recipe.Recipe):
                     # Skip undefined symbols
                     # Write pathname of the object file
                     manifest = shell.check_output(
-                        [self.get_llvm_tool("llvm-nm"), "-gjPUA", source.absolute()],
+                        [self.get_llvm_tool("llvm-nm"), "-gjPUA", "--quiet", source.absolute()],
                         env=self.env,
                     )
 

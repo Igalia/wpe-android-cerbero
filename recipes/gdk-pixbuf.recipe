@@ -4,12 +4,12 @@ from cerbero.tools.libtool import LibtoolLibrary
 
 class Recipe(recipe.Recipe):
     name = 'gdk-pixbuf'
-    version = '2.42.10'
+    version = '2.42.12'
     licenses = [License.LGPLv2Plus]
     stype = SourceType.TARBALL
     btype = BuildType.MESON
     url = 'gnome://'
-    tarball_checksum = 'ee9b6c75d13ba096907a2e3c6b27b61bcd17f5c7ebeab5a5b439d2f2e39fe44b'
+    tarball_checksum = 'b9505b3445b9a7e48ced34760c3bcb73e966df3ac94c95a148cb669ab748e3c7'
     meson_options = {'docs' : 'false',
                      'man' : 'false',
                      'installed_tests' : 'false',
@@ -39,6 +39,12 @@ class Recipe(recipe.Recipe):
             cache = os.path.join(self.config.libdir, 'gdk-pixbuf-2.0',
                 '2.10.0', 'loaders.cache')
             shell.replace(cache, {self.config.prefix: '../'})
+
+        # Meson isn't aware that this is a target platform executable
+        if self.config.target_platform == Platform.WINDOWS:
+            pc = os.path.join(self.config.libdir, 'pkgconfig',
+                'gdk-pixbuf-2.0.pc')
+            shell.replace(pc, {'gdk-pixbuf-query-loaders': 'gdk-pixbuf-query-loaders.exe'})
 
         lib = LibtoolLibrary('gdk_pixbuf-2.0', None, None, None, self.config.libdir,
                 self.config.target_platform, deps=['gobject-2.0', 'gio-2.0', 'tiff', 'jpeg', 'png16'])

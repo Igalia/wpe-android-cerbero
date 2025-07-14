@@ -120,7 +120,11 @@ class PackagesStore(object):
         self._packages[package.name] = package
 
     def _list_metapackage_deps(self, metapackage):
-        def get_package_deps(package_name, visited=[], depslist=[]):
+        def get_package_deps(package_name, visited=None, depslist=None):
+            if visited is None:
+                visited = []
+            if depslist is None:
+                depslist = []
             if package_name in visited:
                 return
             visited.append(package_name)
@@ -208,6 +212,8 @@ class PackagesStore(object):
             p = package_cls(self._config, self, self.cookbook)
         elif issubclass(package_cls, package.SDKPackage):
             p = package_cls(self._config, self)
+        elif issubclass(package_cls, package.MetaPackage):
+            p = package_cls(self._config, self)
         elif issubclass(package_cls, package.InstallerPackage):
             p = package_cls(self._config, self)
         elif issubclass(package_cls, package.Package):
@@ -218,10 +224,7 @@ class PackagesStore(object):
         # a package may need to call something that needs it
         # e.g. prepare() may call self.relative_path(), which uses __file__
         p.__file__ = os.path.abspath(filepath)
-        p.prepare()
-        # reload files from package now that we called prepare that
-        # may have changed it
-        p.load_files()
+        p.load()
         return p
 
     def _is_package_class(self, cls):

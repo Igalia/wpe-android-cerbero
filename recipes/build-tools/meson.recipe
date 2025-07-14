@@ -2,11 +2,11 @@
 
 import glob
 import shutil
-from pathlib import PurePath
+from pathlib import PurePath, Path
 
 class Recipe(recipe.Recipe):
     name = 'meson'
-    version = '1.3.1'
+    version = '1.6.1'
     licenses = [License.Apachev2]
     btype = BuildType.CUSTOM
 
@@ -18,14 +18,13 @@ class Recipe(recipe.Recipe):
     else:
         stype = SourceType.TARBALL
         url = 'https://github.com/mesonbuild/meson/releases/download/%(version)s/meson-%(version)s.tar.gz'
-        tarball_checksum = '6020568bdede1643d4fb41e28215be38eff5d52da28ac7d125457c59e0032ad7'
+        tarball_checksum = '1eca49eb6c26d58bbee67fd3337d8ef557c0804e30a6d16bfdf269db997464de'
+        patches = [
+            f'{name}/0001-Python-Work-around-missing-rpath-in-Xcode-python3-em.patch'
+        ]
 
     files_bin = ['bin/meson']
     files_python = []
-
-    patches = [
-        f'{name}/0001-nasm-Add-mms-bitfields-to-the-list-of-ignored-flags.patch'
-    ]
 
     async def install(self):
         # setup.py barfs if using posix paths on Windows
@@ -42,9 +41,9 @@ class Recipe(recipe.Recipe):
             scriptsdir = os.path.join(prefix, 'Scripts')
             bindir = os.path.join(prefix, 'bin')
             os.makedirs(bindir, exist_ok=True)
-            for f in glob.glob('*', root_dir=scriptsdir):
-                tof = os.path.join(bindir, f)
+            for f in Path(scriptsdir).glob('*'):
+                tof = os.path.join(bindir, f.name)
                 if os.path.isfile(tof):
                     os.remove(tof)
-                shutil.move(os.path.join(scriptsdir, f), tof)
+                shutil.move(f, tof)
             os.rmdir(scriptsdir)

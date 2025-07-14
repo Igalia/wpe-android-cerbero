@@ -1,19 +1,33 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+from cerbero.tools.libtool import LibtoolLibrary
 
 
 class Recipe(recipe.Recipe):
     name = 'libjpeg-turbo'
-    version = '1.5.3'
+    version = '3.1.0'
     licenses = [{License.BSD_like: ['LICENSE.md']}]
     stype = SourceType.TARBALL
-    url = 'sf://.tar.gz'
-    tarball_checksum = 'b24890e2bb46e12e72a79f7e965f409f4e16466d00e1dd15d93d73ee6b592523'
+    btype = BuildType.CMAKE
+    library_type = LibraryType.BOTH
+    cmake_generator = 'ninja'
+    can_msvc = True
+    url = 'https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/%(version)s/libjpeg-turbo-%(version)s.tar.gz'
+    tarball_checksum = '9564c72b1dfd1d6fe6274c5f95a8d989b59854575d4bbee44ade7bc17aa9bc93'
 
-    configure_tpl = "%(config-sh)s --prefix=%(prefix)s "\
-                    "--libdir=%(libdir)s"
-    configure_options = " --with-jpeg8"
-    patches = []
+    configure_options = ' -DWITH_JPEG8=ON -DWITH_TURBOJPEG=ON '
 
     files_libs = ['libjpeg','libturbojpeg']
     files_devel = ['include/jpeglib.h', 'include/jerror.h', 'include/jconfig.h',
                    'include/jmorecfg.h','include/turbojpeg.h', '%(libdir)s/pkgconfig/libjpeg.pc']
+
+    def post_install(self):
+        # Meson does not generate la files
+        libtool_la = LibtoolLibrary('libjpeg', None, None, None,
+                                    self.config.libdir, self.config.target_platform,
+                                    deps=[])
+        libtool_la.save()
+        libtool_la = LibtoolLibrary('libturbojpeg', None, None, None,
+                                    self.config.libdir, self.config.target_platform,
+                                    deps=[])
+        libtool_la.save()
+        super().post_install()

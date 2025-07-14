@@ -34,7 +34,9 @@ class SDKPackage(custom.GStreamer, package.SDKPackage):
     platform_packages = {
             Platform.WINDOWS: [
                 ('vsintegration-1.0', True, False),
-                ('gstreamer-1.0-vs-templates', True, False),
+                ('gstreamer-1.0-vs-templates-2017', True, False),
+                ('gstreamer-1.0-vs-templates-2019', True, False),
+                ('gstreamer-1.0-vs-templates-2022', True, False),
                 ],
             }
 
@@ -81,3 +83,5 @@ class SDKPackage(custom.GStreamer, package.SDKPackage):
         if self.config.target_platform == Platform.IOS:
             self.resources_postinstall = 'post_install_ios'
             #self.user_resources = ['share/gst-sdk/tutorials/xcode iOS']
+        if self.config.variants.python and self.config.variants.gi:
+            self.packages += [('gstreamer-1.0-python', False, True)]
