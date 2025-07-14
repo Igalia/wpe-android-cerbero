@@ -183,6 +183,9 @@ class Recipe(recipe.Recipe):
             self.configure_options += ' -DANDROID=1'
             # Placeholder to allow enabling debug externally
             self.append_env('WEBKIT_DEBUG', '')
+            # FIXME Some of the libraries we link against, such as libintl, don't expose
+            # their full path and require an explicit library path
+            self.configure_options += f' -DCMAKE_SHARED_LINKER_FLAGS=-L{self.config.prefix}/lib'
         else:
             self.append_env('LDFLAGS', '-lrt')
             self.configure_options += ' -DCMAKE_SYSTEM_PROCESSOR=' + self.config.target_arch
