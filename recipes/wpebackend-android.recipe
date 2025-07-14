@@ -25,3 +25,4 @@ class Recipe(recipe.Recipe):
         arch_lib_name = android.get_android_arch_name(self.config.target_arch)
         stl_libdir = os.path.join(self.config.toolchain_prefix, 'libs', arch_lib_name)
         self.append_env('LDFLAGS', '-L' + stl_libdir, '-lc++_shared', '-llog', '-lgobject-2.0', '-O2')
+        self.configure_options += f' -DCMAKE_SHARED_LINKER_FLAGS=-L{self.config.prefix}/lib'
