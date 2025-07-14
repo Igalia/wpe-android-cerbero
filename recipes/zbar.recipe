@@ -17,8 +17,12 @@ class Recipe(recipe.Recipe):
     ]
 
     def prepare(self):
-        if self.config.target_platform in (Platform.WINDOWS, Platform.ANDROID):
+        if self.config.target_platform == Platform.WINDOWS:
             self.deps.append('libiconv')
+        elif self.config.target_platform == Platform.ANDROID:
+            # Android only provides libiconv with API level >=28 (Pie and newer)
+            if DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
+                self.deps.append('libiconv')
 
     def post_install(self):
          # Meson does not generate la files

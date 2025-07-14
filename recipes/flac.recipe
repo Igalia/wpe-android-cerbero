@@ -10,7 +10,7 @@ class Recipe(recipe.Recipe):
     stype = SourceType.TARBALL
     url = 'xiph://'
     tarball_checksum = '6c58e69cd22348f441b861092b825e591d0b822e106de6eb0ee4d05d27205b70'
-    deps = ['libogg', 'libiconv']
+    deps = ['libogg']
 
     btype = BuildType.MESON
 
@@ -35,6 +35,10 @@ class Recipe(recipe.Recipe):
         if self.config.target_platform == Platform.WINDOWS:
             # Newer MinGW requires this define for sscanf in stdio.h
             self.append_env('CFLAGS', '-D__USE_MINGW_ANSI_STDIO=1')
+        elif self.config.target_platform == Platform.ANDROID:
+            # Android only provides libiconv with API level >=28 (Pie and newer)
+            if DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
+                self.deps.append('libiconv')
 
     def post_install(self):
         # Meson does not generate la files
