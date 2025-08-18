@@ -1,28 +1,33 @@
-From a3af77d70c445fce082a95bfc8398a89392b8dbb Mon Sep 17 00:00:00 2001
+From 3d7bbd794b918098c08b66dde4ce00f6e1276010 Mon Sep 17 00:00:00 2001
 From: Simon Pena <spena@igalia.com>
 Date: Fri, 23 May 2025 13:29:21 +0100
-Subject: Revert "Use UnixFileDescriptor in IPC and ProcessLauncher"
+Subject: [PATCH] Revert "Use UnixFileDescriptor in IPC and ProcessLauncher"
 
 This reverts commit 0b420fd88a458a0ba19beeb53b6447b6bfdbbb1c.
 ---
- Source/WebKit/Platform/IPC/Connection.h       | 16 +++----
+ Source/WebKit/Platform/IPC/Connection.h       | 21 +++------
  Source/WebKit/Platform/IPC/IPCUtilities.h     |  8 +---
- .../Platform/IPC/unix/ConnectionUnix.cpp      | 15 ++++---
+ .../Platform/IPC/unix/ConnectionUnix.cpp      | 18 ++++----
  .../Shared/unix/AuxiliaryProcessMain.cpp      |  4 +-
- .../UIProcess/Launcher/ProcessLauncher.cpp    |  2 +-
+ .../UIProcess/Launcher/ProcessLauncher.cpp    |  7 +--
  .../UIProcess/Launcher/ProcessLauncher.h      |  1 +
  .../Launcher/glib/ProcessLauncherGLib.cpp     | 43 +++++++++++--------
  .../ProcessLauncherPlayStation.cpp            | 16 ++++---
- 8 files changed, 55 insertions(+), 50 deletions(-)
+ 8 files changed, 55 insertions(+), 63 deletions(-)
 
 diff --git a/Source/WebKit/Platform/IPC/Connection.h b/Source/WebKit/Platform/IPC/Connection.h
-index d2cb81c4d7cb..4866f6a3435b 100644
+index 2d35a5f620e0..ea5f020d173f 100644
 --- a/Source/WebKit/Platform/IPC/Connection.h
 +++ b/Source/WebKit/Platform/IPC/Connection.h
-@@ -62,10 +62,6 @@
+@@ -80,15 +80,6 @@
  #include <wtf/glib/GSocketMonitor.h>
  #endif
  
+-#if !USE(SYSTEM_MALLOC)
+-#include <bmalloc/TZoneHeap.h>
+-#include <bmalloc/bmalloc.h>
+-#endif
+-
 -#if USE(UNIX_DOMAIN_SOCKETS)
 -#include <wtf/unix/UnixFileDescriptor.h>
 -#endif
@@ -30,7 +35,7 @@ index d2cb81c4d7cb..4866f6a3435b 100644
  #if ENABLE(IPC_TESTING_API)
  #include "MessageObserver.h"
  #endif
-@@ -267,15 +263,15 @@ public:
+@@ -294,15 +285,15 @@ public:
  
  #if USE(UNIX_DOMAIN_SOCKETS)
          explicit Identifier(Handle&& handle)
@@ -51,7 +56,7 @@ index d2cb81c4d7cb..4866f6a3435b 100644
  #elif OS(WINDOWS)
          explicit Identifier(Handle&& handle)
              : Identifier(handle.leak())
-@@ -682,7 +678,7 @@ private:
+@@ -732,7 +723,7 @@ private:
      GSocketMonitor m_readSocketMonitor;
      GSocketMonitor m_writeSocketMonitor;
  #else
@@ -87,7 +92,7 @@ index 1b9827fa3bd1..701afa2f7cda 100644
  
  enum PlatformConnectionOptions {
 diff --git a/Source/WebKit/Platform/IPC/unix/ConnectionUnix.cpp b/Source/WebKit/Platform/IPC/unix/ConnectionUnix.cpp
-index 3b5cee1501f4..16dd5679869c 100644
+index 67dcd5820797..22c8f938abd5 100644
 --- a/Source/WebKit/Platform/IPC/unix/ConnectionUnix.cpp
 +++ b/Source/WebKit/Platform/IPC/unix/ConnectionUnix.cpp
 @@ -105,7 +105,7 @@ int Connection::socketDescriptor() const
@@ -116,17 +121,20 @@ index 3b5cee1501f4..16dd5679869c 100644
  #endif
      m_readBuffer.reserveInitialCapacity(messageMaxSize);
      m_fileDescriptors.reserveInitialCapacity(attachmentMaxAmount);
-@@ -129,7 +129,8 @@ void Connection::platformInitialize(Identifier&& identifier)
+@@ -129,10 +129,8 @@ void Connection::platformInitialize(Identifier&& identifier)
  void Connection::platformInvalidate()
  {
  #if USE(GLIB)
--    g_socket_close(m_socket.get(), nullptr);
+-    GUniqueOutPtr<GError> error;
+-    g_socket_close(m_socket.get(), &error.outPtr());
+-    if (error)
+-        g_warning("Failed to close WebKit IPC socket: %s", error->message);
 +    // In the GLib platform the socket descriptor is owned by GSocket.
 +    m_socket = nullptr;
  #else
      if (m_socketDescriptor.value() != -1)
          closeWithRetry(m_socketDescriptor.release());
-@@ -588,7 +589,7 @@ SocketPair createPlatformConnection(unsigned options)
+@@ -588,7 +586,7 @@ SocketPair createPlatformConnection(unsigned options)
  
          setPasscredIfNeeded();
  
@@ -135,7 +143,7 @@ index 3b5cee1501f4..16dd5679869c 100644
      }
  #endif
  
-@@ -601,13 +602,13 @@ SocketPair createPlatformConnection(unsigned options)
+@@ -601,13 +599,13 @@ SocketPair createPlatformConnection(unsigned options)
  
      setPasscredIfNeeded();
  
@@ -170,23 +178,28 @@ index 7fcd22cd2172..854a777839e1 100644
  
  #if USE(GLIB) && OS(LINUX)
 diff --git a/Source/WebKit/UIProcess/Launcher/ProcessLauncher.cpp b/Source/WebKit/UIProcess/Launcher/ProcessLauncher.cpp
-index 9c2b47c319ab..27746ff38a51 100644
+index b53679e3a47f..27746ff38a51 100644
 --- a/Source/WebKit/UIProcess/Launcher/ProcessLauncher.cpp
 +++ b/Source/WebKit/UIProcess/Launcher/ProcessLauncher.cpp
-@@ -53,7 +53,7 @@ ProcessLauncher::~ProcessLauncher()
+@@ -53,12 +53,7 @@ ProcessLauncher::~ProcessLauncher()
          tracePoint(ProcessLaunchEnd, m_launchOptions.processIdentifier.toUInt64(), static_cast<uint64_t>(m_launchOptions.processType));
  }
  
+-auto ProcessLauncher::checkedClient() const -> CheckedPtr<Client>
+-{
+-    return m_client;
+-}
+-
 -#if !PLATFORM(COCOA)
 +#if !PLATFORM(COCOA) && !USE(GLIB)
  void ProcessLauncher::platformDestroy()
  {
  }
 diff --git a/Source/WebKit/UIProcess/Launcher/ProcessLauncher.h b/Source/WebKit/UIProcess/Launcher/ProcessLauncher.h
-index 9a81048adce0..e3ba45fc4d68 100644
+index 077f5cfcf094..956ca3588fdc 100644
 --- a/Source/WebKit/UIProcess/Launcher/ProcessLauncher.h
 +++ b/Source/WebKit/UIProcess/Launcher/ProcessLauncher.h
-@@ -204,6 +204,7 @@ private:
+@@ -206,6 +206,7 @@ private:
  
  #if USE(GLIB) && OS(LINUX)
      GSocketMonitor m_socketMonitor;
@@ -195,7 +208,7 @@ index 9a81048adce0..e3ba45fc4d68 100644
  };
  
 diff --git a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
-index 272e0a6edea5..5558b9550daf 100644
+index 2f2a79c47804..0534368c8927 100644
 --- a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
 +++ b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
 @@ -55,6 +55,16 @@
@@ -234,9 +247,9 @@ index 272e0a6edea5..5558b9550daf 100644
              g_error("Unable to spawn a new child process");
  
          // We've finished launching the process, message back to the main run loop.
--        RunLoop::protectedMain()->dispatch([protectedThis = Ref { *this }, this, serverSocket = WTFMove(webkitSocketPair.server)] mutable {
+-        RunLoop::mainSingleton().dispatch([protectedThis = Ref { *this }, this, serverSocket = WTFMove(webkitSocketPair.server)] mutable {
 -            didFinishLaunchingProcess(m_processID, IPC::Connection::Identifier { WTFMove(serverSocket) });
-+        RunLoop::main().dispatch([protectedThis = Ref { *this }, this, serverSocket = webkitSocketPair.server] {
++        RunLoop::mainSingleton().dispatch([protectedThis = Ref { *this }, this, serverSocket = webkitSocketPair.server] {
 +            didFinishLaunchingProcess(m_processID, IPC::Connection::Identifier { serverSocket });
          });
  
@@ -287,9 +300,9 @@ index 272e0a6edea5..5558b9550daf 100644
      // We need to get the pid of the actual WebKit auxiliary process, not the bwrap or flatpak-spawn
      // intermediate process. And do it without blocking, because process launching is slow.
      g_socket_set_blocking(pidSocket.get(), FALSE);
--    m_socketMonitor.start(pidSocket.get(), G_IO_IN, RunLoop::main(), [protectedThis = Ref { *this }, this, pidSocket, serverSocket = WTFMove(webkitSocketPair.server)](GIOCondition condition) mutable -> gboolean {
+-    m_socketMonitor.start(pidSocket.get(), G_IO_IN, RunLoop::mainSingleton(), [protectedThis = Ref { *this }, this, pidSocket, serverSocket = WTFMove(webkitSocketPair.server)](GIOCondition condition) mutable -> gboolean {
 +    m_pidServerSocket = webkitSocketPair.server;
-+    m_socketMonitor.start(pidSocket.get(), G_IO_IN, RunLoop::main(), [protectedThis = Ref { *this }, this, pidSocket](GIOCondition condition) -> gboolean {
++    m_socketMonitor.start(pidSocket.get(), G_IO_IN, RunLoop::mainSingleton(), [protectedThis = Ref { *this }, this, pidSocket](GIOCondition condition) -> gboolean {
          if (!(condition & G_IO_IN))
              g_error("Failed to read pid from child process");
  
@@ -308,15 +321,15 @@ index 272e0a6edea5..5558b9550daf 100644
      m_processID = g_ascii_strtoll(processIdStr, nullptr, 0);
      RELEASE_ASSERT(m_processID);
  
--    RunLoop::protectedMain()->dispatch([protectedThis = Ref { *this }, this, serverSocket = WTFMove(webkitSocketPair.server)] mutable {
+-    RunLoop::mainSingleton().dispatch([protectedThis = Ref { *this }, this, serverSocket = WTFMove(webkitSocketPair.server)] mutable {
 -        didFinishLaunchingProcess(m_processID, IPC::Connection::Identifier { WTFMove(serverSocket) });
-+    RunLoop::main().dispatch([protectedThis = Ref { *this }, this, serverSocket = webkitSocketPair.server] {
++    RunLoop::mainSingleton().dispatch([protectedThis = Ref { *this }, this, serverSocket = webkitSocketPair.server] {
 +        didFinishLaunchingProcess(m_processID, IPC::Connection::Identifier { serverSocket });
      });
  #endif
  }
 diff --git a/Source/WebKit/UIProcess/Launcher/playstation/ProcessLauncherPlayStation.cpp b/Source/WebKit/UIProcess/Launcher/playstation/ProcessLauncherPlayStation.cpp
-index b1d5c2dcb3fd..2c3ed2d8c0f0 100644
+index 0c2b4de25f2b..2c3ed2d8c0f0 100644
 --- a/Source/WebKit/UIProcess/Launcher/playstation/ProcessLauncherPlayStation.cpp
 +++ b/Source/WebKit/UIProcess/Launcher/playstation/ProcessLauncherPlayStation.cpp
 @@ -64,12 +64,12 @@ void ProcessLauncher::launchProcess()
@@ -352,14 +365,14 @@ index b1d5c2dcb3fd..2c3ed2d8c0f0 100644
 +    close(socketPair.client);
  
      // We've finished launching the process, message back to the main run loop.
--    RunLoop::protectedMain()->dispatch([protectedThis = Ref { *this }, appLocalPid, serverIdentifier = WTFMove(socketPair.server)] mutable {
+-    RunLoop::mainSingleton().dispatch([protectedThis = Ref { *this }, appLocalPid, serverIdentifier = WTFMove(socketPair.server)] mutable {
 -        protectedThis->didFinishLaunchingProcess(appLocalPid, IPC::Connection::Identifier { WTFMove(serverIdentifier) });
 +    RefPtr<ProcessLauncher> protectedThis(this);
-+    RunLoop::main().dispatch([=] {
++    RunLoop::mainSingleton().dispatch([=] {
 +        protectedThis->didFinishLaunchingProcess(appLocalPid, IPC::Connection::Identifier { socketPair.server });
      });
  }
  
 -- 
-2.49.0
+2.34.1
 
