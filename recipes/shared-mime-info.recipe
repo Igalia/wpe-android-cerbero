@@ -1,0 +1,18 @@
+
+class Recipe(recipe.Recipe):
+    name = 'shared-mime-info'
+    version = '2.4'
+    stype = SourceType.TARBALL
+    tarball_checksum = '32dc32ae39ff1c1bf8434dd3b36770b48538a1772bc0298509d034f057005992'
+    url = 'https://gitlab.freedesktop.org/xdg/shared-mime-info/-/archive/%(version)s/shared-mime-info-%(version)s.tar.bz2'
+    tarball_dirname = 'shared-mime-info-%(version)s'
+
+    btype = BuildType.MESON
+    deps = [ 'glib', 'gettext' ]
+
+    licenses = [License.GPLv2Plus]
+
+    library_type = LibraryType.SHARED
+
+    files_bins = ['update-mime-database']
+    files_share = ['share/mime/packages/freedesktop.org.xml', 'share/gettext/its/shared-mime-info.loc', 'share/gettext/its/shared-mime-info.its']
