@@ -55,6 +55,7 @@ class Package(package.Package):
         'proxy-libintl:libs',
         'libpsl:libs',
         'openjpeg:libs',
+        'openxr:libs',
         'sqlite3:libs',
         'xkbcommon:libs',
         'wpewebkit',
