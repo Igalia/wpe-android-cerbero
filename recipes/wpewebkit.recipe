@@ -3,10 +3,10 @@
 class Recipe(recipe.Recipe):
     name = 'wpewebkit'
     version = '2.50.0'
-    stype = SourceType.GIT
+    stype = SourceType.TARBALL
     btype = BuildType.CMAKE
-    remotes = {'origin': 'https://github.com/WebKit/WebKit.git'}
-    commit = 'origin/webkitglib/2.50'
+    url = f'https://wpewebkit.org/releases/wpewebkit-{version}.tar.xz'
+    tarball_checksum = 'a9af62c5e18551b7386b7db864e8ba8156f219b8e6c639934bf6f3a567969922'
     deps = [
         'icu',
         'cairo',
