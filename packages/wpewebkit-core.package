@@ -50,6 +50,7 @@ class Package(package.Package):
         'libxml2:libs',
         'libxslt:libs',
         'nghttp2:libs',
+        'openxr:libs',
         'orc:libs',
         'pixman:libs',
         'proxy-libintl:libs',

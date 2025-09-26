@@ -24,7 +24,7 @@ from cerbero.packages.packagesstore import PackagesStore
 from cerbero.bootstrap.build_tools import BuildTools
 from cerbero.utils import _, N_, ArgparseArgument, remove_list_duplicates
 from cerbero.utils import messages as m
-from setuptools.sandbox import run_setup
+# from setuptools.sandbox import run_setup
 
 
 class BundleSource(Command):

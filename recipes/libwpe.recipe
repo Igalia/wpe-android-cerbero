@@ -10,6 +10,9 @@ class Recipe(recipe.Recipe):
     deps = ['xkbcommon']
     meson_options = {}
 
+    stype = SourceType.LOCAL_DIR
+    path = '/home/aperez/wpe/libwpe'
+
     files_libs = ['libwpe-1.0']
 
     files_devel = [
