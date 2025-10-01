@@ -48,7 +48,10 @@ class Recipe(recipe.Recipe):
         -DUSE_SKIA_OPENTYPE_SVG=OFF \
         -DUSE_SYSPROF_CAPTURE=OFF \
         -DENABLE_WEBDRIVER=ON \
-        -DENABLE_WPE_PLATFORM=OFF \
+        -DENABLE_WPE_PLATFORM=ON \
+        -DENABLE_WPE_PLATFORM_DRM=OFF \
+        -DENABLE_WPE_PLATFORM_WAYLAND=OFF \
+        -DENABLE_WPE_PLATFORM_HEADLESS=ON \
         -DCMAKE_BUILD_TYPE=Release \
     '
     cmake_generator = 'ninja'
@@ -68,8 +71,10 @@ class Recipe(recipe.Recipe):
 
     files_devel = [
         'include/wpe-webkit-2.0',
+        'include/wpe-platform',
         'lib/pkgconfig/wpe-webkit-2.0.pc',
-        'lib/pkgconfig/wpe-web-process-extension-2.0.pc'
+        'lib/pkgconfig/wpe-web-process-extension-2.0.pc',
+        'lib/pkgconfig/wpe-platform.pc'
     ]
 
     files_libexec = [
