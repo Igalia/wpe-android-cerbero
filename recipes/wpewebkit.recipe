@@ -7,6 +7,9 @@ class Recipe(recipe.Recipe):
     btype = BuildType.CMAKE
     url = f'https://wpewebkit.org/releases/wpewebkit-{version}.tar.xz'
     tarball_checksum = 'a9af62c5e18551b7386b7db864e8ba8156f219b8e6c639934bf6f3a567969922'
+    patches = [
+        'wpewebkit/0001-Enable-PlatformDisplayDefault-for-WPE-with-WPE_PLATFORM.patch',
+    ]
     deps = [
         'icu',
         'cairo',
