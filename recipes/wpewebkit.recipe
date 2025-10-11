@@ -28,6 +28,9 @@ class Recipe(recipe.Recipe):
         'libwpe',
         'openjpeg',
     ]
+    patches = [
+        'wpewebkit/0001-Add-Android-PlatformDisplay-support.patch',
+    ]
     # TODO: support accessibility woff2
     configure_options = '\
         -DPORT=WPE \

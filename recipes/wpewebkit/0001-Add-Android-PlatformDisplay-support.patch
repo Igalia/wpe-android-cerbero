@@ -1,0 +1,124 @@
+From f6a6b2ab822276db9a943c1369cd3dae9e044d67 Mon Sep 17 00:00:00 2001
+From: WPE Android <noreply@igalia.com>
+Date: Sat, 11 Oct 2025 12:00:00 +0000
+Subject: [PATCH] Add Android PlatformDisplay support
+
+Enable PlatformDisplayDefault for WPE platform to support Android.
+This allows WebProcess to initialize EGL display on Android using
+the standard EGL_DEFAULT_DISPLAY, preventing crashes when no other
+platform display backend is available.
+
+PlatformDisplayDefault was previously GTK-only, but the implementation
+is generic enough to work on any platform with EGL support, including
+Android/WPE.
+---
+ Source/WebCore/SourcesWPE.txt                                 | 1 +
+ Source/WebCore/platform/graphics/PlatformDisplay.h            | 2 +-
+ .../WebCore/platform/graphics/egl/PlatformDisplayDefault.cpp  | 4 ++--
+ Source/WebCore/platform/graphics/egl/PlatformDisplayDefault.h | 4 ++--
+ .../WebPage/CoordinatedGraphics/AcceleratedSurface.cpp        | 3 +++
+ Source/WebKit/WebProcess/glib/WebProcessGLib.cpp              | 4 ++--
+ 6 files changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/Source/WebCore/SourcesWPE.txt b/Source/WebCore/SourcesWPE.txt
+index 9a760528..9b11ff22 100644
+--- a/Source/WebCore/SourcesWPE.txt
++++ b/Source/WebCore/SourcesWPE.txt
+@@ -74,6 +74,7 @@ platform/graphics/egl/GLDisplay.cpp @no-unify
+ platform/graphics/egl/GLFence.cpp @no-unify
+ platform/graphics/egl/GLFenceEGL.cpp @no-unify
+ platform/graphics/egl/GLFenceGL.cpp @no-unify
++platform/graphics/egl/PlatformDisplayDefault.cpp @no-unify
+ platform/graphics/egl/PlatformDisplaySurfaceless.cpp @no-unify
+
+ platform/graphics/gbm/DMABufBuffer.cpp
+diff --git a/Source/WebCore/platform/graphics/PlatformDisplay.h b/Source/WebCore/platform/graphics/PlatformDisplay.h
+index af7470c2..6574abbf 100644
+--- a/Source/WebCore/platform/graphics/PlatformDisplay.h
++++ b/Source/WebCore/platform/graphics/PlatformDisplay.h
+@@ -74,7 +74,7 @@ public:
+ #if USE(GBM)
+         GBM,
+ #endif
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || PLATFORM(WPE)
+         Default,
+ #endif
+     };
+diff --git a/Source/WebCore/platform/graphics/egl/PlatformDisplayDefault.cpp b/Source/WebCore/platform/graphics/egl/PlatformDisplayDefault.cpp
+index 52348bda..28f322f4 100644
+--- a/Source/WebCore/platform/graphics/egl/PlatformDisplayDefault.cpp
++++ b/Source/WebCore/platform/graphics/egl/PlatformDisplayDefault.cpp
+@@ -26,7 +26,7 @@
+ #include "config.h"
+ #include "PlatformDisplayDefault.h"
+
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || PLATFORM(WPE)
+
+ #include "GLContext.h"
+ #include <epoxy/egl.h>
+@@ -59,4 +59,4 @@ PlatformDisplayDefault::~PlatformDisplayDefault()
+
+ } // namespace WebCore
+
+-#endif // PLATFORM(GTK)
++#endif // PLATFORM(GTK) || PLATFORM(WPE)
+diff --git a/Source/WebCore/platform/graphics/egl/PlatformDisplayDefault.h b/Source/WebCore/platform/graphics/egl/PlatformDisplayDefault.h
+index 0f14809d..ffa653f2 100644
+--- a/Source/WebCore/platform/graphics/egl/PlatformDisplayDefault.h
++++ b/Source/WebCore/platform/graphics/egl/PlatformDisplayDefault.h
+@@ -25,7 +25,7 @@
+
+ #pragma once
+
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || PLATFORM(WPE)
+
+ #include "PlatformDisplay.h"
+
+@@ -44,4 +44,4 @@ private:
+
+ } // namespace WebCore
+
+-#endif // PLATFORM(GTK)
++#endif // PLATFORM(GTK) || PLATFORM(WPE)
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
+index ae94fd6e..2ec6e762 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
+@@ -508,6 +508,9 @@ AcceleratedSurface::SwapChain::SwapChain(uint64_t surfaceID)
+     auto& display = PlatformDisplay::sharedDisplay();
+     switch (display.type()) {
+ #if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
++#if PLATFORM(GTK) || PLATFORM(WPE)
++    case PlatformDisplay::Type::Default:
++#endif
+     case PlatformDisplay::Type::Surfaceless:
+         if (display.eglExtensions().MESA_image_dma_buf_export && WebProcess::singleton().rendererBufferTransportMode().contains(RendererBufferTransportMode::Hardware))
+             m_type = Type::Texture;
+diff --git a/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp b/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
+index 3305f8d8..e123dfce 100644
+--- a/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
++++ b/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
+@@ -64,7 +64,7 @@
+ #include <WebCore/PlatformDisplaySurfaceless.h>
+ #endif
+
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || PLATFORM(WPE)
+ #include <WebCore/PlatformDisplayDefault.h>
+ #endif
+
+@@ -162,7 +162,7 @@ void WebProcess::initializePlatformDisplayIfNeeded() const
+         return;
+     }
+
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || PLATFORM(WPE)
+     if (auto display = PlatformDisplayDefault::create()) {
+         PlatformDisplay::setSharedDisplay(WTFMove(display));
+         return;
+--
+2.43.0
+
