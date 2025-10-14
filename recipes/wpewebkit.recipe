@@ -9,7 +9,8 @@ class Recipe(recipe.Recipe):
     tarball_checksum = 'a9af62c5e18551b7386b7db864e8ba8156f219b8e6c639934bf6f3a567969922'
     patches = [
         name + '/0001-Add-Android-EGL-support-for-surfaceless-display.patch',
-        name + '/0002-Add-AHardwareBuffer-support.patch',
+        name + '/0002-Add-Android-AHardwareBuffer-support-to-WPE-Platform-.patch',
+        name + '/0003-Fix-WPEBufferAndroid-EGLImage-creation.patch',
     ]
     deps = [
         'icu',

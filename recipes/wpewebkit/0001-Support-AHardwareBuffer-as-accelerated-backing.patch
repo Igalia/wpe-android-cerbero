@@ -1,0 +1,1213 @@
+From 2b98551cf982859962383a7ba7fab7163b74f31f Mon Sep 17 00:00:00 2001
+From: Felipe Erias <felipeerias@igalia.com>
+Date: Thu, 16 Oct 2025 11:02:06 +0900
+Subject: [PATCH] [WPEPlatform] Support AHardwareBuffer as accelerated backing
+ store https://bugs.webkit.org/show_bug.cgi?id=294347
+
+Reviewed by NOBODY (OOPS!).
+
+Adapted from commit a332ac4ca0a10152ebcab1e02feecf252f6edd04
+by Adrian Perez de Castro <aperez@igalia.com>
+see https://github.com/WebKit/WebKit/pull/48387 for details.
+
+This patch adds support for using AHardwareBuffer as the accelerated
+backing store on Android, adapting the original change to the
+WPEWebKit 2.50.0 API which uses DMABufFormat instead of BufferFormat.
+
+* Source/WebCore/PlatformWPE.cmake:
+* Source/WebCore/SourcesWPE.txt:
+* Source/WebCore/platform/graphics/PlatformDisplay.cpp:
+* Source/WebCore/platform/graphics/PlatformDisplay.h:
+* Source/WebCore/platform/graphics/android/BufferFormatAndroid.cpp: Added.
+* Source/WebCore/platform/graphics/android/BufferFormatAndroid.h: Added.
+* Source/WebCore/platform/graphics/egl/GLDisplay.cpp:
+* Source/WebCore/platform/graphics/egl/GLDisplay.h:
+* Source/WebKit/Shared/WebPageCreationParameters.h:
+* Source/WebKit/Shared/WebPageCreationParameters.serialization.in:
+* Source/WebKit/UIProcess/API/glib/WebKitProtocolHandler.cpp:
+* Source/WebKit/UIProcess/WebPageProxy.cpp:
+* Source/WebKit/UIProcess/WebPageProxy.h:
+* Source/WebKit/UIProcess/glib/AcceleratedBackingStore.messages.in:
+* Source/WebKit/UIProcess/glib/RendererBufferDescription.h:
+* Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp:
+* Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.h:
+* Source/WebKit/UIProcess/wpe/WebPageProxyWPE.cpp:
+* Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp:
+* Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h:
+* Source/cmake/FindAndroid.cmake:
+---
+ Source/WebCore/PlatformWPE.cmake              |   9 +-
+ Source/WebCore/SourcesWPE.txt                 |   2 +
+ .../platform/graphics/PlatformDisplay.cpp     |   8 +-
+ .../platform/graphics/PlatformDisplay.h       |   6 +-
+ .../graphics/android/BufferFormatAndroid.cpp  |  50 +++++++++
+ .../graphics/android/BufferFormatAndroid.h    |  33 ++++++
+ .../platform/graphics/egl/GLDisplay.cpp       |  50 ++++++++-
+ .../WebCore/platform/graphics/egl/GLDisplay.h |  16 +--
+ .../WebKit/Shared/WebPageCreationParameters.h |   4 +-
+ ...WebPageCreationParameters.serialization.in |   2 +-
+ .../API/glib/WebKitProtocolHandler.cpp        |   3 +
+ .../UIProcess/API/wpe/WPEWebViewPlatform.cpp  |   2 +-
+ Source/WebKit/UIProcess/WebPageProxy.cpp      |   2 +-
+ Source/WebKit/UIProcess/WebPageProxy.h        |   7 +-
+ .../glib/AcceleratedBackingStore.messages.in  |   5 +
+ .../glib/RendererBufferDescription.h          |   6 +-
+ .../UIProcess/wpe/AcceleratedBackingStore.cpp |  18 ++++
+ .../UIProcess/wpe/AcceleratedBackingStore.h   |   7 ++
+ .../WebKit/UIProcess/wpe/WebPageProxyWPE.cpp  |  17 +--
+ .../AcceleratedSurface.cpp                    | 100 ++++++++++++++++--
+ .../CoordinatedGraphics/AcceleratedSurface.h  |  52 ++++++---
+ .../DrawingAreaCoordinatedGraphics.cpp        |   2 +-
+ .../DrawingAreaCoordinatedGraphics.h          |   2 +-
+ .../CoordinatedGraphics/LayerTreeHost.cpp     |   2 +-
+ .../CoordinatedGraphics/LayerTreeHost.h       |   2 +-
+ .../ThreadedCompositor.cpp                    |   2 +-
+ .../CoordinatedGraphics/ThreadedCompositor.h  |   2 +-
+ .../WebKit/WebProcess/WebPage/DrawingArea.h   |   2 +-
+ Source/WebKit/WebProcess/WebPage/WebPage.cpp  |   2 +-
+ Source/WebKit/WebProcess/WebPage/WebPage.h    |  12 +--
+ .../WebProcess/WebPage/WebPage.messages.in    |   2 +-
+ .../WebProcess/WebPage/wpe/WebPageWPE.cpp     |   2 +-
+ Source/cmake/FindAndroid.cmake                |  10 ++
+ 33 files changed, 368 insertions(+), 73 deletions(-)
+ create mode 100644 Source/WebCore/platform/graphics/android/BufferFormatAndroid.cpp
+ create mode 100644 Source/WebCore/platform/graphics/android/BufferFormatAndroid.h
+
+diff --git a/Source/WebCore/PlatformWPE.cmake b/Source/WebCore/PlatformWPE.cmake
+index 474ff664..607547b8 100644
+--- a/Source/WebCore/PlatformWPE.cmake
++++ b/Source/WebCore/PlatformWPE.cmake
+@@ -26,6 +26,7 @@ list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
+     "${WEBCORE_DIR}/crypto/openssl"
+     "${WEBCORE_DIR}/platform/audio/glib"
+     "${WEBCORE_DIR}/platform/glib"
++    "${WEBCORE_DIR}/platform/graphics/android"
+     "${WEBCORE_DIR}/platform/graphics/egl"
+     "${WEBCORE_DIR}/platform/graphics/epoxy"
+     "${WEBCORE_DIR}/platform/graphics/gbm"
+@@ -55,6 +56,8 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+     platform/glib/SelectionData.h
+     platform/glib/SystemSettings.h
+
++    platform/graphics/android/BufferFormatAndroid.h
++
+     platform/graphics/egl/PlatformDisplaySurfaceless.h
+
+     platform/graphics/gbm/GBMVersioning.h
+diff --git a/Source/WebCore/SourcesWPE.txt b/Source/WebCore/SourcesWPE.txt
+index 9a760528..c899bdd8 100644
+--- a/Source/WebCore/SourcesWPE.txt
++++ b/Source/WebCore/SourcesWPE.txt
+@@ -63,6 +63,8 @@ platform/glib/PasteboardGLib.cpp
+
+ platform/graphics/PlatformDisplay.cpp @no-unify
+
++platform/graphics/android/BufferFormatAndroid.cpp @no-unify
++
+ platform/graphics/angle/PlatformDisplayANGLE.cpp @no-unify
+
+ platform/graphics/wpe/SystemFontDatabaseWPE.cpp
+diff --git a/Source/WebCore/platform/graphics/PlatformDisplay.cpp b/Source/WebCore/platform/graphics/PlatformDisplay.cpp
+index dd7ab3e3..aba9edff 100644
+--- a/Source/WebCore/platform/graphics/PlatformDisplay.cpp
++++ b/Source/WebCore/platform/graphics/PlatformDisplay.cpp
+@@ -174,18 +174,18 @@ bool PlatformDisplay::destroyEGLImage(EGLImage image) const
+     return m_eglDisplay->destroyImage(image);
+ }
+
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+ const Vector<GLDisplay::DMABufFormat>& PlatformDisplay::dmabufFormats()
+ {
+     return m_eglDisplay->dmabufFormats();
+ }
++#endif // USE(GBM) || OS(ANDROID)
+
+-#if USE(GSTREAMER)
++#if USE(GBM) && USE(GSTREAMER)
+ const Vector<GLDisplay::DMABufFormat>& PlatformDisplay::dmabufFormatsForVideo()
+ {
+     return m_eglDisplay->dmabufFormatsForVideo();
+ }
+-#endif
+-#endif // USE(GBM)
++#endif // USE(GBM) && USE(GSTREAMER)
+
+ } // namespace WebCore
+diff --git a/Source/WebCore/platform/graphics/PlatformDisplay.h b/Source/WebCore/platform/graphics/PlatformDisplay.h
+index af7470c2..edf9e557 100644
+--- a/Source/WebCore/platform/graphics/PlatformDisplay.h
++++ b/Source/WebCore/platform/graphics/PlatformDisplay.h
+@@ -91,11 +91,11 @@ public:
+
+     EGLImage createEGLImage(EGLContext, EGLenum target, EGLClientBuffer, const Vector<EGLAttrib>&) const;
+     bool destroyEGLImage(EGLImage) const;
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+     const Vector<GLDisplay::DMABufFormat>& dmabufFormats();
+-#if USE(GSTREAMER)
+-    const Vector<GLDisplay::DMABufFormat>& dmabufFormatsForVideo();
+ #endif
++#if USE(GBM) && USE(GSTREAMER)
++    const Vector<GLDisplay::DMABufFormat>& dmabufFormatsForVideo();
+ #endif
+
+ #if ENABLE(WEBGL)
+diff --git a/Source/WebCore/platform/graphics/android/BufferFormatAndroid.cpp b/Source/WebCore/platform/graphics/android/BufferFormatAndroid.cpp
+new file mode 100644
+index 00000000..fb4893f3
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/android/BufferFormatAndroid.cpp
+@@ -0,0 +1,50 @@
++/*
++ * Copyright (C) 2025 Igalia S.L.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Library General Public
++ * License as published by the Free Software Foundation; either
++ * version 2 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Library General Public License for more details.
++ *
++ * You should have received a copy of the GNU Library General Public License
++ * along with this library; see the file COPYING.LIB.  If not, write to
++ * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
++ * Boston, MA 02110-1301, USA.
++ */
++
++#include "config.h"
++#include "BufferFormatAndroid.h"
++
++#if OS(ANDROID)
++
++#include <android/hardware_buffer.h>
++#include <drm/drm_fourcc.h>
++
++namespace WebCore {
++
++std::optional<uint32_t> toAHardwareBufferFormat(const FourCC fourcc)
++{
++    switch (fourcc.value) {
++    case DRM_FORMAT_RGBX8888:
++        return AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM;
++    case DRM_FORMAT_RGBA8888:
++        return AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
++    case DRM_FORMAT_RGB565:
++        return AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM;
++    case DRM_FORMAT_RGBA1010102:
++        return AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM;
++    case DRM_FORMAT_RGB888:
++        return AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM;
++    default:
++        return std::nullopt;
++    }
++}
++
++} // namespace WebCore
++
++#endif // OS(ANDROID)
+diff --git a/Source/WebCore/platform/graphics/android/BufferFormatAndroid.h b/Source/WebCore/platform/graphics/android/BufferFormatAndroid.h
+new file mode 100644
+index 00000000..7542438a
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/android/BufferFormatAndroid.h
+@@ -0,0 +1,33 @@
++/*
++ * Copyright (C) 2025 Igalia S.L.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Library General Public
++ * License as published by the Free Software Foundation; either
++ * version 2 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Library General Public License for more details.
++ *
++ * You should have received a copy of the GNU Library General Public License
++ * along with this library; see the file COPYING.LIB.  If not, write to
++ * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
++ * Boston, MA 02110-1301, USA.
++ */
++
++#pragma once
++
++#if OS(ANDROID)
++
++#include "FourCC.h"
++#include <optional>
++
++namespace WebCore {
++
++std::optional<uint32_t> toAHardwareBufferFormat(const FourCC);
++
++} // namespace WebCore
++
++#endif // OS(ANDROID)
+diff --git a/Source/WebCore/platform/graphics/egl/GLDisplay.cpp b/Source/WebCore/platform/graphics/egl/GLDisplay.cpp
+index 576886de..6cd02b64 100644
+--- a/Source/WebCore/platform/graphics/egl/GLDisplay.cpp
++++ b/Source/WebCore/platform/graphics/egl/GLDisplay.cpp
+@@ -20,7 +20,9 @@
+ #include "config.h"
+ #include "GLDisplay.h"
+
++#include "FourCC.h"
+ #include "GLContext.h"
++#include "Logging.h"
+ #include <wtf/Locker.h>
+ #include <wtf/MainThread.h>
+ #include <wtf/text/StringView.h>
+@@ -32,7 +34,12 @@
+ #include <EGL/eglext.h>
+ #endif
+
+-#if USE(GBM)
++#if OS(ANDROID)
++#include "BufferFormatAndroid.h"
++#include <android/hardware_buffer.h>
++#include <drm/drm_fourcc.h>
++#include <wtf/NeverDestroyed.h>
++#elif USE(GBM)
+ #include <drm_fourcc.h>
+ #endif
+
+@@ -227,4 +234,45 @@ const Vector<GLDisplay::DMABufFormat>& GLDisplay::dmabufFormatsForVideo()
+ #endif
+ #endif // USE(GBM)
+
++#if OS(ANDROID)
++const Vector<GLDisplay::DMABufFormat>& GLDisplay::dmabufFormats()
++{
++    static LazyNeverDestroyed<Vector<GLDisplay::DMABufFormat>> formats;
++    static std::once_flag flag;
++    std::call_once(flag, []() {
++        formats.construct();
++
++        // This list includes those formats supported by AHardwareBuffer which are suitable for rendering content, sorted by preference. See:
++        // https://android.googlesource.com/platform/frameworks/native/+/4f463a6b1de9198963dc6aff74154a504ba3f8f6/libs/nativewindow/include/android/hardware_buffer.h#66
++        static constexpr FourCC drmFormats[] = {
++            DRM_FORMAT_RGBA8888,
++            DRM_FORMAT_RGBX8888,
++            DRM_FORMAT_RGB565,
++            DRM_FORMAT_RGBA1010102,
++            DRM_FORMAT_RGB888,
++        };
++
++        Vector<GLDisplay::DMABufFormat> result;
++        AHardwareBuffer_Desc bufferDesc { };
++        bufferDesc.usage = AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER;
++
++        for (const auto& drmFormat : drmFormats) {
++            const auto ahbFormat = toAHardwareBufferFormat(drmFormat);
++            RELEASE_ASSERT(ahbFormat);
++            bufferDesc.format = ahbFormat.value();
++            if (AHardwareBuffer_isSupported(&bufferDesc)) {
++                RELEASE_LOG_DEBUG(IOSurface, "AHB: Adding supported DRM format '%s'", drmFormat.string().data());
++                formats->append(GLDisplay::DMABufFormat { .fourcc = drmFormat.value });
++            } else
++                RELEASE_LOG_DEBUG(IOSurface, "AHB: Skipping unsupported DRM format '%s'", drmFormat.string().data());
++        }
++
++        RELEASE_LOG_DEBUG(IOSurface, "AHB: There are %zu supported formats", result.size());
++        return result;
++    });
++
++    return formats.get();
++}
++#endif // OS(ANDROID)
++
+ } // namespace WebCore
+diff --git a/Source/WebCore/platform/graphics/egl/GLDisplay.h b/Source/WebCore/platform/graphics/egl/GLDisplay.h
+index b3840c6a..205692f0 100644
+--- a/Source/WebCore/platform/graphics/egl/GLDisplay.h
++++ b/Source/WebCore/platform/graphics/egl/GLDisplay.h
+@@ -62,15 +62,18 @@ public:
+     };
+     const Extensions& extensions() const { return m_extensions; }
+
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+     struct DMABufFormat {
+         uint32_t fourcc { 0 };
++#if USE(GBM)
+         Vector<uint64_t, 1> modifiers;
++#endif
+     };
+     const Vector<DMABufFormat>& dmabufFormats();
+-#if USE(GSTREAMER)
+-    const Vector<DMABufFormat>& dmabufFormatsForVideo();
+ #endif
++
++#if USE(GBM) && USE(GSTREAMER)
++    const Vector<DMABufFormat>& dmabufFormatsForVideo();
+ #endif
+
+ private:
+@@ -83,16 +86,17 @@ private:
+     } m_version;
+     Extensions m_extensions;
+
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+     Lock m_dmabufFormatsLock;
+     bool m_dmabufFormatsInitialized WTF_GUARDED_BY_LOCK(m_dmabufFormatsLock) { false };
+     Vector<DMABufFormat> m_dmabufFormats;
+-#if USE(GSTREAMER)
++#endif
++
++#if USE(GBM) && USE(GSTREAMER)
+     Lock m_dmabufFormatsForVideoLock;
+     bool m_dmabufFormatsForVideoInitialized WTF_GUARDED_BY_LOCK(m_dmabufFormatsForVideoLock) { false };
+     Vector<DMABufFormat> m_dmabufFormatsForVideo;
+ #endif
+-#endif
+ };
+
+ } // namespace WebCore
+diff --git a/Source/WebKit/Shared/WebPageCreationParameters.h b/Source/WebKit/Shared/WebPageCreationParameters.h
+index 0c0abe52..4ae99fc9 100644
+--- a/Source/WebKit/Shared/WebPageCreationParameters.h
++++ b/Source/WebKit/Shared/WebPageCreationParameters.h
+@@ -73,7 +73,7 @@
+ #include "WebExtensionControllerParameters.h"
+ #endif
+
+-#if (PLATFORM(GTK) || PLATFORM(WPE)) && USE(GBM)
++#if (PLATFORM(GTK) || PLATFORM(WPE)) && (USE(GBM) || OS(ANDROID))
+ #include "RendererBufferFormat.h"
+ #endif
+
+@@ -336,7 +336,7 @@ struct WebPageCreationParameters {
+ #endif
+
+ #if PLATFORM(GTK) || PLATFORM(WPE)
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+     Vector<RendererBufferFormat> preferredBufferFormats { };
+ #endif
+ #endif
+diff --git a/Source/WebKit/Shared/WebPageCreationParameters.serialization.in b/Source/WebKit/Shared/WebPageCreationParameters.serialization.in
+index 18a1ffc1..ba2009ee 100644
+--- a/Source/WebKit/Shared/WebPageCreationParameters.serialization.in
++++ b/Source/WebKit/Shared/WebPageCreationParameters.serialization.in
+@@ -257,7 +257,7 @@ enum class WebCore::UserInterfaceLayoutDirection : bool;
+ #endif
+
+ #if PLATFORM(GTK) || PLATFORM(WPE)
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+     Vector<WebKit::RendererBufferFormat> preferredBufferFormats;
+ #endif
+ #endif
+diff --git a/Source/WebKit/UIProcess/API/glib/WebKitProtocolHandler.cpp b/Source/WebKit/UIProcess/API/glib/WebKitProtocolHandler.cpp
+index 82ac19ea..ff93da29 100644
+--- a/Source/WebKit/UIProcess/API/glib/WebKitProtocolHandler.cpp
++++ b/Source/WebKit/UIProcess/API/glib/WebKitProtocolHandler.cpp
+@@ -274,6 +274,9 @@ static String renderBufferDescription(WebKitURISchemeRequest* request)
+         case RendererBufferDescription::Type::SharedMemory:
+             bufferDescription.append("Shared Memory: "_s, String::fromUTF8(formatName));
+             break;
++        case RendererBufferDescription::Type::AHardwareBuffer:
++            bufferDescription.append("AHardwareBuffer: "_s, String::fromUTF8(formatName));
++            break;
+         }
+         free(formatName);
+         switch (description.usage) {
+diff --git a/Source/WebKit/UIProcess/API/wpe/WPEWebViewPlatform.cpp b/Source/WebKit/UIProcess/API/wpe/WPEWebViewPlatform.cpp
+index 4ac2bb30..c1d69174 100644
+--- a/Source/WebKit/UIProcess/API/wpe/WPEWebViewPlatform.cpp
++++ b/Source/WebKit/UIProcess/API/wpe/WPEWebViewPlatform.cpp
+@@ -124,7 +124,7 @@ ViewPlatform::ViewPlatform(WPEDisplay* display, const API::PageConfiguration& co
+         auto& webView = *reinterpret_cast<ViewPlatform*>(userData);
+         webView.toplevelStateChanged(previousState, wpe_view_get_toplevel_state(view));
+     }), this);
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+     g_signal_connect(m_wpeView.get(), "preferred-dma-buf-formats-changed", G_CALLBACK(+[](WPEView*, gpointer userData) {
+         auto& webView = *reinterpret_cast<ViewPlatform*>(userData);
+         webView.page().preferredBufferFormatsDidChange();
+diff --git a/Source/WebKit/UIProcess/WebPageProxy.cpp b/Source/WebKit/UIProcess/WebPageProxy.cpp
+index ffa22ccd..f6395b52 100644
+--- a/Source/WebKit/UIProcess/WebPageProxy.cpp
++++ b/Source/WebKit/UIProcess/WebPageProxy.cpp
+@@ -12088,7 +12088,7 @@ WebPageCreationParameters WebPageProxy::creationParameters(WebProcessProxy& proc
+         parameters.machBootstrapHandle = SandboxExtension::createHandleForMachBootstrapExtension();
+ #endif
+
+-#if USE(GBM) && (PLATFORM(GTK) || PLATFORM(WPE))
++#if (PLATFORM(GTK) || PLATFORM(WPE)) && (USE(GBM) || OS(ANDROID))
+     parameters.preferredBufferFormats = preferredBufferFormats();
+ #endif
+
+diff --git a/Source/WebKit/UIProcess/WebPageProxy.h b/Source/WebKit/UIProcess/WebPageProxy.h
+index 739f7377..67212efa 100644
+--- a/Source/WebKit/UIProcess/WebPageProxy.h
++++ b/Source/WebKit/UIProcess/WebPageProxy.h
+@@ -592,7 +592,8 @@ struct WebPreferencesStore;
+ struct WebSpeechSynthesisVoice;
+ struct WebURLSchemeHandlerIdentifierType;
+ struct WebsitePoliciesData;
+-#if USE(GBM) && (PLATFORM(GTK) || PLATFORM(WPE))
++
++#if (PLATFORM(GTK) || PLATFORM(WPE)) && (USE(GBM) || OS(ANDROID))
+ struct RendererBufferFormat;
+ #endif
+
+@@ -2590,7 +2591,7 @@ public:
+     OptionSet<WebCore::AdvancedPrivacyProtections> advancedPrivacyProtectionsPolicies() const { return m_advancedPrivacyProtectionsPolicies; }
+ #endif
+
+-#if USE(GBM) && ENABLE(WPE_PLATFORM)
++#if ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+     void preferredBufferFormatsDidChange();
+ #endif
+
+@@ -3040,7 +3041,7 @@ private:
+ #if PLATFORM(GTK) || PLATFORM(WPE)
+     void bindAccessibilityTree(const String&);
+     OptionSet<WebCore::PlatformEventModifier> currentStateOfModifierKeys();
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+     Vector<RendererBufferFormat> preferredBufferFormats() const;
+ #endif
+ #endif
+diff --git a/Source/WebKit/UIProcess/glib/AcceleratedBackingStore.messages.in b/Source/WebKit/UIProcess/glib/AcceleratedBackingStore.messages.in
+index b0923127..e555372f 100644
+--- a/Source/WebKit/UIProcess/glib/AcceleratedBackingStore.messages.in
++++ b/Source/WebKit/UIProcess/glib/AcceleratedBackingStore.messages.in
+@@ -24,6 +24,11 @@
+ messages -> AcceleratedBackingStore {
+     DidCreateDMABufBuffer(uint64_t id, WebCore::IntSize size, uint32_t format, Vector<UnixFileDescriptor> fds, Vector<uint32_t> offsets, Vector<uint32_t> strides, uint64_t modifier, WebKit::RendererBufferFormat::Usage usage)
+     DidCreateSHMBuffer(uint64_t id, WebCore::ShareableBitmapHandle handle)
++
++#if OS(ANDROID)
++    DidCreateAndroidBuffer(uint64_t id, RefPtr<AHardwareBuffer> androidBuffer)
++#endif
++
+     DidDestroyBuffer(uint64_t id)
+     Frame(uint64_t id, Vector<WebCore::IntRect, 1> damage, UnixFileDescriptor syncFD)
+ }
+diff --git a/Source/WebKit/UIProcess/glib/RendererBufferDescription.h b/Source/WebKit/UIProcess/glib/RendererBufferDescription.h
+index a1c67ab6..492beabd 100644
+--- a/Source/WebKit/UIProcess/glib/RendererBufferDescription.h
++++ b/Source/WebKit/UIProcess/glib/RendererBufferDescription.h
+@@ -31,7 +31,11 @@
+ namespace WebKit {
+
+ struct RendererBufferDescription {
+-    enum class Type : bool { DMABuf, SharedMemory };
++    enum class Type : uint8_t {
++        DMABuf,
++        SharedMemory,
++        AHardwareBuffer,
++    };
+
+     Type type { Type::DMABuf };
+     RendererBufferFormat::Usage usage { RendererBufferFormat::Usage::Rendering };
+diff --git a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
+index 8aa136ce..ee3ac754 100644
+--- a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
++++ b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
+@@ -128,6 +128,17 @@ void AcceleratedBackingStore::didCreateSHMBuffer(uint64_t id, WebCore::Shareable
+     m_buffers.add(id, WTFMove(buffer));
+ }
+
++#if OS(ANDROID)
++void AcceleratedBackingStore::didCreateAndroidBuffer(uint64_t id, RefPtr<AHardwareBuffer>&& hardwareBuffer)
++{
++    RELEASE_ASSERT(hardwareBuffer);
++
++    GRefPtr buffer = adoptGRef(WPE_BUFFER(wpe_buffer_android_new(wpe_view_get_display(m_wpeView.get()), hardwareBuffer.get())));
++    m_bufferIDs.add(buffer.get(), id);
++    m_buffers.add(id, WTFMove(buffer));
++}
++#endif // OS(ANDROID)
++
+ void AcceleratedBackingStore::didDestroyBuffer(uint64_t id)
+ {
+     if (auto buffer = m_buffers.take(id))
+@@ -219,6 +230,13 @@ RendererBufferDescription AcceleratedBackingStore::bufferDescription() const
+         }
+         description.usage = RendererBufferFormat::Usage::Rendering;
+     }
++#if OS(ANDROID)
++    else if (WPE_IS_BUFFER_ANDROID(buffer)) {
++        auto* bufferAndroid = WPE_BUFFER_ANDROID(buffer);
++        description.type = RendererBufferDescription::Type::AHardwareBuffer;
++        description.fourcc = wpe_buffer_android_get_format(bufferAndroid);
++    }
++#endif // OS(ANDROID)
+
+     return description;
+ }
+diff --git a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.h b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.h
+index 0e4efc1c..b9947729 100644
+--- a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.h
++++ b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.h
+@@ -40,6 +40,10 @@
+ typedef struct _WPEBuffer WPEBuffer;
+ typedef struct _WPEView WPEView;
+
++#if OS(ANDROID)
++typedef struct AHardwareBuffer AHardwareBuffer;
++#endif // OS(ANDROID)
++
+ namespace WebCore {
+ class ShareableBitmapHandle;
+ }
+@@ -77,6 +81,9 @@ private:
+
+     void didCreateDMABufBuffer(uint64_t id, const WebCore::IntSize&, uint32_t format, Vector<WTF::UnixFileDescriptor>&&, Vector<uint32_t>&& offsets, Vector<uint32_t>&& strides, uint64_t modifier, RendererBufferFormat::Usage);
+     void didCreateSHMBuffer(uint64_t id, WebCore::ShareableBitmapHandle&&);
++#if OS(ANDROID)
++    void didCreateAndroidBuffer(uint64_t id, RefPtr<AHardwareBuffer>&&);
++#endif // OS(ANDROID)
+     void didDestroyBuffer(uint64_t id);
+     void frame(uint64_t bufferID, Rects&&, WTF::UnixFileDescriptor&&);
+     void frameDone();
+diff --git a/Source/WebKit/UIProcess/wpe/WebPageProxyWPE.cpp b/Source/WebKit/UIProcess/wpe/WebPageProxyWPE.cpp
+index 1ce76265..cfbc71e9 100644
+--- a/Source/WebKit/UIProcess/wpe/WebPageProxyWPE.cpp
++++ b/Source/WebKit/UIProcess/wpe/WebPageProxyWPE.cpp
+@@ -44,11 +44,11 @@
+ #include <wpe/wpe-platform.h>
+ #endif
+
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+ #include "RendererBufferFormat.h"
+ #endif
+
+-#if USE(GBM) && ENABLE(WPE_PLATFORM)
++#if ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+ #include "MessageSenderInlines.h"
+ #include "WebPageMessages.h"
+ #endif
+@@ -123,7 +123,7 @@ void WebPageProxy::setInputMethodState(std::optional<InputMethodState>&& state)
+         static_cast<PageClientImpl&>(*pageClient).setInputMethodState(WTFMove(state));
+ }
+
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+ Vector<RendererBufferFormat> WebPageProxy::preferredBufferFormats() const
+ {
+ #if ENABLE(WPE_PLATFORM)
+@@ -135,8 +135,11 @@ Vector<RendererBufferFormat> WebPageProxy::preferredBufferFormats() const
+     if (!formats)
+         return { };
+
+-    Vector<RendererBufferFormat> bufferFormats;
++#if USE(GBM)
+     WPEDRMDevice* mainDevice = wpe_buffer_dma_buf_formats_get_device(formats);
++#endif
++
++    Vector<RendererBufferFormat> bufferFormats;
+     auto groupCount = wpe_buffer_dma_buf_formats_get_n_groups(formats);
+     for (unsigned i = 0; i < groupCount; ++i) {
+         RendererBufferFormat bufferFormat;
+@@ -152,11 +155,13 @@ Vector<RendererBufferFormat> WebPageProxy::preferredBufferFormats() const
+             break;
+         }
+
++#if USE(GBM)
+         WPEDRMDevice* targetDevice = wpe_buffer_dma_buf_formats_get_group_device(formats, i);
+         if (!targetDevice)
+             targetDevice = mainDevice;
+         if (targetDevice)
+             bufferFormat.drmDevice = { CString(wpe_drm_device_get_primary_node(targetDevice)), CString(wpe_drm_device_get_render_node(targetDevice)) };
++#endif
+
+         auto formatsCount = wpe_buffer_dma_buf_formats_get_group_n_formats(formats, i);
+         bufferFormat.formats.reserveInitialCapacity(formatsCount);
+@@ -182,7 +187,7 @@ Vector<RendererBufferFormat> WebPageProxy::preferredBufferFormats() const
+ #endif
+ }
+
+-#if USE(GBM) && ENABLE(WPE_PLATFORM)
++#if ENABLE(WPE_PLATFORM)
+ void WebPageProxy::preferredBufferFormatsDidChange()
+ {
+     auto* view = wpeView();
+@@ -192,7 +197,7 @@ void WebPageProxy::preferredBufferFormatsDidChange()
+     legacyMainFrameProcess().send(Messages::WebPage::PreferredBufferFormatsDidChange(preferredBufferFormats()), webPageIDInMainFrameProcess());
+ }
+ #endif
+-#endif
++#endif // USE(GBM) || OS(ANDROID)
+
+ OptionSet<WebCore::PlatformEvent::Modifier> WebPageProxy::currentStateOfModifierKeys()
+ {
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
+index ae94fd6e..59d5285d 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
+@@ -64,6 +64,13 @@
+ #include <wtf/UniStdExtras.h>
+ #endif
+
++#if OS(ANDROID)
++#include <WebCore/BufferFormatAndroid.h>
++#include <android/hardware_buffer.h>
++#include <drm/drm_fourcc.h>
++#include <wtf/android/RefPtrAndroid.h>
++#endif
++
+ #if USE(GLIB_EVENT_LOOP)
+ #include <wtf/glib/RunLoopSourcePriority.h>
+ #endif
+@@ -100,7 +107,7 @@ AcceleratedSurface::AcceleratedSurface(WebPage& webPage, Function<void()>&& fram
+     , m_useExplicitSync(useExplicitSync())
+     , m_isOpaque(!webPage.backgroundColor().has_value() || webPage.backgroundColor()->isOpaque())
+ {
+-#if USE(GBM) && (PLATFORM(GTK) || ENABLE(WPE_PLATFORM))
++#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+     if (m_swapChain.type() == SwapChain::Type::EGLImage)
+         m_swapChain.setupBufferFormat(m_webPage->preferredBufferFormats(), m_isOpaque);
+ #endif
+@@ -316,7 +323,76 @@ AcceleratedSurface::RenderTargetEGLImage::RenderTargetEGLImage(uint64_t surfaceI
+
+     WebProcess::singleton().parentProcessConnection()->send(Messages::AcceleratedBackingStore::DidCreateDMABufBuffer(m_id, size, format, WTFMove(fds), WTFMove(offsets), WTFMove(strides), modifier, usage), surfaceID);
+ }
++#endif // USE(GBM)
+
++#if OS(ANDROID)
++static uint64_t usageToAHardwareBufferUsage(RendererBufferFormat::Usage usage)
++{
++    switch (usage) {
++    case RendererBufferFormat::Usage::Rendering:
++        return AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER;
++    case RendererBufferFormat::Usage::Mapping:
++        return AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER;
++    case RendererBufferFormat::Usage::Scanout:
++        // FIXME(297316): Add the AHARDWAREBUFFER_USAGE_CPU_READ_RARELY flag to allow using AHardwareBuffer_lock()
++        return AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER | AHARDWAREBUFFER_USAGE_FRONT_BUFFER | AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY;
++    }
++}
++
++std::unique_ptr<AcceleratedSurface::RenderTarget> AcceleratedSurface::RenderTargetEGLImage::create(uint64_t surfaceID, const WebCore::IntSize& size, const BufferFormat& bufferFormat)
++{
++    const auto hardwareBufferFormat = toAHardwareBufferFormat(bufferFormat.fourcc);
++    if (!hardwareBufferFormat) {
++        LOG_ERROR("Failed to create AHardwareBuffer of size %dx%d: no valid format found (FourCC=%s)",
++            size.width(), size.height(), FourCC(bufferFormat.fourcc).string().data());
++        return nullptr;
++    }
++
++    AHardwareBuffer_Desc description = { };
++    description.width = size.width();
++    description.height = size.height();
++    description.layers = 1;
++    description.format = hardwareBufferFormat.value();
++    description.usage = usageToAHardwareBufferUsage(bufferFormat.usage);
++
++    AHardwareBuffer* hardwareBufferPtr { nullptr };
++    int result = AHardwareBuffer_allocate(&description, &hardwareBufferPtr);
++    if (result) {
++        LOG_ERROR("Failed to create AHardwareBuffer of size %dx%d, format %s, error code: %d",
++            size.width(), size.height(), FourCC(bufferFormat.fourcc).string().data(), result);
++        return nullptr;
++    }
++    RefPtr hardwareBuffer = adoptRef(hardwareBufferPtr);
++
++    const Vector<EGLAttrib> attributes { EGL_IMAGE_PRESERVED, EGL_TRUE, EGL_NONE };
++
++    auto& display = WebCore::PlatformDisplay::sharedDisplay();
++    auto clientBuffer = eglGetNativeClientBufferANDROID(hardwareBuffer.get());
++    auto image = display.createEGLImage(EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, clientBuffer, attributes);
++    if (image == EGL_NO_IMAGE) {
++        LOG_ERROR("Failed to bind AHardwareBuffer to an EGLImage. This is typically caused by "
++            "a version mismatch between the gralloc implementation and the OpenGL/EGL driver. "
++            "Please contact your GPU vendor to resolve this problem.");
++        return nullptr;
++    }
++
++    return makeUnique<RenderTargetEGLImage>(surfaceID, size, image, WTFMove(hardwareBuffer));
++}
++
++AcceleratedSurface::RenderTargetEGLImage::RenderTargetEGLImage(uint64_t surfaceID, const WebCore::IntSize& size, EGLImage image, RefPtr<AHardwareBuffer>&& hardwareBuffer)
++    : RenderTargetShareableBuffer(surfaceID, size)
++    , m_image(image)
++{
++    glGenRenderbuffers(1, &m_colorBuffer);
++    glBindRenderbuffer(GL_RENDERBUFFER, m_colorBuffer);
++    glEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER, m_image);
++    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_colorBuffer);
++
++    WebProcess::singleton().parentProcessConnection()->send(Messages::AcceleratedBackingStore::DidCreateAndroidBuffer(m_id, WTFMove(hardwareBuffer)), surfaceID);
++}
++#endif // OS(ANDROID)
++
++#if USE(GBM) || OS(ANDROID)
+ AcceleratedSurface::RenderTargetEGLImage::~RenderTargetEGLImage()
+ {
+     if (m_colorBuffer)
+@@ -325,7 +401,7 @@ AcceleratedSurface::RenderTargetEGLImage::~RenderTargetEGLImage()
+     if (m_image)
+         PlatformDisplay::sharedDisplay().destroyEGLImage(m_image);
+ }
+-#endif
++#endif // USE(GBM) || OS(ANDROID)
+
+ std::unique_ptr<AcceleratedSurface::RenderTarget> AcceleratedSurface::RenderTargetSHMImage::create(uint64_t surfaceID, const IntSize& size)
+ {
+@@ -533,7 +609,7 @@ AcceleratedSurface::SwapChain::SwapChain(uint64_t surfaceID)
+     }
+ }
+
+-#if USE(GBM) && (PLATFORM(GTK) || ENABLE(WPE_PLATFORM))
++#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+ void AcceleratedSurface::SwapChain::setupBufferFormat(const Vector<RendererBufferFormat>& preferredFormats, bool isOpaque)
+ {
+     auto isOpaqueFormat = [](uint32_t fourcc) -> bool {
+@@ -566,8 +642,9 @@ void AcceleratedSurface::SwapChain::setupBufferFormat(const Vector<RendererBuffe
+                     continue;
+
+                 newBufferFormat.usage = bufferFormat.usage;
+-                newBufferFormat.drmDevice = bufferFormat.drmDevice;
+                 newBufferFormat.fourcc = preferredFormat.fourcc;
++#if USE(GBM)
++                newBufferFormat.drmDevice = bufferFormat.drmDevice;
+                 if (preferredFormat.modifiers[0] == DRM_FORMAT_MOD_INVALID)
+                     newBufferFormat.modifiers = preferredFormat.modifiers;
+                 else {
+@@ -577,6 +654,7 @@ void AcceleratedSurface::SwapChain::setupBufferFormat(const Vector<RendererBuffe
+                         return std::nullopt;
+                     });
+                 }
++#endif // USE(GBM)
+
+                 if (matchesOpacity)
+                     break;
+@@ -590,6 +668,7 @@ void AcceleratedSurface::SwapChain::setupBufferFormat(const Vector<RendererBuffe
+     if (!newBufferFormat.fourcc || newBufferFormat == m_bufferFormat)
+         return;
+
++#if USE(GBM)
+     if (!newBufferFormat.drmDevice.isNull()) {
+         if (newBufferFormat.drmDevice == m_bufferFormat.drmDevice && newBufferFormat.usage == m_bufferFormat.usage)
+             newBufferFormat.gbmDevice = m_bufferFormat.gbmDevice;
+@@ -598,11 +677,12 @@ void AcceleratedSurface::SwapChain::setupBufferFormat(const Vector<RendererBuffe
+             newBufferFormat.gbmDevice = DRMDeviceManager::singleton().gbmDevice(newBufferFormat.drmDevice, nodeType);
+         }
+     }
++#endif // USE(GBM)
+
+     m_bufferFormat = WTFMove(newBufferFormat);
+     m_bufferFormatChanged = true;
+ }
+-#endif
++#endif // USE(GBM) || OS(ANDROID)
+
+ bool AcceleratedSurface::SwapChain::resize(const IntSize& size)
+ {
+@@ -623,8 +703,7 @@ bool AcceleratedSurface::SwapChain::resize(const IntSize& size)
+ std::unique_ptr<AcceleratedSurface::RenderTarget> AcceleratedSurface::SwapChain::createTarget() const
+ {
+     switch (m_type) {
+-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+-#if USE(GBM)
++#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+     case Type::EGLImage:
+         return RenderTargetEGLImage::create(m_surfaceID, m_size, m_bufferFormat);
+ #endif
+@@ -632,7 +711,6 @@ std::unique_ptr<AcceleratedSurface::RenderTarget> AcceleratedSurface::SwapChain:
+         return RenderTargetTexture::create(m_surfaceID, m_size);
+     case Type::SharedMemory:
+         return RenderTargetSHMImage::create(m_surfaceID, m_size);
+-#endif
+ #if USE(WPE_RENDERER)
+     case Type::WPEBackend:
+         ASSERT_NOT_REACHED();
+@@ -651,7 +729,7 @@ AcceleratedSurface::RenderTarget* AcceleratedSurface::SwapChain::nextTarget()
+         return m_lockedTargets[0].get();
+ #endif
+
+-#if USE(GBM) && (PLATFORM(GTK) || ENABLE(WPE_PLATFORM))
++#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+     if (m_type == Type::EGLImage) {
+         Locker locker { m_bufferFormatLock };
+         if (m_bufferFormatChanged) {
+@@ -732,7 +810,7 @@ void AcceleratedSurface::SwapChain::addDamage(const std::optional<Damage>& damag
+ }
+ #endif
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+ void AcceleratedSurface::preferredBufferFormatsDidChange()
+ {
+     if (m_swapChain.type() != SwapChain::Type::EGLImage)
+@@ -768,7 +846,7 @@ bool AcceleratedSurface::backgroundColorDidChange()
+
+     m_isOpaque = isOpaque;
+
+-#if USE(GBM) && (PLATFORM(GTK) || ENABLE(WPE_PLATFORM))
++#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+     if (m_swapChain.type() == SwapChain::Type::EGLImage)
+         m_swapChain.setupBufferFormat(m_webPage->preferredBufferFormats(), m_isOpaque);
+ #endif
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
+index 2d782b87..62f5f571 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
+@@ -36,16 +36,26 @@
+ #include <wtf/WeakRef.h>
+ #include <wtf/unix/UnixFileDescriptor.h>
+
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+ #include "RendererBufferFormat.h"
+-#include <WebCore/DRMDevice.h>
+-#include <WebCore/GBMDevice.h>
+ #include <atomic>
+ #include <wtf/Lock.h>
+-typedef void *EGLImage;
++#endif
++
++#if USE(GBM)
++#include <WebCore/DRMDevice.h>
++#include <WebCore/GBMDevice.h>
+ struct gbm_bo;
+ #endif
+
++#if OS(ANDROID)
++typedef struct AHardwareBuffer AHardwareBuffer;
++#endif
++
++#if USE(GBM) || OS(ANDROID)
++typedef void *EGLImage;
++#endif
++
+ #if USE(WPE_RENDERER)
+ struct wpe_renderer_backend_egl_target;
+ #endif
+@@ -107,7 +117,7 @@ public:
+     void didCreateCompositingRunLoop(WTF::RunLoop&);
+     void willDestroyCompositingRunLoop();
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+     void preferredBufferFormatsDidChange();
+ #endif
+
+@@ -180,7 +190,7 @@ private:
+         UnixFileDescriptor m_releaseFenceFD;
+     };
+
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+     struct BufferFormat {
+         BufferFormat() = default;
+         ~BufferFormat() = default;
+@@ -193,29 +203,43 @@ private:
+         BufferFormat& operator=(BufferFormat&& other)
+         {
+             usage = std::exchange(other.usage, RendererBufferFormat::Usage::Rendering);
+-            drmDevice = WTFMove(other.drmDevice);
+             fourcc = std::exchange(other.fourcc, 0);
++#if USE(GBM)
+             modifiers = WTFMove(other.modifiers);
+             gbmDevice = WTFMove(other.gbmDevice);
++#endif
+             return *this;
+         }
+
+         bool operator==(const BufferFormat& other) const
+         {
+-            return usage == other.usage && drmDevice == other.drmDevice && fourcc == other.fourcc && modifiers == other.modifiers;
++            return usage == other.usage
++                && fourcc == other.fourcc
++#if USE(GBM)
++                && gbmDevice == other.gbmDevice
++                && drmDevice == other.drmDevice
++                && modifiers == other.modifiers
++#endif
++                && true;
+         }
+
+         RendererBufferFormat::Usage usage { RendererBufferFormat::Usage::Rendering };
+-        WebCore::DRMDevice drmDevice;
+         uint32_t fourcc { 0 };
++
++#if USE(GBM)
++        WebCore::DRMDevice drmDevice;
+         Vector<uint64_t, 1> modifiers;
+         RefPtr<WebCore::GBMDevice> gbmDevice;
++#endif
+     };
+
+     class RenderTargetEGLImage final : public RenderTargetShareableBuffer {
+     public:
+         static std::unique_ptr<RenderTarget> create(uint64_t, const WebCore::IntSize&, const BufferFormat&);
+         RenderTargetEGLImage(uint64_t, const WebCore::IntSize&, EGLImage, uint32_t format, Vector<WTF::UnixFileDescriptor>&&, Vector<uint32_t>&& offsets, Vector<uint32_t>&& strides, uint64_t modifier, RendererBufferFormat::Usage);
++#if OS(ANDROID)
++        RenderTargetEGLImage(uint64_t, const WebCore::IntSize&, EGLImage, RefPtr<AHardwareBuffer>&&);
++#endif
+         ~RenderTargetEGLImage();
+
+     private:
+@@ -224,7 +248,7 @@ private:
+         unsigned m_colorBuffer { 0 };
+         EGLImage m_image { nullptr };
+     };
+-#endif
++#endif // USE(GBM) || OS(ANDROID)
+
+     class RenderTargetSHMImage final : public RenderTargetShareableBuffer {
+     public:
+@@ -279,8 +303,7 @@ private:
+
+         enum class Type {
+             Invalid,
+-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+-#if USE(GBM)
++#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+             EGLImage,
+ #endif
+             SharedMemory,
+@@ -303,14 +326,13 @@ private:
+         void addDamage(const std::optional<WebCore::Damage>&);
+ #endif
+
+-#if USE(GBM) && (PLATFORM(GTK) || ENABLE(WPE_PLATFORM))
++#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+         void setupBufferFormat(const Vector<RendererBufferFormat>&, bool);
+ #endif
+
+ #if USE(WPE_RENDERER)
+         void initialize(WebPage&);
+         uint64_t initializeTarget(const AcceleratedSurface&);
+-#endif
+
+     private:
+         static constexpr unsigned s_maximumBuffers = 3;
+@@ -322,7 +344,7 @@ private:
+         WebCore::IntSize m_size;
+         Vector<std::unique_ptr<RenderTarget>, s_maximumBuffers> m_freeTargets;
+         Vector<std::unique_ptr<RenderTarget>, s_maximumBuffers> m_lockedTargets;
+-#if USE(GBM) && (PLATFORM(GTK) || ENABLE(WPE_PLATFORM))
++#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+         Lock m_bufferFormatLock;
+         BufferFormat m_bufferFormat WTF_GUARDED_BY_LOCK(m_bufferFormatLock);
+         bool m_bufferFormatChanged WTF_GUARDED_BY_LOCK(m_bufferFormatLock) { false };
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp
+index f3fad38c..b8ad8cc3 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp
+@@ -788,7 +788,7 @@ void DrawingAreaCoordinatedGraphics::didDiscardBackingStore()
+     m_dirtyRegion = m_webPage->bounds();
+ }
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+ void DrawingAreaCoordinatedGraphics::preferredBufferFormatsDidChange()
+ {
+     if (m_layerTreeHost)
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.h b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.h
+index b30f14b6..096aa71c 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.h
+@@ -69,7 +69,7 @@ private:
+     void backgroundColorDidChange() override;
+ #endif
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM)|| OS(ANDROID))
+     void preferredBufferFormatsDidChange() override;
+ #endif
+
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp
+index ecfa7717..fc710f3c 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp
+@@ -683,7 +683,7 @@ void LayerTreeHost::commitTransientZoom(double scale, FloatPoint origin)
+ }
+ #endif
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+ void LayerTreeHost::preferredBufferFormatsDidChange()
+ {
+     m_compositor->preferredBufferFormatsDidChange();
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.h b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.h
+index 4ffe3d98..9a8f1ae4 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.h
+@@ -137,7 +137,7 @@ public:
+     void foreachRegionInDamageHistoryForTesting(Function<void(const WebCore::Region&)>&&);
+ #endif
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+     void preferredBufferFormatsDidChange();
+ #endif
+ private:
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
+index 57467730..a1692616 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
+@@ -211,7 +211,7 @@ void ThreadedCompositor::backgroundColorDidChange()
+     m_surface->backgroundColorDidChange();
+ }
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+ void ThreadedCompositor::preferredBufferFormatsDidChange()
+ {
+     ASSERT(RunLoop::isMain());
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h
+index 57dc3338..a4c33fb5 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h
+@@ -70,7 +70,7 @@ public:
+     uint64_t surfaceID() const;
+
+     void backgroundColorDidChange();
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+     void preferredBufferFormatsDidChange();
+ #endif
+
+diff --git a/Source/WebKit/WebProcess/WebPage/DrawingArea.h b/Source/WebKit/WebProcess/WebPage/DrawingArea.h
+index b8f3aab4..9cbdd67c 100644
+--- a/Source/WebKit/WebProcess/WebPage/DrawingArea.h
++++ b/Source/WebKit/WebProcess/WebPage/DrawingArea.h
+@@ -174,7 +174,7 @@ public:
+     virtual void backgroundColorDidChange() { };
+ #endif
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+     virtual void preferredBufferFormatsDidChange() { }
+ #endif
+
+diff --git a/Source/WebKit/WebProcess/WebPage/WebPage.cpp b/Source/WebKit/WebProcess/WebPage/WebPage.cpp
+index bf2d3f7e..0edba511 100644
+--- a/Source/WebKit/WebProcess/WebPage/WebPage.cpp
++++ b/Source/WebKit/WebProcess/WebPage/WebPage.cpp
+@@ -681,7 +681,7 @@ WebPage::WebPage(PageIdentifier pageID, WebPageCreationParameters&& parameters)
+     , m_overriddenMediaType { WTFMove(parameters.overriddenMediaType) }
+     , m_processDisplayName { WTFMove(parameters.processDisplayName) }
+ #if PLATFORM(GTK) || PLATFORM(WPE)
+-#if USE(GBM)
++#if USE(GBM) || OS(ANDROID)
+     , m_preferredBufferFormats(WTFMove(parameters.preferredBufferFormats))
+ #endif
+ #endif
+diff --git a/Source/WebKit/WebProcess/WebPage/WebPage.h b/Source/WebKit/WebProcess/WebPage/WebPage.h
+index a52dd2ff..34e1c3f9 100644
+--- a/Source/WebKit/WebProcess/WebPage/WebPage.h
++++ b/Source/WebKit/WebProcess/WebPage/WebPage.h
+@@ -472,7 +472,7 @@ enum class WebEventType : uint8_t;
+ struct ContentWorldData;
+ struct ContentWorldIdentifierType;
+ struct CoreIPCAuditToken;
+-#if (PLATFORM(GTK) || PLATFORM(WPE)) && USE(GBM)
++#if (PLATFORM(GTK) || PLATFORM(WPE)) && (USE(GBM) || OS(ANDROID))
+ struct RendererBufferFormat;
+ #endif
+ struct DataDetectionResult;
+@@ -1954,11 +1954,9 @@ public:
+     const Logger& logger() const;
+     uint64_t logIdentifier() const;
+
+-#if PLATFORM(GTK) || PLATFORM(WPE)
+-#if USE(GBM)
++#if (PLATFORM(GTK) || PLATFORM(WPE)) && (USE(GBM) || OS(ANDROID))
+     const Vector<RendererBufferFormat>& preferredBufferFormats() const { return m_preferredBufferFormats; }
+ #endif
+-#endif
+
+ #if ENABLE(EXTENSION_CAPABILITIES)
+     const String& mediaEnvironment() const { return m_mediaEnvironment; }
+@@ -2511,7 +2509,7 @@ private:
+     void sendMessageToWebProcessExtensionWithReply(UserMessage&&, CompletionHandler<void(UserMessage&&)>&&);
+ #endif
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+     void preferredBufferFormatsDidChange(Vector<RendererBufferFormat>&&);
+ #endif
+
+@@ -3043,11 +3041,9 @@ private:
+     WebCore::Color m_accentColor;
+ #endif
+
+-#if PLATFORM(GTK) || PLATFORM(WPE)
+-#if USE(GBM)
++#if (PLATFORM(GTK) || PLATFORM(WPE)) && (USE(GBM) || OS(ANDROID))
+     Vector<RendererBufferFormat> m_preferredBufferFormats;
+ #endif
+-#endif
+
+ #if ENABLE(APP_BOUND_DOMAINS)
+     bool m_limitsNavigationsToAppBoundDomains { false };
+diff --git a/Source/WebKit/WebProcess/WebPage/WebPage.messages.in b/Source/WebKit/WebProcess/WebPage/WebPage.messages.in
+index 2e19c3db..08a49954 100644
+--- a/Source/WebKit/WebProcess/WebPage/WebPage.messages.in
++++ b/Source/WebKit/WebProcess/WebPage/WebPage.messages.in
+@@ -710,7 +710,7 @@ messages -> WebPage WantsAsyncDispatchMessage {
+     SendMessageToWebProcessExtensionWithReply(struct WebKit::UserMessage userMessage) -> (struct WebKit::UserMessage replyMessage)
+ #endif
+
+-#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
++#if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+     PreferredBufferFormatsDidChange(Vector<WebKit::RendererBufferFormat> preferredBufferFormats)
+ #endif
+
+diff --git a/Source/WebKit/WebProcess/WebPage/wpe/WebPageWPE.cpp b/Source/WebKit/WebProcess/WebPage/wpe/WebPageWPE.cpp
+index ce635e19..63a58b1c 100644
+--- a/Source/WebKit/WebProcess/WebPage/wpe/WebPageWPE.cpp
++++ b/Source/WebKit/WebProcess/WebPage/wpe/WebPageWPE.cpp
+@@ -43,7 +43,7 @@ bool WebPage::platformCanHandleRequest(const ResourceRequest&)
+     return false;
+ }
+
+-#if USE(GBM) && ENABLE(WPE_PLATFORM)
++#if ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
+ void WebPage::preferredBufferFormatsDidChange(Vector<RendererBufferFormat>&& preferredBufferFormats)
+ {
+     m_preferredBufferFormats = WTFMove(preferredBufferFormats);
+diff --git a/Source/cmake/FindAndroid.cmake b/Source/cmake/FindAndroid.cmake
+index 06a548cd..5642577e 100644
+--- a/Source/cmake/FindAndroid.cmake
++++ b/Source/cmake/FindAndroid.cmake
+@@ -87,6 +87,7 @@ function(_AndroidHandleComponent target)
+
+     check_include_file("${header}" Android_COMPONENT_${target}_HAS_HEADER)
+     if (NOT Android_COMPONENT_${target}_HAS_HEADER)
++        message(STATUS "Missing header ${header}")
+         return()
+     endif ()
+
+@@ -95,6 +96,7 @@ function(_AndroidHandleComponent target)
+     check_function_exists("${symbol}" Android_COMPONENT_${target}_HAS_SYMBOL)
+     cmake_pop_check_state()
+     if (NOT Android_COMPONENT_${target}_HAS_SYMBOL)
++        message(STATUS "Missing symbol ${symbol}")
+         return()
+     endif ()
+
+@@ -132,7 +134,15 @@ if (NOT Android_FIND_COMPONENTS)
+ endif ()
+
+ foreach (component IN LISTS Android_FIND_COMPONENTS)
++    message(CHECK_START "Checking Android::${component}")
++    list(APPEND CMAKE_MESSAGE_INDENT "  ")
+     _AndroidHandleComponent(${component})
++    list(POP_BACK CMAKE_MESSAGE_INDENT)
++    if (Android_${component}_FOUND)
++        message(CHECK_PASS "OK")
++    else ()
++        message(CHECK_FAIL "Failed")
++    endif ()
+ endforeach ()
+
+ include(FindPackageHandleStandardArgs)
+--
+2.43.0
+
