@@ -7,6 +7,10 @@ class Recipe(recipe.Recipe):
     btype = BuildType.CMAKE
     url = f'https://wpewebkit.org/releases/wpewebkit-{version}.tar.xz'
     tarball_checksum = 'a9af62c5e18551b7386b7db864e8ba8156f219b8e6c639934bf6f3a567969922'
+    patches = [
+        name + '/0001-Add-Android-EGL-support-for-surfaceless-display.patch',
+        name + '/0002-Add-AHardwareBuffer-support.patch',
+    ]
     deps = [
         'icu',
         'cairo',

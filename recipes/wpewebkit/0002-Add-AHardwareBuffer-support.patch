@@ -1,0 +1,255 @@
+From 9ef324e2c473265a14bcf439f8be1942962255eb Mon Sep 17 00:00:00 2001
+From: Felipe Erias <felipeerias@igalia.com>
+Date: Tue, 14 Oct 2025 15:07:34 +0900
+Subject: [PATCH] Add AHardwareBuffer support for Android
+
+Implement zero-copy buffer sharing on Android using AHardwareBuffer.
+
+In the Web process, AcceleratedSurface allocates AHardwareBuffer objects
+with GPU_FRAMEBUFFER, GPU_SAMPLED_IMAGE, and COMPOSER_OVERLAY usage flags.
+These are wrapped as EGLImages and bound to GL textures for rendering.
+
+The AHardwareBuffer is sent via IPC to the UI process, where
+AcceleratedBackingStore wraps it in a WPEBufferAndroid object for
+display through the WPE Platform API.
+
+This provides efficient, zero-copy rendering for WPE Android on devices
+that support AHardwareBuffer.
+---
+ .../glib/AcceleratedBackingStore.messages.in  |  1 +
+ .../UIProcess/wpe/AcceleratedBackingStore.cpp | 16 +++++
+ .../UIProcess/wpe/AcceleratedBackingStore.h   |  7 ++
+ .../AcceleratedSurface.cpp                    | 71 +++++++++++++++++++
+ .../CoordinatedGraphics/AcceleratedSurface.h  | 24 +++++++
+ 5 files changed, 119 insertions(+)
+
+diff --git a/Source/WebKit/UIProcess/glib/AcceleratedBackingStore.messages.in b/Source/WebKit/UIProcess/glib/AcceleratedBackingStore.messages.in
+index b0923127..8e2e85eb 100644
+--- a/Source/WebKit/UIProcess/glib/AcceleratedBackingStore.messages.in
++++ b/Source/WebKit/UIProcess/glib/AcceleratedBackingStore.messages.in
+@@ -24,6 +24,7 @@
+ messages -> AcceleratedBackingStore {
+     DidCreateDMABufBuffer(uint64_t id, WebCore::IntSize size, uint32_t format, Vector<UnixFileDescriptor> fds, Vector<uint32_t> offsets, Vector<uint32_t> strides, uint64_t modifier, WebKit::RendererBufferFormat::Usage usage)
+     DidCreateSHMBuffer(uint64_t id, WebCore::ShareableBitmapHandle handle)
++    DidCreateAHBBuffer(uint64_t id, RefPtr<AHardwareBuffer> ahb)
+     DidDestroyBuffer(uint64_t id)
+     Frame(uint64_t id, Vector<WebCore::IntRect, 1> damage, UnixFileDescriptor syncFD)
+ }
+diff --git a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
+index 8aa136ce..84ad5fa4 100644
+--- a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
++++ b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
+@@ -40,6 +40,10 @@
+ #include <drm_fourcc.h>
+ #endif
+ 
++#if OS(ANDROID)
++#include <wpe/WPEBufferAndroid.h>
++#endif
++
+ namespace WebKit {
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(AcceleratedBackingStore);
+@@ -128,6 +132,18 @@ void AcceleratedBackingStore::didCreateSHMBuffer(uint64_t id, WebCore::Shareable
+     m_buffers.add(id, WTFMove(buffer));
+ }
+ 
++#if OS(ANDROID)
++void AcceleratedBackingStore::didCreateAHBBuffer(uint64_t id, RefPtr<AHardwareBuffer>&& ahb)
++{
++    if (!ahb)
++        return;
++
++    GRefPtr<WPEBuffer> buffer = adoptGRef(WPE_BUFFER(wpe_buffer_android_new(wpe_view_get_display(m_wpeView.get()), ahb.leakRef())));
++    m_bufferIDs.add(buffer.get(), id);
++    m_buffers.add(id, WTFMove(buffer));
++}
++#endif
++
+ void AcceleratedBackingStore::didDestroyBuffer(uint64_t id)
+ {
+     if (auto buffer = m_buffers.take(id))
+diff --git a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.h b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.h
+index 0e4efc1c..b944af94 100644
+--- a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.h
++++ b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.h
+@@ -40,6 +40,10 @@
+ typedef struct _WPEBuffer WPEBuffer;
+ typedef struct _WPEView WPEView;
+ 
++#if OS(ANDROID)
++#include <android/hardware_buffer.h>
++#endif
++
+ namespace WebCore {
+ class ShareableBitmapHandle;
+ }
+@@ -77,6 +81,9 @@ private:
+ 
+     void didCreateDMABufBuffer(uint64_t id, const WebCore::IntSize&, uint32_t format, Vector<WTF::UnixFileDescriptor>&&, Vector<uint32_t>&& offsets, Vector<uint32_t>&& strides, uint64_t modifier, RendererBufferFormat::Usage);
+     void didCreateSHMBuffer(uint64_t id, WebCore::ShareableBitmapHandle&&);
++#if OS(ANDROID)
++    void didCreateAHBBuffer(uint64_t id, RefPtr<AHardwareBuffer>&&);
++#endif
+     void didDestroyBuffer(uint64_t id);
+     void frame(uint64_t bufferID, Rects&&, WTF::UnixFileDescriptor&&);
+     void frameDone();
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
+index ae94fd6e..bb3a2d78 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
+@@ -64,6 +64,10 @@
+ #include <wtf/UniStdExtras.h>
+ #endif
+ 
++#if OS(ANDROID)
++#include <android/hardware_buffer.h>
++#endif
++
+ #if USE(GLIB_EVENT_LOOP)
+ #include <wtf/glib/RunLoopSourcePriority.h>
+ #endif
+@@ -435,6 +439,65 @@ AcceleratedSurface::RenderTargetTexture::~RenderTargetTexture()
+     if (m_texture)
+         glDeleteTextures(1, &m_texture);
+ }
++
++#if OS(ANDROID)
++std::unique_ptr<AcceleratedSurface::RenderTarget> AcceleratedSurface::RenderTargetAHardwareBuffer::create(uint64_t surfaceID, const IntSize& size)
++{
++    // Allocate AHardwareBuffer
++    AHardwareBuffer_Desc desc = {};
++    desc.width = size.width();
++    desc.height = size.height();
++    desc.layers = 1;
++    desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
++    desc.usage = AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER
++                | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE
++                | AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY;
++    desc.stride = 0;
++
++    AHardwareBuffer* ahb = nullptr;
++    int result = AHardwareBuffer_allocate(&desc, &ahb);
++    if (result != 0 || !ahb) {
++        WTFLogAlways("Failed to allocate AHardwareBuffer: %d", result);
++        return nullptr;
++    }
++
++    return makeUnique<RenderTargetAHardwareBuffer>(surfaceID, size, adoptRef(ahb));
++}
++
++AcceleratedSurface::RenderTargetAHardwareBuffer::RenderTargetAHardwareBuffer(uint64_t surfaceID, const IntSize& size, RefPtr<AHardwareBuffer>&& ahb)
++    : RenderTargetShareableBuffer(surfaceID, size)
++    , m_ahb(WTFMove(ahb))
++{
++    // Create EGLImage from AHardwareBuffer
++    auto& display = PlatformDisplay::sharedDisplay();
++    static constexpr std::array<EGLint, 3> attributes = { EGL_IMAGE_PRESERVED, EGL_TRUE, EGL_NONE };
++    m_image = eglCreateImageKHR(display.eglDisplay(), EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, m_ahb.get(), attributes.data());
++    if (m_image == EGL_NO_IMAGE) {
++        WTFLogAlways("Failed to create EGLImage from AHardwareBuffer");
++        return;
++    }
++
++    // Create GL texture from EGLImage
++    glGenTextures(1, &m_texture);
++    glBindTexture(GL_TEXTURE_2D, m_texture);
++    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_image);
++    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture, 0);
++
++    // Send AHardwareBuffer to UI process
++    WebProcess::singleton().parentProcessConnection()->send(Messages::AcceleratedBackingStore::DidCreateAHBBuffer(m_id, RefPtr { m_ahb }), surfaceID);
++}
++
++AcceleratedSurface::RenderTargetAHardwareBuffer::~RenderTargetAHardwareBuffer()
++{
++    if (m_texture)
++        glDeleteTextures(1, &m_texture);
++
++    if (m_image != EGL_NO_IMAGE) {
++        auto& display = PlatformDisplay::sharedDisplay();
++        eglDestroyImageKHR(display.eglDisplay(), m_image);
++    }
++}
++#endif // OS(ANDROID)
+ #endif // PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+ 
+ #if USE(WPE_RENDERER)
+@@ -509,10 +572,14 @@ AcceleratedSurface::SwapChain::SwapChain(uint64_t surfaceID)
+     switch (display.type()) {
+ #if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+     case PlatformDisplay::Type::Surfaceless:
++#if OS(ANDROID)
++        m_type = Type::AHardwareBuffer;
++#else
+         if (display.eglExtensions().MESA_image_dma_buf_export && WebProcess::singleton().rendererBufferTransportMode().contains(RendererBufferTransportMode::Hardware))
+             m_type = Type::Texture;
+         else
+             m_type = Type::SharedMemory;
++#endif
+         break;
+ #if USE(GBM)
+     case PlatformDisplay::Type::GBM:
+@@ -632,6 +699,10 @@ std::unique_ptr<AcceleratedSurface::RenderTarget> AcceleratedSurface::SwapChain:
+         return RenderTargetTexture::create(m_surfaceID, m_size);
+     case Type::SharedMemory:
+         return RenderTargetSHMImage::create(m_surfaceID, m_size);
++#if OS(ANDROID)
++    case Type::AHardwareBuffer:
++        return RenderTargetAHardwareBuffer::create(m_surfaceID, m_size);
++#endif
+ #endif
+ #if USE(WPE_RENDERER)
+     case Type::WPEBackend:
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
+index 2d782b87..4d0a2fa3 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
+@@ -46,6 +46,11 @@ typedef void *EGLImage;
+ struct gbm_bo;
+ #endif
+ 
++#if OS(ANDROID)
++#include <android/hardware_buffer.h>
++typedef void *EGLImage;
++#endif
++
+ #if USE(WPE_RENDERER)
+ struct wpe_renderer_backend_egl_target;
+ #endif
+@@ -251,6 +256,22 @@ private:
+ 
+         unsigned m_texture { 0 };
+     };
++
++#if OS(ANDROID)
++    class RenderTargetAHardwareBuffer final : public RenderTargetShareableBuffer {
++    public:
++        static std::unique_ptr<RenderTarget> create(uint64_t, const WebCore::IntSize&);
++        RenderTargetAHardwareBuffer(uint64_t, const WebCore::IntSize&, RefPtr<AHardwareBuffer>&&);
++        ~RenderTargetAHardwareBuffer();
++
++    private:
++        bool supportsExplicitSync() const override { return true; }
++
++        RefPtr<AHardwareBuffer> m_ahb;
++        EGLImage m_image { nullptr };
++        unsigned m_texture { 0 };
++    };
++#endif // OS(ANDROID)
+ #endif // PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+ 
+ #if USE(WPE_RENDERER)
+@@ -285,6 +306,9 @@ private:
+ #endif
+             SharedMemory,
+             Texture,
++#if OS(ANDROID)
++            AHardwareBuffer,
++#endif
+ #endif
+ #if USE(WPE_RENDERER)
+             WPEBackend
+-- 
+2.43.0
+
