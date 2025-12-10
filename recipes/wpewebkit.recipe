@@ -3,14 +3,12 @@
 class Recipe(recipe.Recipe):
     name = 'wpewebkit'
     version = '2.50.0'
-    stype = SourceType.TARBALL
+    stype = SourceType.GIT
+    remotes = {'origin': 'https://github.com/aperezdc/WebKit.git'}
+    commit = 'ahb'
     btype = BuildType.CMAKE
-    url = f'https://wpewebkit.org/releases/wpewebkit-{version}.tar.xz'
-    tarball_checksum = 'a9af62c5e18551b7386b7db864e8ba8156f219b8e6c639934bf6f3a567969922'
     patches = [
-        name + '/0001-Add-Android-EGL-support-for-surfaceless-display.patch',
-        name + '/0002-Add-Android-AHardwareBuffer-support-to-WPE-Platform-.patch',
-        name + '/0003-Fix-WPEBufferAndroid-EGLImage-creation.patch',
+        'wpewebkit/0004-Fix-XKB-context-creation-for-Android.patch',
     ]
     deps = [
         'icu',
@@ -79,7 +77,7 @@ class Recipe(recipe.Recipe):
         'include/wpe-platform',
         'lib/pkgconfig/wpe-webkit-2.0.pc',
         'lib/pkgconfig/wpe-web-process-extension-2.0.pc',
-        'lib/pkgconfig/wpe-platform.pc'
+        'lib/pkgconfig/wpe-platform-2.0.pc'
     ]
 
     files_libexec = [
