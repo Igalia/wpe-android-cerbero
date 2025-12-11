@@ -10,6 +10,7 @@ class Recipe(recipe.Recipe):
     btype = BuildType.CMAKE
     patches = [
         'wpewebkit/0004-Fix-XKB-context-creation-for-Android.patch',
+        'wpewebkit/0005-Fix-PlatformDisplayAndroid-to-use-legacy-eglGetDispl.patch',
     ]
     deps = [
         'icu',
