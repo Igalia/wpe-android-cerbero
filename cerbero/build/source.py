@@ -470,6 +470,7 @@ class GitCache (Source):
     remotes = None
     commit = None
     use_submodules = True
+    shallow_clone = False
 
     _fetch_locks = collections.defaultdict(asyncio.Lock)
     _fetch_done = set()
@@ -518,7 +519,7 @@ class GitCache (Source):
         if os.path.isdir(os.path.join(cached_dir, ".git")):
             for remote, url in self.remotes.items():
                 git.add_remote(self.repo_dir, remote, "file://" + cached_dir, logfile=get_logfile(self))
-            await git.fetch(self.repo_dir, fail=False, logfile=get_logfile(self))
+            await git.fetch(self.repo_dir, shallow_clone=self.shallow_clone, fail=False, logfile=get_logfile(self))
         else:
             cached_dir = None
             # add remotes from both upstream and config so user can easily
@@ -527,7 +528,7 @@ class GitCache (Source):
                 git.add_remote(self.repo_dir, remote, url, logfile=get_logfile(self))
             # fetch remote branches
             if not self.offline:
-                await git.fetch(self.repo_dir, fail=False, logfile=get_logfile(self))
+                await git.fetch(self.repo_dir, shallow_clone=self.shallow_clone, fail=False, logfile=get_logfile(self))
         if checkout:
             await git.checkout(self.repo_dir, self.commit, logfile=get_logfile(self))
             if self.use_submodules:
@@ -572,7 +573,7 @@ class Git (GitCache):
             os.makedirs(self.config_src_dir)
 
         # checkout the current version
-        await git.local_checkout(self.config_src_dir, self.repo_dir, self.commit, logfile=get_logfile(self), use_submodules=self.use_submodules)
+        await git.local_checkout(self.config_src_dir, self.repo_dir, self.commit, logfile=get_logfile(self), use_submodules=self.use_submodules, shallow_clone=self.shallow_clone)
 
         for patch in self.patches:
             if not os.path.isabs(patch):

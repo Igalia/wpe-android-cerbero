@@ -6,6 +6,7 @@ class Recipe(recipe.Recipe):
     stype = SourceType.GIT
     remotes = {'origin': 'https://github.com/aperezdc/WebKit.git'}
     commit = 'ahb'
+    shallow_clone = True
     btype = BuildType.CMAKE
     patches = [
         'wpewebkit/0004-Fix-XKB-context-creation-for-Android.patch',
