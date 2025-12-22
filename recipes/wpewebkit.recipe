@@ -4,14 +4,10 @@ class Recipe(recipe.Recipe):
     name = 'wpewebkit'
     version = '2.50.0'
     stype = SourceType.GIT
-    remotes = {'origin': 'https://github.com/aperezdc/WebKit.git'}
-    commit = 'ahb'
+    remotes = {'origin': 'https://github.com/WebKit/WebKit.git'}
+    commit = '20d6d92cc3f91ba23ecf064dc8bb98ec9d764ec7'
     shallow_clone = True
     btype = BuildType.CMAKE
-    patches = [
-        'wpewebkit/0004-Fix-XKB-context-creation-for-Android.patch',
-        'wpewebkit/0005-Fix-PlatformDisplayAndroid-to-use-legacy-eglGetDispl.patch',
-    ]
     deps = [
         'icu',
         'cairo',
