@@ -113,7 +113,7 @@ def delete_tag(git_dir, tagname, logfile=None):
     return shell.new_call([GIT, '-d', tagname], cmd_dir=git_dir, logfile=logfile)
 
 
-async def fetch(git_dir, shallow_clone=False, fail=True, logfile=None):
+async def fetch(git_dir, shallow_clone=False, fail=True, logfile=None, commit=None):
     """
     Fetch all refs from all the remotes
 
@@ -123,7 +123,15 @@ async def fetch(git_dir, shallow_clone=False, fail=True, logfile=None):
     @type shallow_clone: bool
     @param fail: raise an error if the command failed
     @type fail: false
+    @param commit: specific commit/tag to fetch (used with shallow_clone to avoid fetching all refs)
+    @type commit: str
     """
+    # When doing a shallow clone with a specific commit, fetch only that commit
+    # instead of --all to avoid hanging on large repos like WebKit
+    if shallow_clone and commit:
+        cmd = [GIT, 'fetch', '--depth', '1', 'origin', commit]
+        return await shell.async_call(cmd, cmd_dir=git_dir, fail=fail, logfile=logfile, cpu_bound=False)
+
     # git 1.9 introduced the possibility to fetch both branches and tags at the
     # same time when using --tags: https://stackoverflow.com/a/20608181.
     # centOS 7 ships with git 1.8.3.1, hence for old git versions, we need to

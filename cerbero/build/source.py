@@ -519,7 +519,7 @@ class GitCache (Source):
         if os.path.isdir(os.path.join(cached_dir, ".git")):
             for remote, url in self.remotes.items():
                 git.add_remote(self.repo_dir, remote, "file://" + cached_dir, logfile=get_logfile(self))
-            await git.fetch(self.repo_dir, shallow_clone=self.shallow_clone, fail=False, logfile=get_logfile(self))
+            await git.fetch(self.repo_dir, shallow_clone=self.shallow_clone, fail=False, logfile=get_logfile(self), commit=self.commit)
         else:
             cached_dir = None
             # add remotes from both upstream and config so user can easily
@@ -528,7 +528,7 @@ class GitCache (Source):
                 git.add_remote(self.repo_dir, remote, url, logfile=get_logfile(self))
             # fetch remote branches
             if not self.offline:
-                await git.fetch(self.repo_dir, shallow_clone=self.shallow_clone, fail=False, logfile=get_logfile(self))
+                await git.fetch(self.repo_dir, shallow_clone=self.shallow_clone, fail=False, logfile=get_logfile(self), commit=self.commit)
         if checkout:
             await git.checkout(self.repo_dir, self.commit, logfile=get_logfile(self))
             if self.use_submodules:
