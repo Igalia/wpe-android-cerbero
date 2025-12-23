@@ -129,8 +129,19 @@ async def fetch(git_dir, shallow_clone=False, fail=True, logfile=None, commit=No
     # When doing a shallow clone with a specific commit, fetch only that commit
     # instead of --all to avoid hanging on large repos like WebKit
     if shallow_clone and commit:
-        cmd = [GIT, 'fetch', '--depth', '1', 'origin', commit]
-        return await shell.async_call(cmd, cmd_dir=git_dir, fail=fail, logfile=logfile, cpu_bound=False)
+        # Use refspec to create a local ref that checkout can use
+        # This handles both tags (refs/tags/X) and commits (fetched to FETCH_HEAD)
+        cmd = [GIT, 'fetch', '--depth', '1', 'origin', f'{commit}:{commit}']
+        ret = await shell.async_call(cmd, cmd_dir=git_dir, fail=False, logfile=logfile, cpu_bound=False)
+        if ret != 0:
+            # If refspec fails (e.g., for commit hashes), try plain fetch
+            cmd = [GIT, 'fetch', '--depth', '1', 'origin', commit]
+            ret = await shell.async_call(cmd, cmd_dir=git_dir, fail=fail, logfile=logfile, cpu_bound=False)
+            if ret == 0:
+                # For commit hashes, we need to create a local branch to checkout
+                # Checkout FETCH_HEAD and create a branch
+                await shell.async_call([GIT, 'checkout', 'FETCH_HEAD'], cmd_dir=git_dir, fail=False, logfile=logfile, cpu_bound=False)
+        return ret
 
     # git 1.9 introduced the possibility to fetch both branches and tags at the
     # same time when using --tags: https://stackoverflow.com/a/20608181.
