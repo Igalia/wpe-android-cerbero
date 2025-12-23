@@ -5,7 +5,7 @@ class Recipe(recipe.Recipe):
     version = '2.50.0'
     stype = SourceType.GIT
     remotes = {'origin': 'https://github.com/WebKit/WebKit.git'}
-    commit = '20d6d92cc3f91ba23ecf064dc8bb98ec9d764ec7'
+    commit = 'wpewebkit-2.51.4'
     shallow_clone = True
     btype = BuildType.CMAKE
     deps = [
@@ -53,7 +53,7 @@ class Recipe(recipe.Recipe):
         -DENABLE_WPE_PLATFORM_DRM=OFF \
         -DENABLE_WPE_PLATFORM_WAYLAND=OFF \
         -DENABLE_WPE_PLATFORM_HEADLESS=ON \
-        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_BUILD_TYPE=Debug \
     '
     cmake_generator = 'ninja'
 
@@ -106,7 +106,7 @@ class Recipe(recipe.Recipe):
             self.configure_options += ' -DCMAKE_SYSTEM_PROCESSOR=' + arch_src_name
             self.configure_options += ' -DANDROID=1'
             # Placeholder to allow enabling debug externally
-            self.append_env('WEBKIT_DEBUG', '')
+            self.append_env('WEBKIT_DEBUG', 'all')
         else:
             self.append_env('LDFLAGS', '-lrt')
             self.configure_options += ' -DCMAKE_SYSTEM_PROCESSOR=' + self.config.target_arch
