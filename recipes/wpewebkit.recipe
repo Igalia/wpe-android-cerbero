@@ -8,6 +8,9 @@ class Recipe(recipe.Recipe):
     commit = 'wpewebkit-2.51.4'
     shallow_clone = True
     btype = BuildType.CMAKE
+    patches = [
+        'wpewebkit/0001-Fix-PlatformDisplayAndroid-to-use-legacy-eglGetDispl.patch',
+    ]
     deps = [
         'icu',
         'cairo',
