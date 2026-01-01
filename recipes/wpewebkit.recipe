@@ -10,6 +10,7 @@ class Recipe(recipe.Recipe):
     btype = BuildType.CMAKE
     patches = [
         'wpewebkit/0001-Fix-PlatformDisplayAndroid-to-use-legacy-eglGetDispl.patch',
+        'wpewebkit/0002-Fix-XKB-NULL-keymap-crash-on-Android.patch',
     ]
     deps = [
         'icu',
