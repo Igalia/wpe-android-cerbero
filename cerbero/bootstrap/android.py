@@ -24,12 +24,16 @@ from cerbero.bootstrap.bootstrapper import register_toolchain_bootstrapper
 from cerbero.config import Distro
 
 NDK_VERSION = 'r27'
-NDK_BASE_URL = 'https://dl.google.com/android/repository/android-ndk-%s-%s.zip'
+NDK_BASE_URL = 'https://dl.google.com/android/repository/android-ndk-%s-%s.%s'
 NDK_CHECKSUMS = {
     'android-ndk-r27-linux.zip': '2f17eb8bcbfdc40201c0b36e9a70826fcd2524ab7a2a235e2c71186c302da1dc',
-    # doesn't ship as a zip file anymore
     'android-ndk-r27-darwin.dmg': 'fedc21f8ec973e5d41630536b5a5ac1d2888632cafb6e1f2aa79f0db3eaeda75',
     'android-ndk-r27-windows.zip': '342ceafd7581ae26a0bd650a5e0bbcd0aa2ee15eadfd7508b3dedeb1372d7596',
+}
+NDK_EXTENSIONS = {
+    'linux': 'zip',
+    'darwin': 'dmg',
+    'windows': 'zip',
 }
 
 
@@ -37,7 +41,8 @@ class AndroidBootstrapper(BootstrapperBase):
     def __init__(self, config, offline, assume_yes):
         super().__init__(config, offline, 'android')
         self.prefix = self.config.toolchain_prefix
-        url = NDK_BASE_URL % (NDK_VERSION, self.config.platform)
+        ext = NDK_EXTENSIONS.get(self.config.platform, 'zip')
+        url = NDK_BASE_URL % (NDK_VERSION, self.config.platform, ext)
         self.fetch_urls.append((url, None, NDK_CHECKSUMS[os.path.basename(url)]))
         self.extract_steps.append((url, True, self.prefix))
 
