@@ -113,27 +113,52 @@ def delete_tag(git_dir, tagname, logfile=None):
     return shell.new_call([GIT, '-d', tagname], cmd_dir=git_dir, logfile=logfile)
 
 
-async def fetch(git_dir, fail=True, logfile=None):
+async def fetch(git_dir, shallow_clone=False, fail=True, logfile=None, commit=None):
     """
     Fetch all refs from all the remotes
 
     @param git_dir: path of the git repository
     @type git_dir: str
+    @param shallow_clone: perform a shallow fetch with depth 1
+    @type shallow_clone: bool
     @param fail: raise an error if the command failed
     @type fail: false
+    @param commit: specific commit/tag to fetch (used with shallow_clone to avoid fetching all refs)
+    @type commit: str
     """
+    # When doing a shallow clone with a specific commit, fetch only that commit
+    # instead of --all to avoid hanging on large repos like WebKit
+    if shallow_clone and commit:
+        # Use refspec to create a local ref that checkout can use
+        # This handles both tags (refs/tags/X) and commits (fetched to FETCH_HEAD)
+        cmd = [GIT, 'fetch', '--depth', '1', 'origin', f'{commit}:{commit}']
+        ret = await shell.async_call(cmd, cmd_dir=git_dir, fail=False, logfile=logfile, cpu_bound=False)
+        if ret != 0:
+            # If refspec fails (e.g., for commit hashes), try plain fetch
+            cmd = [GIT, 'fetch', '--depth', '1', 'origin', commit]
+            ret = await shell.async_call(cmd, cmd_dir=git_dir, fail=fail, logfile=logfile, cpu_bound=False)
+            if ret == 0:
+                # For commit hashes, we need to create a local branch to checkout
+                # Checkout FETCH_HEAD and create a branch
+                await shell.async_call([GIT, 'checkout', 'FETCH_HEAD'], cmd_dir=git_dir, fail=False, logfile=logfile, cpu_bound=False)
+        return ret
+
     # git 1.9 introduced the possibility to fetch both branches and tags at the
     # same time when using --tags: https://stackoverflow.com/a/20608181.
     # centOS 7 ships with git 1.8.3.1, hence for old git versions, we need to
     # run two separate commands.
-    cmd = [GIT, 'fetch', '--all']
+    cmd = [GIT, 'fetch']
+    if shallow_clone:
+        cmd.extend(['--depth', '1'])
+    cmd.append('--all')
     ret = await shell.async_call(cmd, cmd_dir=git_dir, fail=fail, logfile=logfile, cpu_bound=False)
     if ret != 0:
         return ret
-    cmd.append('--tags')
-    # To avoid "would clobber existing tag" error
-    cmd.append('-f')
-    return await shell.async_call(cmd, cmd_dir=git_dir, fail=fail, logfile=logfile, cpu_bound=False)
+    cmd_tags = [GIT, 'fetch']
+    if shallow_clone:
+        cmd_tags.extend(['--depth', '1'])
+    cmd_tags.extend(['--all', '--tags', '-f'])
+    return await shell.async_call(cmd_tags, cmd_dir=git_dir, fail=fail, logfile=logfile, cpu_bound=False)
 
 
 async def submodules_update(git_dir, src_dir=None, fail=True, offline=False, logfile=None):
@@ -231,7 +256,7 @@ def get_hash_is_ancestor(git_dir, commit, logfile=None):
     return ret == 0
 
 
-async def local_checkout(git_dir, local_git_dir, commit, logfile=None, use_submodules=True):
+async def local_checkout(git_dir, local_git_dir, commit, logfile=None, use_submodules=True, shallow_clone=False):
     """
     Clone a repository for a given commit in a different location
 
@@ -241,10 +266,18 @@ async def local_checkout(git_dir, local_git_dir, commit, logfile=None, use_submo
     @type local_git_dir: str
     @param commit: the commit to checkout
     @type commit: false
+    @param shallow_clone: perform a shallow clone with depth 1
+    @type shallow_clone: bool
     """
     branch_name = 'cerbero_build'
     await shell.async_call([GIT, 'checkout', commit, '-B', branch_name], local_git_dir, logfile=logfile)
-    await shell.async_call([GIT, 'clone', local_git_dir, '-s', '-b', branch_name, '.'], git_dir, logfile=logfile)
+    clone_cmd = [GIT, 'clone']
+    if shallow_clone:
+        clone_cmd.extend(['--depth', '1', '--single-branch'])
+    else:
+        clone_cmd.append('-s')  # shared objects only for non-shallow
+    clone_cmd.extend([local_git_dir, '-b', branch_name, '.'])
+    await shell.async_call(clone_cmd, git_dir, logfile=logfile)
     ensure_user_is_set(git_dir, logfile=logfile)
     if use_submodules:
         await submodules_update(git_dir, local_git_dir, logfile=logfile)
