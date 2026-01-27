@@ -1,0 +1,43 @@
+# -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+import shutil
+
+from cerbero.tools.libtool import LibtoolLibrary
+from cerbero.utils import android
+
+class Recipe(recipe.Recipe):
+    name = 'openxr'
+    version = '1.1.52'
+    stype = SourceType.TARBALL
+    url = f'https://github.com/KhronosGroup/OpenXR-SDK/archive/refs/tags/release-{version}.tar.gz'
+    tarball_checksum = '9ace2834c5f86a77df339865bc072e71d766f4348f3914257d8f87ebe64994a9'
+    tarball_name = f'OpenXR-SDK-release-{version}.tar.gz'
+    tarball_dirname = f'OpenXR-SDK-release-{version}'
+
+    licenses = [License.Apachev2]
+
+    btype = BuildType.CMAKE
+    cmake_generator = 'ninja'
+    library_type = LibraryType.SHARED
+
+    files_libs = ['libopenxr_loader']
+    files_devel = ['include/openxr', 'lib/pkgconfig/openxr.pc']
+
+    configure_options = "\
+        -DBUILD_TESTING=OFF \
+        -DBUILD_TESTS=OFF \
+        -DBUILD_CONFORMANCE_TESTS=OFF \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        "
+
+    def prepare(self):
+        if self.config.target_platform == Platform.ANDROID:
+            ndk_path = self.config.env['ANDROID_NDK_TOOLCHAIN_BIN'] + "/../../../../.."
+            android_api = DistroVersion.get_android_api_version(self.config.target_distro_version)
+            android_arch = android.get_android_arch_name(self.config.target_arch)
+            self.configure_options += f' \
+                -DCMAKE_TOOLCHAIN_FILE={ndk_path}/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI={android_arch} \
+                -DANDROID_PLATFORM=android-{android_api} \
+                -DANDROID_STL=c++_shared \
+                '
+            self.append_env("CXXFLAGS", "-fexceptions")

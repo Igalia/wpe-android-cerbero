@@ -30,6 +30,7 @@ class Recipe(recipe.Recipe):
         'libwebp',
         'libwpe',
         'openjpeg',
+        'openxr',
     ]
     # TODO: support accessibility, woff2, hyphenation
     configure_options = '\
@@ -41,6 +42,7 @@ class Recipe(recipe.Recipe):
         -DENABLE_JOURNALD_LOG=OFF \
         -DENABLE_BUBBLEWRAP_SANDBOX=OFF \
         -DENABLE_SPEECH_SYNTHESIS=OFF \
+        -DENABLE_WEBXR=ON \
         -DUSE_ATK=OFF \
         -DUSE_LCMS=OFF \
         -DUSE_AVIF=OFF \
@@ -102,12 +104,14 @@ class Recipe(recipe.Recipe):
             -DPNG_LIBRARY={self.config.prefix}/lib/libpng.so \
             -DPNG_INCLUDE_DIR={self.config.prefix}/include \
             '
+        self.append_env('CXXFLAGS', '-DXR_USE_GRAPHICS_API_OPENGL_ES')
         if self.config.target_platform in (Platform.ANDROID):
             arch_src_name = self.config.target_arch
             if self.config.target_arch == Architecture.ARMv7:
                 arch_src_name = 'arm'
             self.configure_options += ' -DCMAKE_SYSTEM_PROCESSOR=' + arch_src_name
             self.configure_options += ' -DANDROID=1'
+            self.append_env('CXXFLAGS', '-DXR_USE_PLATFORM_ANDROID')
             # Placeholder to allow enabling debug externally
             self.append_env('WEBKIT_DEBUG', '')
         else:
