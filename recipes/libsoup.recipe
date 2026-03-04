@@ -4,12 +4,12 @@ from cerbero.tools.libtool import LibtoolLibrary
 
 class Recipe(recipe.Recipe):
     name = 'libsoup'
-    version = '3.6.4'
+    version = '3.6.6'
     licenses = [License.LGPLv2Plus]
     stype = SourceType.TARBALL
     btype = BuildType.MESON
     url = 'gnome://'
-    tarball_checksum = '9b54c76f5276b05bebcaf2b6c2a141a188fc7bb1d0624eda259dac13a6665c8a'
+    tarball_checksum = '51ed0ae06f9d5a40f401ff459e2e5f652f9a510b7730e1359ee66d14d4872740'
     meson_options = {'vapi': 'disabled', 'tls_check': 'false', 'tests' : 'false'}
     deps = ['libxml2', 'glib', 'glib-networking', 'libpsl', 'nghttp2']
 
