@@ -508,12 +508,19 @@ class GitCache (Source):
     async def fetch_impl(self, checkout):
         # First try to get the sources from the cached dir if there is one
         cached_dir = os.path.join(self.config.cached_sources,  self.name)
+        partial_clone = getattr(self, 'partial_clone', False) and 'origin' in self.remotes
 
         if not os.path.exists(self.repo_dir):
             if not cached_dir and self.offline:
                 msg = 'Offline mode: git repo for {!r} not found in cached sources ({}) or local sources ({})'
                 raise FatalError(msg.format(self.name, self.config.cached_sources, self.repo_dir))
-            git.init(self.repo_dir, logfile=get_logfile(self))
+            if partial_clone:
+                await git.init_partial_clone(self.repo_dir, self.remotes['origin'], logfile=get_logfile(self))
+            else:
+                git.init(self.repo_dir, logfile=get_logfile(self))
+        elif partial_clone and not git.is_partial_clone(self.repo_dir, logfile=get_logfile(self)):
+            shutil.rmtree(self.repo_dir)
+            await git.init_partial_clone(self.repo_dir, self.remotes['origin'], logfile=get_logfile(self))
 
         if os.path.isdir(os.path.join(cached_dir, ".git")):
             for remote, url in self.remotes.items():
