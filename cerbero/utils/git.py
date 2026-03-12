@@ -54,6 +54,27 @@ def init(git_dir, logfile=None):
     shell.new_call([GIT, 'init'], git_dir, logfile=logfile)
     ensure_user_is_set(git_dir, logfile=logfile)
 
+async def init_partial_clone(git_dir, url, logfile=None):
+    """
+    Initialize and clone a git repository with with treeless clone
+
+    @param git_dir: path of the git repository
+    @type git_dir: str
+    @param url: url of the remote
+    @type url: str
+    """
+    await shell.async_call([GIT, 'clone', '--filter=tree:0', url, git_dir], logfile=logfile)
+    ensure_user_is_set(git_dir, logfile=logfile)
+
+def is_partial_clone(git_dir, logfile=None):
+    """
+    Returns True if git repository is a partial clone
+
+    @param git_dir: path of the git repository
+    @type git_dir: str
+    """
+    return shell.check_output([GIT, 'config', 'remote.origin.partialclonefilter'], cmd_dir=git_dir, fail=False).rstrip() == 'tree:0'
+
 
 def clean(git_dir, logfile=None):
     """
