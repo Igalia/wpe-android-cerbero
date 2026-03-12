@@ -8,9 +8,6 @@ class Recipe(recipe.Recipe):
     remotes = {'origin' : 'https://github.com/WebKit/WebKit.git'}
     commit = 'wpewebkit-2.51.93'
     partial_clone = True
-    patches = [
-        f'{name}/0001-Fix-PlatformDisplayAndroid-to-use-legacy-eglGetDispl.patch',
-    ]
     deps = [
         'icu',
         'cairo',
