@@ -2,11 +2,11 @@
 
 class Recipe(recipe.Recipe):
     name = 'wpewebkit'
-    version = '2.50.5'
+    version = '2.50.6'
     stype = SourceType.TARBALL
     btype = BuildType.CMAKE
     url = f'https://wpewebkit.org/releases/wpewebkit-{version}.tar.xz'
-    tarball_checksum = 'de4bfd20bfc921cdfc77e839ee4da84e2674bcb58b2f916172978d62fa115fc2'
+    tarball_checksum = '8864fd3f6116370d75425f9b1efa48eb188ccf42c92ae9e8aaf2dd51f9f27def'
     deps = [
         'icu',
         'cairo',
