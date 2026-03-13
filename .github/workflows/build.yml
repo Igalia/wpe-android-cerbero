@@ -21,10 +21,12 @@ on:
     branches:
       - 'main'
       - 'wpewebkit-2.[0-9][0-9]'
+  merge_group:
+    types:
+      - check_requested
 
 jobs:
   build:
-    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'pull_request') }}
     runs-on: self-hosted
     strategy:
       matrix:
@@ -46,6 +48,7 @@ jobs:
             package -f wpewebkit
       - name: Store packages
         uses: actions/upload-artifact@v4
+        if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'pull_request') }}
         with:
           name: wpe-deps-${{ matrix.target }}
           path: ./wpewebkit-android-${{ matrix.target }}*
