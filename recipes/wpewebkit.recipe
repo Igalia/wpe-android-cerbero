@@ -16,7 +16,6 @@ class Recipe(recipe.Recipe):
 
     deps = [
         'icu',
-        'cairo',
         'freetype',
         'gettext',
         'gstreamer-1.0',
