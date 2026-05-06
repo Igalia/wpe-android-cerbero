@@ -7,7 +7,7 @@ class Recipe(recipe.Recipe):
     remotes = {'origin' : 'https://github.com/WebKit/WebKit.git'}
     partial_clone = True
     version = 'git' #use just 'git' for individual commits or the version string for release tags
-    commit = '6da5abd'
+    commit = '15145f0'
 
     wpewebkit_commit = os.environ.get('WPEWEBKIT_COMMIT')
     if wpewebkit_commit:
