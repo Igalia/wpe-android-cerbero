@@ -46,6 +46,8 @@ class Recipe(recipe.Recipe):
         -DENABLE_BUBBLEWRAP_SANDBOX=OFF \
         -DENABLE_SPEECH_SYNTHESIS=OFF \
         -DENABLE_WEBXR=ON \
+        -DENABLE_WEBXR_LAYERS=ON \
+        -DENABLE_WEBXR_HIT_TEST=ON \
         -DUSE_ATK=OFF \
         -DUSE_LCMS=OFF \
         -DUSE_AVIF=OFF \
