@@ -35,7 +35,14 @@ class Recipe(recipe.Recipe):
         'openjpeg',
         'openxr',
     ]
-    # TODO: support accessibility, woff2, hyphenation
+    # FIXME: support accessibility, woff2, hyphenation
+    #
+    # FIXME: CMAKE_DISABLE_PRECOMPILE_HEADERS=ON: workaround for the
+    # chained-PCH subtargets introduced upstream in 312994@main and
+    # 312995@main ("specialized prefix headers in JSC JIT / WebCore JS
+    # Bindings" and "specialized prefix headers in WebCore and
+    # WebKit"). On the Android NDK r27 cross-build, we need to work in
+    # proper fix for this.
     configure_options = '\
         -DPORT=WPE \
         -DUSE_GSTREAMER_GL=ON \
@@ -64,6 +71,7 @@ class Recipe(recipe.Recipe):
         -DENABLE_WPE_PLATFORM_WAYLAND=OFF \
         -DENABLE_WPE_PLATFORM_HEADLESS=ON \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
     '
     cmake_generator = 'ninja'
 
