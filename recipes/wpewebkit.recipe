@@ -75,6 +75,10 @@ class Recipe(recipe.Recipe):
     '
     cmake_generator = 'ninja'
 
+    patches = [
+        'wpewebkit/0001-WPE-GTK-Atlas-textures-use-spec-violating-glTexImage.patch',
+    ]
+
     files_libs = [
         'libWPEWebKit-2.0',
         'libWPEWebDriver'

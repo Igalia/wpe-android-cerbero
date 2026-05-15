@@ -1,0 +1,197 @@
+From c350e31e4233d5fe17db358ee8507de3b9090c30 Mon Sep 17 00:00:00 2001
+From: "Alejandro G. Castro" <alex@igalia.com>
+Date: Thu, 14 May 2026 19:26:17 +0200
+Subject: [PATCH] [WPE][GTK] Atlas textures use spec-violating
+ glTexImage2D(internal=GL_RGBA, format=GL_BGRA), render black on strict GLES
+ drivers https://bugs.webkit.org/show_bug.cgi?id=314719
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reviewed by NOBODY (OOPS!).
+
+SkiaGPUAtlas allocates BitmapTextures with UseBGRALayout, intended to give
+them GL_BGRA storage. BitmapTexture uploaded them via
+glTexImage2D(internal=GL_RGBA, format=GL_BGRA), which is undefined per
+EXT_texture_format_BGRA8888 — the spec mandates internalFormat == format.
+Mesa accepts it (TextureMapper's shaders swizzle BGRA→RGBA at sample time);
+Adreno rejects every upload with GL_INVALID_OPERATION, leaving the atlas
+texture undefined and rendering solid-black photos after a scroll burst.
+
+Pass textureFormat() for both internalFormat and format in glTexImage2D so
+UseBGRALayout textures upload as internal=format=GL_BGRA. On the Skia side,
+declare fFormat=GL_BGRA on the GrBackendTexture for UseBGRALayout textures.
+Tile textures (createBuffer) don't have UseBGRALayout, so they remain
+GL_RGBA — no-op.
+
+Drop the helper borrowBackendTextureAsImage and inline SkImages::BorrowTextureFrom
+at each call site with the SkColorType matching that site's backend texture.
+
+* Source/WebCore/platform/graphics/skia/SkiaReplayAtlas.cpp:
+(WebCore::SkiaReplayAtlas::create): Inline SkImages::BorrowTextureFrom with
+kBGRA_8888_SkColorType (atlas has UseBGRALayout).
+* Source/WebCore/platform/graphics/skia/SkiaUtilities.cpp:
+(WebCore::SkiaUtilities::createBackendTexture): Declare fFormat=GL_BGRA for
+UseBGRALayout textures.
+(WebCore::SkiaUtilities::borrowBackendTextureAsImage): Deleted.
+* Source/WebCore/platform/graphics/skia/SkiaUtilities.h: Drop
+borrowBackendTextureAsImage declaration.
+* Source/WebCore/platform/graphics/texmap/BitmapTexture.cpp:
+(WebCore::BitmapTexture::allocateTexture): Use textureFormat() for both internalFormat and format.
+(WebCore::BitmapTexture::reset): Same.
+* Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferExternalOES.cpp:
+(WebCore::CoordinatedPlatformLayerBufferExternalOES::skiaImage): Inline
+SkImages::BorrowTextureFrom with kRGBA_8888_SkColorType (backend is GL_RGBA8).
+* Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferRGB.cpp:
+(WebCore::CoordinatedPlatformLayerBufferRGB::skiaImage): Inline
+SkImages::BorrowTextureFrom with kRGBA_8888_SkColorType (backend is GL_RGBA8).
+---
+ Source/WebCore/platform/graphics/skia/SkiaReplayAtlas.cpp | 5 +++--
+ Source/WebCore/platform/graphics/skia/SkiaUtilities.cpp   | 8 ++------
+ Source/WebCore/platform/graphics/skia/SkiaUtilities.h     | 4 ----
+ Source/WebCore/platform/graphics/texmap/BitmapTexture.cpp | 6 ++++--
+ .../CoordinatedPlatformLayerBufferExternalOES.cpp         | 4 ++--
+ .../coordinated/CoordinatedPlatformLayerBufferRGB.cpp     | 4 ++--
+ 6 files changed, 13 insertions(+), 18 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/skia/SkiaReplayAtlas.cpp b/Source/WebCore/platform/graphics/skia/SkiaReplayAtlas.cpp
+index 67e182171600..839c02b9f12d 100644
+--- a/Source/WebCore/platform/graphics/skia/SkiaReplayAtlas.cpp
++++ b/Source/WebCore/platform/graphics/skia/SkiaReplayAtlas.cpp
+@@ -28,13 +28,14 @@
+ 
+ #if USE(SKIA)
+ 
++#include "ColorSpaceSkia.h"
+ #include "PlatformDisplay.h"
+ #include "SkiaGPUAtlas.h"
+-#include "SkiaUtilities.h"
+ #include <wtf/TZoneMallocInlines.h>
+ 
+ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
+ #include <skia/gpu/ganesh/GrDirectContext.h>
++#include <skia/gpu/ganesh/SkImageGanesh.h>
+ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
+ 
+ namespace WebCore {
+@@ -61,7 +62,7 @@ std::unique_ptr<SkiaReplayAtlas> SkiaReplayAtlas::create(const SkiaGPUAtlas& gpu
+     // The underlying GL texture was created on the main thread context but is
+     // shareable via GL context sharing. However, the Skia SkImage wrapper is
+     // context-specific and must be rewrapped for each worker's GrDirectContext.
+-    auto rewrapped = SkiaUtilities::borrowBackendTextureAsImage(grContext, gpuAtlas.backendTexture());
++    auto rewrapped = SkImages::BorrowTextureFrom(grContext, gpuAtlas.backendTexture(), kTopLeft_GrSurfaceOrigin, kBGRA_8888_SkColorType, kPremul_SkAlphaType, sRGBColorSpaceSingleton());
+     if (!rewrapped)
+         return nullptr;
+ 
+diff --git a/Source/WebCore/platform/graphics/skia/SkiaUtilities.cpp b/Source/WebCore/platform/graphics/skia/SkiaUtilities.cpp
+index 6d1d19fd7546..2a07e699e5ac 100644
+--- a/Source/WebCore/platform/graphics/skia/SkiaUtilities.cpp
++++ b/Source/WebCore/platform/graphics/skia/SkiaUtilities.cpp
+@@ -58,7 +58,8 @@ GrBackendTexture createBackendTexture(const BitmapTexture& texture)
+     GrGLTextureInfo externalTexture;
+     externalTexture.fTarget = GL_TEXTURE_2D;
+     externalTexture.fID = texture.id();
+-    externalTexture.fFormat = GL_RGBA8;
++    // EXT_texture_format_BGRA8888 (unsized form, matches BitmapTexture::textureFormat).
++    externalTexture.fFormat = texture.flags().contains(BitmapTexture::Flags::UseBGRALayout) ? GL_BGRA : GL_RGBA8;
+     return GrBackendTextures::MakeGL(texture.size().width(), texture.size().height(), skgpu::Mipmapped::kNo, externalTexture);
+ }
+ 
+@@ -78,11 +79,6 @@ sk_sp<SkImage> rewrapImageForContext(GrDirectContext* grContext, const SkImage&
+     return SkImages::BorrowTextureFrom(grContext, backendTexture, kTopLeft_GrSurfaceOrigin, image.colorType(), image.alphaType(), image.refColorSpace());
+ }
+ 
+-sk_sp<SkImage> borrowBackendTextureAsImage(GrDirectContext* grContext, const GrBackendTexture& backendTexture, GrSurfaceOrigin origin)
+-{
+-    return SkImages::BorrowTextureFrom(grContext, backendTexture, origin, kRGBA_8888_SkColorType, kPremul_SkAlphaType, sRGBColorSpaceSingleton());
+-}
+-
+ std::optional<unsigned> retrieveGLTextureID(const SkImage& image)
+ {
+     GrBackendTexture backendTexture;
+diff --git a/Source/WebCore/platform/graphics/skia/SkiaUtilities.h b/Source/WebCore/platform/graphics/skia/SkiaUtilities.h
+index 1336e095bba9..bd182a6643eb 100644
+--- a/Source/WebCore/platform/graphics/skia/SkiaUtilities.h
++++ b/Source/WebCore/platform/graphics/skia/SkiaUtilities.h
+@@ -63,10 +63,6 @@ sk_sp<SkSurface> createSurface(GrDirectContext*, const BitmapTexture&, const SkS
+ // original image's color type, alpha type, and color space.
+ sk_sp<SkImage> rewrapImageForContext(GrDirectContext*, const SkImage&);
+ 
+-// Wraps a GrBackendTexture as a non-owning SkImage for the given context,
+-// using RGBA8, premultiplied alpha, and sRGB color space.
+-sk_sp<SkImage> borrowBackendTextureAsImage(GrDirectContext*, const GrBackendTexture&, GrSurfaceOrigin = kTopLeft_GrSurfaceOrigin);
+-
+ // Extracts the GL texture ID from a GPU-backed SkImage, if available.
+ std::optional<unsigned> retrieveGLTextureID(const SkImage&);
+ 
+diff --git a/Source/WebCore/platform/graphics/texmap/BitmapTexture.cpp b/Source/WebCore/platform/graphics/texmap/BitmapTexture.cpp
+index 5a7083320266..f7710198483a 100644
+--- a/Source/WebCore/platform/graphics/texmap/BitmapTexture.cpp
++++ b/Source/WebCore/platform/graphics/texmap/BitmapTexture.cpp
+@@ -161,7 +161,9 @@ void BitmapTexture::createTexture()
+ void BitmapTexture::allocateTexture()
+ {
+     createTexture();
+-    glTexImage2D(m_renderTarget, 0, GL_RGBA, m_size.width(), m_size.height(), 0, textureFormat(), s_pixelDataType, nullptr);
++    // EXT_texture_format_BGRA8888 mandates internalFormat == format.
++    // https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_format_BGRA8888.txt
++    glTexImage2D(m_renderTarget, 0, textureFormat(), m_size.width(), m_size.height(), 0, textureFormat(), s_pixelDataType, nullptr);
+ }
+ 
+ size_t BitmapTexture::sizeInBytes() const
+@@ -297,7 +299,7 @@ void BitmapTexture::reset(const IntSize& size, OptionSet<Flags> flags)
+ #endif
+ 
+     glBindTexture(m_renderTarget, m_id);
+-    glTexImage2D(m_renderTarget, 0, GL_RGBA, m_size.width(), m_size.height(), 0, textureFormat(), s_pixelDataType, nullptr);
++    glTexImage2D(m_renderTarget, 0, textureFormat(), m_size.width(), m_size.height(), 0, textureFormat(), s_pixelDataType, nullptr);
+     glBindTexture(m_renderTarget, boundTexture);
+ }
+ 
+diff --git a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferExternalOES.cpp b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferExternalOES.cpp
+index 7281ac1843dd..a3d27340d098 100644
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferExternalOES.cpp
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferExternalOES.cpp
+@@ -41,7 +41,7 @@
+ #endif
+ 
+ #if USE(SKIA)
+-#include "SkiaUtilities.h"
++#include "ColorSpaceSkia.h"
+ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
+ #include <skia/core/SkColorSpace.h>
+ #include <skia/core/SkImage.h>
+@@ -184,7 +184,7 @@ sk_sp<SkImage> CoordinatedPlatformLayerBufferExternalOES::skiaImage()
+     externalTexture.fID = m_textureID;
+     externalTexture.fFormat = GL_RGBA8;
+     auto backendTexture = GrBackendTextures::MakeGL(m_size.width(), m_size.height(), skgpu::Mipmapped::kNo, externalTexture);
+-    return SkiaUtilities::borrowBackendTextureAsImage(grContext, backendTexture);
++    return SkImages::BorrowTextureFrom(grContext, backendTexture, kTopLeft_GrSurfaceOrigin, kRGBA_8888_SkColorType, kPremul_SkAlphaType, sRGBColorSpaceSingleton());
+ }
+ #endif
+ 
+diff --git a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferRGB.cpp b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferRGB.cpp
+index 108c19abf8a4..d00cf821a4f7 100644
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferRGB.cpp
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferRGB.cpp
+@@ -33,7 +33,7 @@
+ #include "TextureMapper.h"
+ 
+ #if USE(SKIA)
+-#include "SkiaUtilities.h"
++#include "ColorSpaceSkia.h"
+ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
+ #include <skia/core/SkColorFilter.h>
+ #include <skia/core/SkColorSpace.h>
+@@ -95,7 +95,7 @@ sk_sp<SkImage> CoordinatedPlatformLayerBufferRGB::skiaImage()
+     externalTexture.fFormat = GL_RGBA8;
+     auto backendTexture = GrBackendTextures::MakeGL(m_size.width(), m_size.height(), skgpu::Mipmapped::kNo, externalTexture);
+     auto origin = m_flags.contains(TextureMapperFlags::ShouldFlipTexture) ? kBottomLeft_GrSurfaceOrigin : kTopLeft_GrSurfaceOrigin;
+-    return SkiaUtilities::borrowBackendTextureAsImage(grContext, backendTexture, origin);
++    return SkImages::BorrowTextureFrom(grContext, backendTexture, origin, kRGBA_8888_SkColorType, kPremul_SkAlphaType, sRGBColorSpaceSingleton());
+ }
+ #endif
+ 
+-- 
+2.43.0
+
