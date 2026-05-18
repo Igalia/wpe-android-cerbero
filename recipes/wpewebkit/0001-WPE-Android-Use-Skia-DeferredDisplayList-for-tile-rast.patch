@@ -1,0 +1,472 @@
+From 827a0d7564553c68f17d1daee5b901f2e3d26399 Mon Sep 17 00:00:00 2001
+From: WPE Android downstream <wpe-android@igalia.com>
+Date: Fri, 15 May 2026 11:30:00 +0200
+Subject: [PATCH] wpewebkit: apply downstream Skia DDL patch for Mali GPU
+ rasterization
+
+Adds the developer-supplied Skia DeferredDisplayList patch
+(`recipes/wpewebkit/0001-...`) as a downstream patch and registers it
+in the recipe.
+
+The patch reroutes paint workers to record into a
+GrDeferredDisplayList instead of issuing GL commands; the compositor
+thread replays each DDL on its single GrContext. Eliminates the
+cross-context GL race that produces tile-edge seams, black tile
+corners, and post-scroll wrong-content blocks on Mali (Pixel 7) when
+the Skia compositor is used with GPU rasterization. Pairs with the
+BGRA atlas fix added in the previous commit.
+
+Held downstream until the upstream is available.
+---
+ .../graphics/skia/PlatformDisplaySkia.cpp     |  1 +
+ .../graphics/skia/SkiaBackingStore.cpp        | 28 +++++-
+ .../graphics/skia/SkiaPaintingEngine.cpp      | 11 ++-
+ .../graphics/skia/SkiaPaintingEngine.h        |  8 +-
+ .../CoordinatedBackingStoreTile.cpp           | 15 ++--
+ .../coordinated/CoordinatedTileBuffer.cpp     | 85 +++++++++++--------
+ .../coordinated/CoordinatedTileBuffer.h       | 20 +++--
+ .../CoordinatedGraphics/LayerTreeHost.cpp     |  2 +-
+ .../ThreadedCompositor.cpp                    |  7 +-
+ .../CoordinatedGraphics/ThreadedCompositor.h  |  7 ++
+ 10 files changed, 129 insertions(+), 55 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/skia/PlatformDisplaySkia.cpp b/Source/WebCore/platform/graphics/skia/PlatformDisplaySkia.cpp
+index 25f4e7c7d1f3..f3fad4e3f049 100644
+--- a/Source/WebCore/platform/graphics/skia/PlatformDisplaySkia.cpp
++++ b/Source/WebCore/platform/graphics/skia/PlatformDisplaySkia.cpp
+@@ -29,6 +29,7 @@
+ #if USE(SKIA)
+ #include "FontRenderOptions.h"
+ #include "GLContext.h"
++#include <wtf/Threading.h>
+ 
+ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
+ #include <skia/core/SkColorSpace.h>
+diff --git a/Source/WebCore/platform/graphics/skia/SkiaBackingStore.cpp b/Source/WebCore/platform/graphics/skia/SkiaBackingStore.cpp
+index 96b98560da5a..3383b36e5054 100644
+--- a/Source/WebCore/platform/graphics/skia/SkiaBackingStore.cpp
++++ b/Source/WebCore/platform/graphics/skia/SkiaBackingStore.cpp
+@@ -153,7 +153,29 @@ void SkiaBackingStore::Tile::update(const IntRect& dirtyRect, const IntRect& til
+         auto& acceleratedBuffer = static_cast<CoordinatedAcceleratedTileBuffer&>(buffer);
+         acceleratedBuffer.serverWait();
+ 
+-        Ref texture = acceleratedBuffer.texture();
++        if (auto displayList = acceleratedBuffer.displayList()) {
++            auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
++            auto imageInfo = SkImageInfo::Make(dirtyRect.width(), dirtyRect.height(), kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
++            auto properties = FontRenderOptions::singleton().createSurfaceProps();
++            auto surface = SkSurfaces::RenderTarget(grContext, skgpu::Budgeted::kNo, imageInfo, 0, kTopLeft_GrSurfaceOrigin, &properties);
++            skgpu::ganesh::DrawDDL(surface.get(), displayList);
++
++            if (dirtyRect.size() == tileRect.size())
++                m_surface = WTF::move(surface);
++            else {
++            if (!m_surface) {
++                auto imageInfo = SkImageInfo::Make(tileRect.width(), tileRect.height(), kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
++                auto properties = FontRenderOptions::singleton().createSurfaceProps();
++                m_surface = SkSurfaces::RenderTarget(grContext, skgpu::Budgeted::kNo, imageInfo, 0, kTopLeft_GrSurfaceOrigin, &properties);
++            }
++
++            SkPaint paint;
++            paint.setBlendMode(SkBlendMode::kSrc);
++            m_surface->getCanvas()->drawImageRect(surface->makeImageSnapshot(), SkRect::MakeWH(dirtyRect.width(), dirtyRect.height()), SkRect::Make(SkIRect(dirtyRect)),
++                SkSamplingOptions(SkFilterMode::kNearest, SkMipmapMode::kNone), &paint, SkCanvas::kFast_SrcRectConstraint);
++            }
++        } else if (auto* bufferTexture = acceleratedBuffer.texture()) {
++            Ref texture { *bufferTexture };
+         GrBackendTexture backendTexture = texture->createSkiaBackendTexture();
+         if (dirtyRect.size() == tileRect.size()) {
+             // Fast path: whole tile content changed -- take ownership of the incoming texture, replacing the existing tile buffer (avoiding texture copies).
+@@ -178,6 +200,7 @@ void SkiaBackingStore::Tile::update(const IntRect& dirtyRect, const IntRect& til
+             m_surface->getCanvas()->drawImageRect(image, SkRect::MakeWH(dirtyRect.width(), dirtyRect.height()), SkRect::Make(SkIRect(dirtyRect)),
+                 SkSamplingOptions(SkFilterMode::kNearest, SkMipmapMode::kNone), &paint, SkCanvas::kFast_SrcRectConstraint);
+         }
++        }
+     } else if (tryEnsureSurface(tileRect.size(), buffer)) {
+         auto& unacceleratedBuffer = static_cast<CoordinatedUnacceleratedTileBuffer&>(buffer);
+         auto imageInfo = SkImageInfo::Make(dirtyRect.width(), dirtyRect.height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+@@ -190,6 +213,9 @@ void SkiaBackingStore::Tile::update(const IntRect& dirtyRect, const IntRect& til
+ 
+ sk_sp<SkImage> SkiaBackingStore::Tile::image()
+ {
++    if (m_surface && !m_textureID)
++        return m_surface->makeImageSnapshot();
++
+     // SkSurface::makeImageSnapshot() does a copy-on-write, but when the surface is wrapping an
+     // external texture, it always copies because it doesn't know if the texture will be modified
+     // externally. We know the texture won't change, so we can use our own cached image wihtout copying.
+diff --git a/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp b/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp
+index c1df78226aa9..41ec5ebc2c78 100644
+--- a/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp
++++ b/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp
+@@ -31,6 +31,7 @@
+ #include "CoordinatedBackingStoreProxy.h"
+ #include "CoordinatedPlatformLayer.h"
+ #include "CoordinatedTileBuffer.h"
++#include "FontRenderOptions.h"
+ #include "GLContext.h"
+ #include "GraphicsContextSkia.h"
+ #include "GraphicsLayerCoordinated.h"
+@@ -75,7 +76,8 @@ static bool canPerformAcceleratedRendering()
+     return ProcessCapabilities::canUseAcceleratedBuffers() && PlatformDisplay::sharedDisplay().skiaGLContext();
+ }
+ 
+-SkiaPaintingEngine::SkiaPaintingEngine()
++SkiaPaintingEngine::SkiaPaintingEngine(sk_sp<GrContextThreadSafeProxy>&& threadSafeGrContext)
++    : m_threadSafeGrContext(WTF::move(threadSafeGrContext))
+ {
+     if (canPerformAcceleratedRendering()) {
+         if (auto numberOfGPUThreads = numberOfGPUPaintingThreads())
+@@ -90,9 +92,9 @@ SkiaPaintingEngine::SkiaPaintingEngine()
+ 
+ SkiaPaintingEngine::~SkiaPaintingEngine() = default;
+ 
+-std::unique_ptr<SkiaPaintingEngine> SkiaPaintingEngine::create()
++std::unique_ptr<SkiaPaintingEngine> SkiaPaintingEngine::create(sk_sp<GrContextThreadSafeProxy>&& threadSafeGrContext)
+ {
+-    return makeUnique<SkiaPaintingEngine>();
++    return makeUnique<SkiaPaintingEngine>(WTF::move(threadSafeGrContext));
+ }
+ 
+ void SkiaPaintingEngine::paintIntoGraphicsContext(const GraphicsLayer& layer, GraphicsContext& context, const IntRect& dirtyRect, bool contentsOpaque, float contentsScale) const
+@@ -117,6 +119,9 @@ void SkiaPaintingEngine::paintIntoGraphicsContext(const GraphicsLayer& layer, Gr
+ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::createBuffer(RenderingMode renderingMode, const IntSize& size, bool contentsOpaque) const
+ {
+     if (renderingMode == RenderingMode::Accelerated) {
++        if (useThreadedRendering() && m_threadSafeGrContext)
++            return CoordinatedAcceleratedTileBuffer::create(m_threadSafeGrContext, size, contentsOpaque ? CoordinatedTileBuffer::NoFlags : CoordinatedTileBuffer::SupportsAlpha);
++
+         PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent();
+ 
+         OptionSet<BitmapTexture::Flags> textureFlags;
+diff --git a/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.h b/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.h
+index 0ab9d8f1fa0e..307351d26523 100644
+--- a/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.h
++++ b/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.h
+@@ -26,6 +26,9 @@
+ #pragma once
+ 
+ #if USE(COORDINATED_GRAPHICS) && USE(SKIA)
++WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
++#include <skia/gpu/ganesh/GrContextThreadSafeProxy.h>
++WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
+ #include <wtf/RefPtr.h>
+ #include <wtf/TZoneMalloc.h>
+ #include <wtf/WorkQueue.h>
+@@ -49,10 +52,10 @@ class SkiaPaintingEngine {
+     WTF_MAKE_TZONE_ALLOCATED(SkiaPaintingEngine);
+     WTF_MAKE_NONCOPYABLE(SkiaPaintingEngine);
+ public:
+-    SkiaPaintingEngine();
++    explicit SkiaPaintingEngine(sk_sp<GrContextThreadSafeProxy>&&);
+     ~SkiaPaintingEngine();
+ 
+-    static std::unique_ptr<SkiaPaintingEngine> create();
++    static std::unique_ptr<SkiaPaintingEngine> create(sk_sp<GrContextThreadSafeProxy>&&);
+ 
+     static unsigned numberOfCPUPaintingThreads();
+     static unsigned numberOfGPUPaintingThreads();
+@@ -72,6 +75,7 @@ private:
+     RefPtr<SkiaGPUAtlas> createAtlas(const SkiaImageAtlasLayout&, AtlasUploadCondition&, bool& needsUploadFence);
+     bool tryReuseCachedAtlases(SkiaRecordingResult&, unsigned fingerprint);
+ 
++    sk_sp<GrContextThreadSafeProxy> m_threadSafeGrContext;
+     RefPtr<WorkerPool> m_paintingWorkerPool;
+     RefPtr<WorkQueue> m_uploadWorkQueue;
+     unsigned m_cachedImageFingerprint { 0 };
+diff --git a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedBackingStoreTile.cpp b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedBackingStoreTile.cpp
+index 94562342e0cd..10dd56cba4ab 100644
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedBackingStoreTile.cpp
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedBackingStoreTile.cpp
+@@ -92,13 +92,14 @@ void CoordinatedBackingStoreTile::processPendingUpdates()
+             auto& buffer = static_cast<CoordinatedAcceleratedTileBuffer&>(update.buffer.get());
+             buffer.serverWait();
+ 
+-            // Fast path: whole tile content changed -- take ownership of the incoming texture, replacing the existing tile buffer (avoiding texture copies).
+-            if (update.sourceRect.size() == update.tileRect.size()) {
+-                ASSERT(update.sourceRect.location().isZero());
+-                m_texture->swapTexture(buffer.texture());
+-            } else
+-                m_texture->copyFromExternalTexture(buffer.texture().id(), update.sourceRect, toIntSize(update.bufferOffset));
+-
++            if (auto* texture = buffer.texture()) {
++                // Fast path: whole tile content changed -- take ownership of the incoming texture, replacing the existing tile buffer (avoiding texture copies).
++                if (update.sourceRect.size() == update.tileRect.size()) {
++                    ASSERT(update.sourceRect.location().isZero());
++                    m_texture->swapTexture(*texture);
++                } else
++                    m_texture->copyFromExternalTexture(texture->id(), update.sourceRect, toIntSize(update.bufferOffset));
++            }
+             WTFEndSignpost(this, CopyTextureGPUToGPU);
+             WTFEndSignpost(this, CoordinatedSwapBuffer);
+             continue;
+diff --git a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.cpp b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.cpp
+index 8b21bd60867b..272768f667a1 100644
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.cpp
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.cpp
+@@ -75,15 +75,6 @@ double CoordinatedTileBuffer::getMemoryUsage()
+     return memoryUsage;
+ }
+ 
+-#if USE(SKIA)
+-SkCanvas* CoordinatedTileBuffer::canvas()
+-{
+-    if (!tryEnsureSurface())
+-        return nullptr;
+-    return m_surface->getCanvas();
+-}
+-#endif
+-
+ void CoordinatedTileBuffer::beginPainting()
+ {
+     Locker locker { m_painting.lock };
+@@ -141,16 +132,15 @@ CoordinatedUnacceleratedTileBuffer::~CoordinatedUnacceleratedTileBuffer()
+ }
+ 
+ #if USE(SKIA)
+-bool CoordinatedUnacceleratedTileBuffer::tryEnsureSurface()
++SkCanvas* CoordinatedUnacceleratedTileBuffer::canvas()
+ {
+-    if (m_surface)
+-        return true;
+-
+-    auto imageInfo = SkImageInfo::Make(m_size.width(), m_size.height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+-    // FIXME: ref buffer and unref on release proc?
+-    auto properties = FontRenderOptions::singleton().createSurfaceProps();
+-    m_surface = SkSurfaces::WrapPixels(imageInfo, data(), imageInfo.minRowBytes64(), &properties);
+-    return true;
++    if (!m_surface) {
++        auto imageInfo = SkImageInfo::Make(m_size.width(), m_size.height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
++        // FIXME: ref buffer and unref on release proc?
++        auto properties = FontRenderOptions::singleton().createSurfaceProps();
++        m_surface = SkSurfaces::WrapPixels(imageInfo, data(), imageInfo.minRowBytes64(), &properties);
++    }
++    return m_surface->getCanvas();
+ }
+ #endif
+ 
+@@ -167,35 +157,62 @@ CoordinatedAcceleratedTileBuffer::CoordinatedAcceleratedTileBuffer(Ref<BitmapTex
+ {
+ }
+ 
++Ref<CoordinatedTileBuffer> CoordinatedAcceleratedTileBuffer::create(const sk_sp<GrContextThreadSafeProxy>& threadSafeGrContext, const IntSize& size, Flags flags)
++{
++     auto imageInfo = SkImageInfo::Make(size.width(), size.height(), kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
++     auto backendFormat = threadSafeGrContext->defaultBackendFormat(kRGBA_8888_SkColorType, GrRenderable::kYes);
++     ASSERT(backendFormat.isValid());
++     auto properties = FontRenderOptions::singleton().createSurfaceProps();
++     auto characterization = threadSafeGrContext->createCharacterization(0, imageInfo, backendFormat, 0, kTopLeft_GrSurfaceOrigin, properties, skgpu::Mipmapped::kNo);
++     return adoptRef(*new CoordinatedAcceleratedTileBuffer(WTF::move(characterization), flags));
++}
++
++CoordinatedAcceleratedTileBuffer::CoordinatedAcceleratedTileBuffer(GrSurfaceCharacterization&& characterization, Flags flags)
++    : CoordinatedTileBuffer(flags)
++    , m_characterization(WTF::move(characterization))
++{
++}
++
+ CoordinatedAcceleratedTileBuffer::~CoordinatedAcceleratedTileBuffer() = default;
+ 
+ IntSize CoordinatedAcceleratedTileBuffer::size() const
+ {
+-    return m_texture->size();
++    if (m_texture)
++        m_texture->size();
++
++    return { m_characterization.width(), m_characterization.height() };
+ }
+ 
+-bool CoordinatedAcceleratedTileBuffer::tryEnsureSurface()
++SkCanvas* CoordinatedAcceleratedTileBuffer::canvas()
+ {
+-    if (m_surface)
+-        return true;
++    if (m_texture) {
++        if (!m_surface) {
++            if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
++                return nullptr;
+ 
+-    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+-        return false;
++            m_surface = m_texture->createSkiaSurface(PlatformDisplay::sharedDisplay().skiaGrContext());
++        }
++        return m_surface->getCanvas();
++    }
+ 
+-    m_surface = m_texture->createSkiaSurface(PlatformDisplay::sharedDisplay().skiaGrContext());
+-    return true;
++    if (!m_recorder)
++        m_recorder = std::make_unique<GrDeferredDisplayListRecorder>(m_characterization);
++    return m_recorder->getCanvas();
+ }
+ 
+ void CoordinatedAcceleratedTileBuffer::completePainting()
+ {
+-    auto* recordingContext = m_surface->recordingContext();
+-    auto* grContext = recordingContext ? recordingContext->asDirectContext() : nullptr;
+-    if (!grContext) {
+-        CoordinatedTileBuffer::completePainting();
+-        return;
+-    }
+-
+-    m_fence = SkiaUtilities::flushAndSubmitSurfaceWithFence(grContext, m_surface.get());
++    if (m_surface) {
++        auto* recordingContext = m_surface->recordingContext();
++        auto* grContext = recordingContext ? recordingContext->asDirectContext() : nullptr;
++        if (!grContext) {
++            CoordinatedTileBuffer::completePainting();
++            return;
++        }
++
++        m_fence = SkiaUtilities::flushAndSubmitSurfaceWithFence(grContext, m_surface.get());
++    } else if (m_recorder)
++        m_displayList = m_recorder->detach();
+ 
+     CoordinatedTileBuffer::completePainting();
+ }
+diff --git a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.h b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.h
+index 03e639c720e7..967806fadc5c 100644
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.h
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.h
+@@ -42,6 +42,9 @@
+ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
+ #include <skia/core/SkCanvas.h>
+ #include <skia/core/SkSurface.h>
++#include <skia/private/chromium/GrDeferredDisplayList.h>
++#include <skia/private/chromium/GrDeferredDisplayListRecorder.h>
++#include <skia/private/chromium/GrSurfaceCharacterization.h>
+ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
+ #endif
+ 
+@@ -69,7 +72,7 @@ public:
+     void waitUntilPaintingComplete();
+ 
+ #if USE(SKIA)
+-    SkCanvas* canvas();
++    virtual SkCanvas* canvas() = 0;
+ #endif
+ 
+     static void resetMemoryUsage();
+@@ -79,7 +82,6 @@ protected:
+     explicit CoordinatedTileBuffer(Flags);
+ 
+ #if USE(SKIA)
+-    virtual bool tryEnsureSurface() = 0;
+     sk_sp<SkSurface> m_surface;
+ #endif
+ 
+@@ -121,7 +123,7 @@ private:
+     IntSize size() const final { return m_size; }
+ 
+ #if USE(SKIA)
+-    bool tryEnsureSurface() final;
++    SkCanvas* canvas() final;
+ #endif
+ 
+     MallocSpan<unsigned char> m_data;
+@@ -143,22 +145,28 @@ private:
+ class CoordinatedAcceleratedTileBuffer final : public CoordinatedTileBuffer {
+ public:
+     WEBCORE_EXPORT static Ref<CoordinatedTileBuffer> create(Ref<BitmapTexture>&&);
++    WEBCORE_EXPORT static Ref<CoordinatedTileBuffer> create(const sk_sp<GrContextThreadSafeProxy>&, const IntSize&, Flags);
+     WEBCORE_EXPORT virtual ~CoordinatedAcceleratedTileBuffer();
+ 
+-    BitmapTexture& texture() const { return m_texture.get(); }
++    BitmapTexture* texture() const { return m_texture.get(); }
++    sk_sp<GrDeferredDisplayList> displayList() const { return m_displayList; }
+     void serverWait();
+ 
+ private:
+     CoordinatedAcceleratedTileBuffer(Ref<BitmapTexture>&&, Flags);
++    CoordinatedAcceleratedTileBuffer(GrSurfaceCharacterization&&, Flags);
+ 
+     bool isBackedByOpenGL() const final { return true; }
+     IntSize size() const final;
+ 
+-    bool tryEnsureSurface() final;
++    SkCanvas* canvas() final;
+     void completePainting() final;
+ 
+-    const Ref<BitmapTexture> m_texture;
++    RefPtr<BitmapTexture> m_texture;
+     std::unique_ptr<GLFence> m_fence;
++    GrSurfaceCharacterization m_characterization;
++    std::unique_ptr<GrDeferredDisplayListRecorder> m_recorder;
++    sk_sp<GrDeferredDisplayList> m_displayList;
+ };
+ #endif
+ 
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp
+index 2d9e3778f83d..6ded42e82e9b 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp
+@@ -71,7 +71,6 @@ std::unique_ptr<LayerTreeHost> LayerTreeHost::create(WebPage& webPage)
+ LayerTreeHost::LayerTreeHost(WebPage& webPage)
+     : m_webPage(webPage)
+     , m_sceneState(CoordinatedSceneState::create())
+-    , m_skiaPaintingEngine(SkiaPaintingEngine::create())
+ {
+     {
+         auto& rootLayer = m_sceneState->rootLayer();
+@@ -88,6 +87,7 @@ LayerTreeHost::LayerTreeHost(WebPage& webPage)
+     }
+ 
+     m_compositor = ThreadedCompositor::create(webPage, *this, m_sceneState.get());
++    m_skiaPaintingEngine = SkiaPaintingEngine::create(m_compositor->threadSafeGrContext());
+ #if ENABLE(DAMAGE_TRACKING)
+     std::optional<OptionSet<ThreadedCompositor::DamagePropagationFlags>> damagePropagationFlags;
+     const auto& settings = webPage.corePage()->settings();
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
+index df1faa592cee..cab44c1264bf 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
+@@ -105,8 +105,13 @@ ThreadedCompositor::ThreadedCompositor(WebPage& webPage, LayerTreeHost& layerTre
+ 
+         glGetIntegerv(GL_MAX_TEXTURE_SIZE, &m_maxTextureSize);
+ 
+-        if (m_useSkia)
++        if (m_useSkia) {
+             PlatformDisplay::sharedDisplay().setSkiaGLContextForCurrentThread(WTF::move(context));
++
++            const char* envString = getenv("WEBKIT_SKIA_ENABLE_DDL");
++            if (envString && *envString && envString[0] != '0')
++                m_threadSafeGrContext = PlatformDisplay::sharedDisplay().skiaGrContext()->threadSafeProxy();
++        }
+         else {
+             m_context = WTF::move(context);
+             m_textureMapper = TextureMapper::create();
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h
+index af88152a0505..df56b2adb149 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h
+@@ -35,6 +35,10 @@
+ #include <WebCore/TextureMapperDamageVisualizer.h>
+ #include <atomic>
+ #include <optional>
++WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
++#include <skia/gpu/ganesh/GrContextThreadSafeProxy.h>
++#include <skia/gpu/ganesh/GrDirectContext.h>
++WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
+ #include <wtf/Atomics.h>
+ #include <wtf/CheckedPtr.h>
+ #include <wtf/Noncopyable.h>
+@@ -96,6 +100,8 @@ public:
+ 
+     void fillGLInformation(RenderProcessInfo&&, CompletionHandler<void(RenderProcessInfo&&)>&&);
+ 
++    sk_sp<GrContextThreadSafeProxy> threadSafeGrContext() const { return m_threadSafeGrContext; }
++
+ private:
+     ThreadedCompositor(WebPage&, LayerTreeHost&, CoordinatedSceneState&);
+ 
+@@ -124,6 +130,7 @@ private:
+     RefPtr<AcceleratedSurface> m_surface;
+     RefPtr<CoordinatedSceneState> m_sceneState;
+     std::unique_ptr<WebCore::GLContext> m_context;
++    sk_sp<GrContextThreadSafeProxy> m_threadSafeGrContext;
+ 
+     bool m_flipY { false };
+     int m_maxTextureSize { 0 };
+-- 
+2.43.0
+
