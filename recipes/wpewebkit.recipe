@@ -75,7 +75,9 @@ class Recipe(recipe.Recipe):
     '
     cmake_generator = 'ninja'
 
-    patches = []
+    patches = [
+        'wpewebkit/0001-WPE-Android-Use-Skia-DeferredDisplayList-for-tile-rast.patch',
+    ]
 
     files_libs = [
         'libWPEWebKit-2.0',
