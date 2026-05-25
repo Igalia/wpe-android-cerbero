@@ -1,0 +1,273 @@
+From e3122149e3ec7c2406a29b117c574892861f7a11 Mon Sep 17 00:00:00 2001
+From: "Alejandro G. Castro" <alex@igalia.com>
+Date: Fri, 22 May 2026 20:32:57 +0200
+Subject: [PATCH] [GTK][WPE] Avoid main-thread geometry commits overwriting
+ scrolling tree layer positions https://bugs.webkit.org/show_bug.cgi?id=315185
+
+Reviewed by NOBODY (OOPS!).
+
+Follow-up to bug #315185. With the position-ownership in place, the
+main thread no longer overwrites positions during a geometry commit
+for the nodes which position depends on the scroll, but the compositor
+can still observe a frame with a wrong position of the fixed element: both
+the main thread and the scrolling thread can run applyLayerPositions walks,
+each writing CoordinatedPlatformLayer::m_position one layer at a time under
+that layer's m_lock. If CompositingStateOnTarget happens while main or
+scrolling are doing a walk, it reads new values for the layers the
+walk has already touched and old values for the rest, producing visible
+jitter or step-jumps in sticky and fixed elements during heavy scroll.
+
+We need to add an m_committedPosition snapshot on CoordinatedPlatformLayer
+that the compositor reads in place of m_position. At the end of every
+ScrollingTreeCoordinated::applyLayerPositionsInternal walk, visit each
+Fixed, Sticky and FrameScrolling node and copy the freshly applied
+m_position into m_committedPosition. Non-owned layers keep
+m_committedPosition mirrored at write time so the compositor read path
+stays uniform across owned and non-owned layers.
+
+Both walks run under m_treeLock, so the apply+commit pair is atomic
+relative to a competing walk on the other thread. The compositor sees
+either the previous walk's snapshot or the current walk's complete
+snapshot, never a mid-walk mix across layers.
+
+* Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp:
+(WebCore::commitLayerPositionsRecursive):
+(WebCore::ScrollingTreeCoordinated::applyLayerPositionsInternal):
+* Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp:
+(WebCore::ScrollingTreeFixedNodeCoordinated::commitLayerPositions):
+* Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h:
+* Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp:
+(WebCore::ScrollingTreeFrameScrollingNodeCoordinated::commitLayerPositions):
+* Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h:
+* Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp:
+(WebCore::ScrollingTreeStickyNodeCoordinated::commitLayerPositions):
+* Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h:
+* Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp:
+(WebCore::CoordinatedPlatformLayer::setPosition):
+(WebCore::CoordinatedPlatformLayer::setPositionForScrolling):
+(WebCore::CoordinatedPlatformLayer::setPositionOwnedByScrollingTree):
+(WebCore::CoordinatedPlatformLayer::commitPosition):
+(WebCore::CoordinatedPlatformLayer::flushCompositingStateOnTarget):
+(WebCore::CoordinatedPlatformLayer::flushCompositingStateOnSkiaTarget):
+* Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h:
+---
+ .../coordinated/ScrollingTreeCoordinated.cpp  | 15 ++++++++++++
+ .../ScrollingTreeFixedNodeCoordinated.cpp     |  6 +++++
+ .../ScrollingTreeFixedNodeCoordinated.h       |  2 ++
+ ...llingTreeFrameScrollingNodeCoordinated.cpp |  6 +++++
+ ...rollingTreeFrameScrollingNodeCoordinated.h |  2 ++
+ .../ScrollingTreeStickyNodeCoordinated.cpp    |  6 +++++
+ .../ScrollingTreeStickyNodeCoordinated.h      |  2 ++
+ .../coordinated/CoordinatedPlatformLayer.cpp  | 23 +++++++++++++++++--
+ .../coordinated/CoordinatedPlatformLayer.h    |  2 ++
+ 9 files changed, 62 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp
+index 7e70c79f43b4..1b2742ba830c 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp
+@@ -79,6 +79,19 @@ Ref<ScrollingTreeNode> ScrollingTreeCoordinated::createScrollingTreeNode(Scrolli
+     RELEASE_ASSERT_NOT_REACHED();
+ }
+ 
++static void commitLayerPositionsRecursive(ScrollingTreeNode& node)
++{
++    if (node.isFixedNode())
++        static_cast<ScrollingTreeFixedNodeCoordinated&>(node).commitLayerPositions();
++    else if (node.isStickyNode())
++        static_cast<ScrollingTreeStickyNodeCoordinated&>(node).commitLayerPositions();
++    else if (node.isFrameScrollingNode())
++        static_cast<ScrollingTreeFrameScrollingNodeCoordinated&>(node).commitLayerPositions();
++
++    for (auto& child : node.children())
++        commitLayerPositionsRecursive(child.get());
++}
++
+ void ScrollingTreeCoordinated::applyLayerPositionsInternal()
+ {
+     auto* rootScrollingNode = rootNode();
+@@ -87,6 +100,8 @@ void ScrollingTreeCoordinated::applyLayerPositionsInternal()
+ 
+     ThreadedScrollingTree::applyLayerPositionsInternal();
+ 
++    commitLayerPositionsRecursive(*rootScrollingNode);
++
+     if (ScrollingThread::isCurrentThread()) {
+         auto rootContentsLayer = static_cast<ScrollingTreeFrameScrollingNodeCoordinated*>(rootScrollingNode)->rootContentsLayer();
+         rootContentsLayer->requestComposition(CompositionReason::AsyncScrolling);
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp
+index c63f68b118ac..3c23e62a75c9 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp
+@@ -86,6 +86,12 @@ void ScrollingTreeFixedNodeCoordinated::applyLayerPositions()
+     m_layer->setTopLeftPositionForScrolling(layerPosition - m_constraints.alignmentOffset(), forceSync);
+ }
+ 
++void ScrollingTreeFixedNodeCoordinated::commitLayerPositions()
++{
++    if (m_layer)
++        m_layer->commitPosition();
++}
++
+ void ScrollingTreeFixedNodeCoordinated::dumpProperties(TextStream& ts, OptionSet<ScrollingStateTreeAsTextBehavior> behavior) const
+ {
+     ScrollingTreeFixedNode::dumpProperties(ts, behavior);
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h
+index 20aa290e8b63..d01f491a63e4 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h
+@@ -40,6 +40,8 @@ public:
+     static Ref<ScrollingTreeFixedNodeCoordinated> create(ScrollingTree&, ScrollingNodeID);
+     virtual ~ScrollingTreeFixedNodeCoordinated();
+ 
++    void commitLayerPositions();
++
+ private:
+     ScrollingTreeFixedNodeCoordinated(ScrollingTree&, ScrollingNodeID);
+ 
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp
+index daa7ea784394..6541af097ca3 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp
+@@ -176,6 +176,12 @@ void ScrollingTreeFrameScrollingNodeCoordinated::repositionRelatedLayers()
+     delegate().updateVisibleLengths();
+ }
+ 
++void ScrollingTreeFrameScrollingNodeCoordinated::commitLayerPositions()
++{
++    if (auto* layer = static_cast<CoordinatedPlatformLayer*>(scrolledContentsLayer()))
++        layer->commitPosition();
++}
++
+ } // namespace WebCore
+ 
+ #endif // ENABLE(ASYNC_SCROLLING) && USE(COORDINATED_GRAPHICS)
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h
+index 77fc53ffdc3b..51dcdb385783 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h
+@@ -43,6 +43,8 @@ public:
+ 
+     RefPtr<CoordinatedPlatformLayer> rootContentsLayer() const { return m_rootContentsLayer; }
+ 
++    void commitLayerPositions();
++
+ private:
+     ScrollingTreeFrameScrollingNodeCoordinated(ScrollingTree&, ScrollingNodeType, ScrollingNodeID);
+ 
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp
+index 7054497a9012..eb67a4114f05 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp
+@@ -86,6 +86,12 @@ void ScrollingTreeStickyNodeCoordinated::applyLayerPositions()
+     m_layer->setTopLeftPositionForScrolling(layerPosition - m_constraints.alignmentOffset(), forceSync);
+ }
+ 
++void ScrollingTreeStickyNodeCoordinated::commitLayerPositions()
++{
++    if (m_layer)
++        m_layer->commitPosition();
++}
++
+ FloatPoint ScrollingTreeStickyNodeCoordinated::layerTopLeft() const
+ {
+     return m_layer->topLeftPositionForScrolling() + m_constraints.alignmentOffset();
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h
+index 51cefcd0d4c9..e613ada238d6 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h
+@@ -41,6 +41,8 @@ public:
+     static Ref<ScrollingTreeStickyNodeCoordinated> create(ScrollingTree&, ScrollingNodeID);
+     virtual ~ScrollingTreeStickyNodeCoordinated();
+ 
++    void commitLayerPositions();
++
+ private:
+     ScrollingTreeStickyNodeCoordinated(ScrollingTree&, ScrollingNodeID);
+ 
+diff --git a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp
+index 58ee4ce05a44..fe142f2c7e08 100644
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp
+@@ -180,6 +180,8 @@ void CoordinatedPlatformLayer::setPosition(FloatPoint&& position)
+         return;
+ 
+     m_position = WTF::move(position);
++    if (!m_positionOwnedByScrollingTree)
++        m_committedPosition = m_position;
+     m_pendingChanges.add(Change::Position);
+     notifyCompositionRequired();
+ }
+@@ -191,6 +193,8 @@ void CoordinatedPlatformLayer::setPositionForScrolling(const FloatPoint& positio
+         return;
+ 
+     m_position = position;
++    if (!m_positionOwnedByScrollingTree)
++        m_committedPosition = m_position;
+     m_pendingChanges.add(Change::Position);
+     notifyCompositionRequired();
+ }
+@@ -204,7 +208,22 @@ const FloatPoint& CoordinatedPlatformLayer::position() const
+ void CoordinatedPlatformLayer::setPositionOwnedByScrollingTree(bool enabled)
+ {
+     Locker locker { m_lock };
++    bool wasOwned = m_positionOwnedByScrollingTree;
+     m_positionOwnedByScrollingTree = enabled;
++    if (enabled && !wasOwned)
++        m_committedPosition = m_position;
++}
++
++void CoordinatedPlatformLayer::commitPosition()
++{
++    Locker locker { m_lock };
++    if (!m_positionOwnedByScrollingTree)
++        return;
++    if (m_committedPosition == m_position)
++        return;
++    m_committedPosition = m_position;
++    m_pendingChanges.add(Change::Position);
++    notifyCompositionRequired();
+ }
+ 
+ void CoordinatedPlatformLayer::setTopLeftPositionForScrolling(const FloatPoint& position, ForcePositionSync forceSync)
+@@ -996,7 +1015,7 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
+ {
+     if (reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::AsyncScrolling })) {
+         if (m_pendingChanges.contains(Change::Position)) {
+-            layer.setPosition(m_position);
++            layer.setPosition(m_committedPosition);
+             m_pendingChanges.remove(Change::Position);
+         }
+ 
+@@ -1195,7 +1214,7 @@ void CoordinatedPlatformLayer::flushCompositingStateOnSkiaTarget(const OptionSet
+ {
+     if (reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::AsyncScrolling })) {
+         if (m_pendingChanges.contains(Change::Position)) {
+-            layer.setPosition(m_position);
++            layer.setPosition(m_committedPosition);
+             m_pendingChanges.remove(Change::Position);
+         }
+ 
+diff --git a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h
+index 3a6d2eeea5b5..faa8aabeb91a 100644
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h
+@@ -113,6 +113,7 @@ public:
+     void setPositionForScrolling(const FloatPoint&, ForcePositionSync = ForcePositionSync::No);
+     const FloatPoint& position() const;
+     void setPositionOwnedByScrollingTree(bool);
++    void commitPosition();
+     bool positionOwnedByScrollingTree() const
+     {
+         ASSERT(m_lock.isHeld());
+@@ -293,6 +294,7 @@ private:
+     bool m_positionOwnedByScrollingTree WTF_GUARDED_BY_LOCK(m_lock) { false };
+     EnumSet<Change> m_pendingChanges WTF_GUARDED_BY_LOCK(m_lock);
+     FloatPoint m_position WTF_GUARDED_BY_LOCK(m_lock);
++    FloatPoint m_committedPosition WTF_GUARDED_BY_LOCK(m_lock);
+     FloatPoint3D m_anchorPoint WTF_GUARDED_BY_LOCK(m_lock) { 0.5f, 0.5f, 0 };
+     FloatSize m_size WTF_GUARDED_BY_LOCK(m_lock);
+     FloatPoint m_boundsOrigin WTF_GUARDED_BY_LOCK(m_lock);
+-- 
+2.43.0
+

@@ -7,7 +7,7 @@ class Recipe(recipe.Recipe):
     remotes = {'origin' : 'https://github.com/WebKit/WebKit.git'}
     partial_clone = True
     version = 'git' #use just 'git' for individual commits or the version string for release tags
-    commit = 'b47541a'
+    commit = '36e289c'
 
     wpewebkit_commit = os.environ.get('WPEWEBKIT_COMMIT')
     if wpewebkit_commit:
@@ -52,6 +52,7 @@ class Recipe(recipe.Recipe):
         -DENABLE_JOURNALD_LOG=OFF \
         -DENABLE_BUBBLEWRAP_SANDBOX=OFF \
         -DENABLE_SPEECH_SYNTHESIS=OFF \
+        -DENABLE_SPELLCHECK=OFF \
         -DENABLE_WEBXR=ON \
         -DENABLE_WEBXR_LAYERS=ON \
         -DENABLE_WEBXR_HIT_TEST=ON \
@@ -76,7 +77,8 @@ class Recipe(recipe.Recipe):
     cmake_generator = 'ninja'
 
     patches = [
-        'wpewebkit/0001-WPE-Android-Use-Skia-DeferredDisplayList-for-tile-rast.patch',
+        'wpewebkit/0001-GTK-WPE-Avoid-main-thread-geometry-commits-overwriti.patch',
+        'wpewebkit/0002-GTK-WPE-Avoid-main-thread-geometry-commits-followup.patch',
     ]
 
     files_libs = [
