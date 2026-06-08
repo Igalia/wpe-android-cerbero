@@ -1,91 +1,130 @@
-From 7ffa66af1a982a2bd20aed53f1b3eba3c9454d45 Mon Sep 17 00:00:00 2001
+From b998560100974f2b5f5fbd93b92eff5575fddc40 Mon Sep 17 00:00:00 2001
 From: "Alejandro G. Castro" <alex@igalia.com>
-Date: Fri, 29 May 2026 19:36:58 +0200
+Date: Fri, 5 Jun 2026 14:05:13 +0200
 Subject: [PATCH] [GTK][WPE] Main and scrolling threads race writing
  CoordinatedPlatformLayer position
  https://bugs.webkit.org/show_bug.cgi?id=315185
 
 Reviewed by NOBODY (OOPS!).
 
-Fixed, sticky, frame-scrolling and positioned layers are positioned by
-the scrolling thread, while GraphicsLayerCoordinated::updateGeometry also
-writes CoordinatedPlatformLayer::m_position from the main thread. Sharing
-one field let the compositor flush a stale layout-time position and glitch
-these elements while scrolling.
+Fixed, sticky, frame-scrolling and positioned layers are positioned by the
+scrolling thread, while GraphicsLayerCoordinated::updateGeometry also writes
+CoordinatedPlatformLayer::m_position from the main thread. Sharing one field
+let the compositor flush a stale layout-time position and glitch these
+elements while scrolling.
 
-Give the scrolling thread its own field, m_scrollingTreePosition, so the
-two threads never share m_position. To keep the compositor from reading a
-mix of per-layer positions while the scrolling tree is still walking, each
-owned layer snapshots its position into m_committedPosition at the end of
-the applyLayerPositions walk, under the tree lock, and flushing reads that
-snapshot. Nodes return their layers to main-thread control when released.
+Provide the scrolling thread its own field, m_pendingPositionFromScrollingTree,
+filled during the applyLayerPositions traverse; having a value also marks the
+layer as owned by the scrolling tree. m_position stays the committed snapshot
+the compositor reads, but while the layer is owned it is updated only by
+commitPositionFromScrollingTree(), run once after the whole walk has finished
+so the compositor never observes a half-updated set of positions, and the
+main thread's setPosition() is suppressed so it cannot race the scroll
+position. When the scrolling tree releases the layer,
+resetPendingPositionFromScrollingTree() clears the pending value so the layer
+returns to main-thread control. commitLayerPositions() is now a
+ScrollingTreeNode virtual rather than a type switch.
 
+Committing once after the walk is not sufficient by itself: the compositor
+flushes the scene on its own thread and could still copy a frame node's new
+position together with a child's old one. Serialize the commit against that
+flush with a per-scene CoordinatedSceneState lock, held around the commit walk
+through willCommitSceneState()/didCommitSceneState() on the layer Client and
+around the state copy in ThreadedCompositor, so the compositor always reads a
+fully committed set of positions.
+
+* Source/WebCore/page/scrolling/ScrollingTreeNode.h:
+(WebCore::ScrollingTreeNode::commitLayerPositions):
 * Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp:
 (WebCore::commitLayerPositionsRecursive):
 (WebCore::ScrollingTreeCoordinated::applyLayerPositionsInternal):
 * Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp:
-(WebCore::ScrollingTreeFixedNodeCoordinated::willBeDestroyed):
-(WebCore::ScrollingTreeFixedNodeCoordinated::commitStateBeforeChildren):
 (WebCore::ScrollingTreeFixedNodeCoordinated::commitLayerPositions):
 * Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h:
 * Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp:
-(WebCore::ScrollingTreeFrameScrollingNodeCoordinated::willBeDestroyed):
-(WebCore::ScrollingTreeFrameScrollingNodeCoordinated::commitStateBeforeChildren):
+(WebCore::resetPendingPositionFromScrollingTree):
+(WebCore::commitPositionFromScrollingTree):
 (WebCore::ScrollingTreeFrameScrollingNodeCoordinated::commitLayerPositions):
+(WebCore::ScrollingTreeFrameScrollingNodeCoordinated::commitStateBeforeChildren):
 * Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h:
 * Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.cpp:
-(WebCore::ScrollingTreePositionedNodeCoordinated::willBeDestroyed):
 (WebCore::ScrollingTreePositionedNodeCoordinated::commitStateBeforeChildren):
 (WebCore::ScrollingTreePositionedNodeCoordinated::commitLayerPositions):
 * Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.h:
 * Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp:
-(WebCore::ScrollingTreeStickyNodeCoordinated::willBeDestroyed):
 (WebCore::ScrollingTreeStickyNodeCoordinated::commitStateBeforeChildren):
 (WebCore::ScrollingTreeStickyNodeCoordinated::commitLayerPositions):
 * Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h:
 * Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp:
 (WebCore::CoordinatedPlatformLayer::setPosition):
 (WebCore::CoordinatedPlatformLayer::setPositionFromScrollingTree):
-(WebCore::CoordinatedPlatformLayer::resetPositionFromScrollingTree):
+(WebCore::CoordinatedPlatformLayer::resetPendingPositionFromScrollingTree):
 (WebCore::CoordinatedPlatformLayer::position const):
-(WebCore::CoordinatedPlatformLayer::commitPosition):
-(WebCore::CoordinatedPlatformLayer::setTopLeftPositionFromScrollingTree):
-(WebCore::CoordinatedPlatformLayer::topLeftPositionFromScrollingTree):
+(WebCore::CoordinatedPlatformLayer::commitPositionFromScrollingTree):
+(WebCore::CoordinatedPlatformLayer::willCommitSceneState):
+(WebCore::CoordinatedPlatformLayer::didCommitSceneState):
 (WebCore::CoordinatedPlatformLayer::flushCompositingStateOnTarget):
 (WebCore::CoordinatedPlatformLayer::flushCompositingStateOnSkiaTarget):
 * Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h:
+* Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CoordinatedSceneState.h:
+(WebKit::CoordinatedSceneState::stateLock):
+* Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp:
+(WebKit::LayerTreeHost::willCommitSceneState):
+(WebKit::LayerTreeHost::didCommitSceneState):
+* Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.h:
+* Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.cpp:
+(WebKit::LayerTreeHost::willCommitSceneState):
+(WebKit::LayerTreeHost::didCommitSceneState):
+* Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.h:
+* Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp:
+(WebKit::ThreadedCompositor::flushCompositingState):
 ---
- .../coordinated/ScrollingTreeCoordinated.cpp  | 17 ++++
- .../ScrollingTreeFixedNodeCoordinated.cpp     | 21 ++++-
- .../ScrollingTreeFixedNodeCoordinated.h       |  3 +
- ...llingTreeFrameScrollingNodeCoordinated.cpp | 81 ++++++++++++++++---
- ...rollingTreeFrameScrollingNodeCoordinated.h |  3 +
- ...ScrollingTreePositionedNodeCoordinated.cpp | 19 ++++-
- .../ScrollingTreePositionedNodeCoordinated.h  |  3 +
- .../ScrollingTreeStickyNodeCoordinated.cpp    | 23 +++++-
- .../ScrollingTreeStickyNodeCoordinated.h      |  5 +-
- .../coordinated/CoordinatedPlatformLayer.cpp  | 45 ++++++++---
- .../coordinated/CoordinatedPlatformLayer.h    | 10 ++-
- 11 files changed, 195 insertions(+), 35 deletions(-)
+ .../page/scrolling/ScrollingTreeNode.h        |  4 +-
+ .../coordinated/ScrollingTreeCoordinated.cpp  | 19 ++++-
+ .../ScrollingTreeFixedNodeCoordinated.cpp     | 15 +++-
+ .../ScrollingTreeFixedNodeCoordinated.h       |  2 +
+ ...llingTreeFrameScrollingNodeCoordinated.cpp | 70 +++++++++++++++----
+ ...rollingTreeFrameScrollingNodeCoordinated.h |  2 +
+ ...ScrollingTreePositionedNodeCoordinated.cpp | 13 +++-
+ .../ScrollingTreePositionedNodeCoordinated.h  |  2 +
+ .../ScrollingTreeStickyNodeCoordinated.cpp    | 17 ++++-
+ .../ScrollingTreeStickyNodeCoordinated.h      |  4 +-
+ .../coordinated/CoordinatedPlatformLayer.cpp  | 49 ++++++++++---
+ .../coordinated/CoordinatedPlatformLayer.h    | 13 +++-
+ .../CoordinatedSceneState.h                   |  3 +
+ .../CoordinatedGraphics/LayerTreeHost.cpp     | 10 +++
+ .../CoordinatedGraphics/LayerTreeHost.h       |  2 +
+ .../LayerTreeHostPlayStation.cpp              | 10 +++
+ .../LayerTreeHostPlayStation.h                |  2 +
+ .../ThreadedCompositor.cpp                    |  1 +
+ 18 files changed, 200 insertions(+), 38 deletions(-)
 
+diff --git a/Source/WebCore/page/scrolling/ScrollingTreeNode.h b/Source/WebCore/page/scrolling/ScrollingTreeNode.h
+index f3bf986ea4e0..687257e4729e 100644
+--- a/Source/WebCore/page/scrolling/ScrollingTreeNode.h
++++ b/Source/WebCore/page/scrolling/ScrollingTreeNode.h
+@@ -77,7 +77,9 @@ public:
+     virtual bool commitStateBeforeChildren(const ScrollingStateNode&) = 0;
+     virtual bool commitStateAfterChildren(const ScrollingStateNode&) { return true; }
+     virtual void didCompleteCommitForNode() { }
+-    
++
++    virtual void commitLayerPositions() { }
++
+     virtual void willBeDestroyed() { }
+ 
+     RefPtr<ScrollingTreeNode> parent() const { return m_parent; }
 diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp
-index 7e70c79f43b4..305c565aeac4 100644
+index 7e70c79f43b4..b07b0e883beb 100644
 --- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp
 +++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeCoordinated.cpp
-@@ -79,6 +79,21 @@ Ref<ScrollingTreeNode> ScrollingTreeCoordinated::createScrollingTreeNode(Scrolli
+@@ -79,6 +79,14 @@ Ref<ScrollingTreeNode> ScrollingTreeCoordinated::createScrollingTreeNode(Scrolli
      RELEASE_ASSERT_NOT_REACHED();
  }
  
 +static void commitLayerPositionsRecursive(ScrollingTreeNode& node)
 +{
-+    if (node.isFixedNode())
-+        static_cast<ScrollingTreeFixedNodeCoordinated&>(node).commitLayerPositions();
-+    else if (node.isStickyNode())
-+        static_cast<ScrollingTreeStickyNodeCoordinated&>(node).commitLayerPositions();
-+    else if (node.isFrameScrollingNode())
-+        static_cast<ScrollingTreeFrameScrollingNodeCoordinated&>(node).commitLayerPositions();
-+    else if (node.isPositionedNode())
-+        static_cast<ScrollingTreePositionedNodeCoordinated&>(node).commitLayerPositions();
++    node.commitLayerPositions();
 +
 +    for (auto& child : node.children())
 +        commitLayerPositionsRecursive(child.get());
@@ -94,45 +133,43 @@ index 7e70c79f43b4..305c565aeac4 100644
  void ScrollingTreeCoordinated::applyLayerPositionsInternal()
  {
      auto* rootScrollingNode = rootNode();
-@@ -87,6 +102,8 @@ void ScrollingTreeCoordinated::applyLayerPositionsInternal()
+@@ -87,10 +95,15 @@ void ScrollingTreeCoordinated::applyLayerPositionsInternal()
  
      ThreadedScrollingTree::applyLayerPositionsInternal();
  
+-    if (ScrollingThread::isCurrentThread()) {
+-        auto rootContentsLayer = static_cast<ScrollingTreeFrameScrollingNodeCoordinated*>(rootScrollingNode)->rootContentsLayer();
++    auto rootContentsLayer = static_cast<ScrollingTreeFrameScrollingNodeCoordinated*>(rootScrollingNode)->rootContentsLayer();
++    if (rootContentsLayer)
++        rootContentsLayer->willCommitSceneState();
 +    commitLayerPositionsRecursive(*rootScrollingNode);
++    if (rootContentsLayer)
++        rootContentsLayer->didCommitSceneState();
 +
-     if (ScrollingThread::isCurrentThread()) {
-         auto rootContentsLayer = static_cast<ScrollingTreeFrameScrollingNodeCoordinated*>(rootScrollingNode)->rootContentsLayer();
++    if (ScrollingThread::isCurrentThread() && rootContentsLayer)
          rootContentsLayer->requestComposition(CompositionReason::AsyncScrolling);
+-    }
+ }
+ 
+ void ScrollingTreeCoordinated::didCompleteRenderingUpdate()
 diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp
-index d938d114c89e..10253e5b7e38 100644
+index d938d114c89e..23eb6bd29627 100644
 --- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp
 +++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.cpp
-@@ -50,14 +50,23 @@ ScrollingTreeFixedNodeCoordinated::ScrollingTreeFixedNodeCoordinated(ScrollingTr
- 
- ScrollingTreeFixedNodeCoordinated::~ScrollingTreeFixedNodeCoordinated() = default;
- 
-+void ScrollingTreeFixedNodeCoordinated::willBeDestroyed()
-+{
-+    if (m_layer)
-+        m_layer->resetPositionFromScrollingTree();
-+}
-+
- bool ScrollingTreeFixedNodeCoordinated::commitStateBeforeChildren(const ScrollingStateNode& stateNode)
- {
-     if (!is<ScrollingStateFixedNode>(stateNode))
+@@ -56,8 +56,11 @@ bool ScrollingTreeFixedNodeCoordinated::commitStateBeforeChildren(const Scrollin
          return false;
  
      auto& fixedStateNode = downcast<ScrollingStateFixedNode>(stateNode);
 -    if (fixedStateNode.hasChangedProperty(ScrollingStateNode::Property::Layer))
 +    if (fixedStateNode.hasChangedProperty(ScrollingStateNode::Property::Layer)) {
 +        if (m_layer)
-+            m_layer->resetPositionFromScrollingTree();
++            m_layer->resetPendingPositionFromScrollingTree();
          m_layer = static_cast<CoordinatedPlatformLayer*>(fixedStateNode.layer());
 +    }
  
      return ScrollingTreeFixedNode::commitStateBeforeChildren(stateNode);
  }
-@@ -72,7 +81,13 @@ void ScrollingTreeFixedNodeCoordinated::applyLayerPositions()
+@@ -72,7 +75,13 @@ void ScrollingTreeFixedNodeCoordinated::applyLayerPositions()
      CoordinatedPlatformLayer::ForcePositionSync forceSync = ScrollingThread::isCurrentThread() && !scrollingTree()->isScrollingSynchronizedWithMainThread() ?
          CoordinatedPlatformLayer::ForcePositionSync::Yes : CoordinatedPlatformLayer::ForcePositionSync::No;
  
@@ -143,11 +180,11 @@ index d938d114c89e..10253e5b7e38 100644
 +void ScrollingTreeFixedNodeCoordinated::commitLayerPositions()
 +{
 +    if (m_layer)
-+        m_layer->commitPosition();
++        m_layer->commitPositionFromScrollingTree();
  }
  
  void ScrollingTreeFixedNodeCoordinated::dumpProperties(TextStream& ts, OptionSet<ScrollingStateTreeAsTextBehavior> behavior) const
-@@ -80,7 +95,7 @@ void ScrollingTreeFixedNodeCoordinated::dumpProperties(TextStream& ts, OptionSet
+@@ -80,7 +89,7 @@ void ScrollingTreeFixedNodeCoordinated::dumpProperties(TextStream& ts, OptionSet
      ScrollingTreeFixedNode::dumpProperties(ts, behavior);
  
      if (behavior & ScrollingStateTreeAsTextBehavior::IncludeLayerPositions) {
@@ -157,78 +194,60 @@ index d938d114c89e..10253e5b7e38 100644
      }
  }
 diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h
-index c3f3f99bbb7e..d01f491a63e4 100644
+index c3f3f99bbb7e..5dea6f0700a9 100644
 --- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h
 +++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFixedNodeCoordinated.h
-@@ -40,12 +40,15 @@ public:
+@@ -40,6 +40,8 @@ public:
      static Ref<ScrollingTreeFixedNodeCoordinated> create(ScrollingTree&, ScrollingNodeID);
      virtual ~ScrollingTreeFixedNodeCoordinated();
  
-+    void commitLayerPositions();
++    void commitLayerPositions() override;
 +
  private:
      ScrollingTreeFixedNodeCoordinated(ScrollingTree&, ScrollingNodeID);
  
-     CoordinatedPlatformLayer* layer() const override { return m_layer.get(); }
- 
-     bool commitStateBeforeChildren(const ScrollingStateNode&) override;
-+    void willBeDestroyed() override;
-     void applyLayerPositions() override WTF_REQUIRES_LOCK(scrollingTree()->treeLock());
- 
-     void dumpProperties(WTF::TextStream&, OptionSet<ScrollingStateTreeAsTextBehavior>) const override;
 diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp
-index cec3460e41c8..e84c658f5c52 100644
+index 8b2cc1efb9c5..038d0cd8e8c2 100644
 --- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp
 +++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.cpp
 @@ -40,6 +40,18 @@
  
  namespace WebCore {
  
-+static void resetPositionFromScrollingTree(CoordinatedPlatformLayer* layer)
++static void resetPendingPositionFromScrollingTree(CoordinatedPlatformLayer* layer)
 +{
 +    if (layer)
-+        layer->resetPositionFromScrollingTree();
++        layer->resetPendingPositionFromScrollingTree();
 +}
 +
-+static void commitPosition(CoordinatedPlatformLayer* layer)
++static void commitPositionFromScrollingTree(CoordinatedPlatformLayer* layer)
 +{
 +    if (layer)
-+        layer->commitPosition();
++        layer->commitPositionFromScrollingTree();
 +}
 +
  Ref<ScrollingTreeFrameScrollingNode> ScrollingTreeFrameScrollingNodeCoordinated::create(ScrollingTree& scrollingTree, ScrollingNodeType nodeType, ScrollingNodeID nodeID)
  {
      return adoptRef(*new ScrollingTreeFrameScrollingNodeCoordinated(scrollingTree, nodeType, nodeID));
-@@ -53,6 +65,28 @@ ScrollingTreeFrameScrollingNodeCoordinated::ScrollingTreeFrameScrollingNodeCoord
+@@ -53,6 +65,17 @@ ScrollingTreeFrameScrollingNodeCoordinated::ScrollingTreeFrameScrollingNodeCoord
  
  ScrollingTreeFrameScrollingNodeCoordinated::~ScrollingTreeFrameScrollingNodeCoordinated() = default;
  
-+void ScrollingTreeFrameScrollingNodeCoordinated::willBeDestroyed()
-+{
-+    resetPositionFromScrollingTree(static_cast<CoordinatedPlatformLayer*>(scrolledContentsLayer()));
-+    resetPositionFromScrollingTree(m_counterScrollingLayer.get());
-+    resetPositionFromScrollingTree(m_insetClipLayer.get());
-+    resetPositionFromScrollingTree(m_rootContentsLayer.get());
-+    resetPositionFromScrollingTree(m_contentShadowLayer.get());
-+    resetPositionFromScrollingTree(m_headerLayer.get());
-+    resetPositionFromScrollingTree(m_footerLayer.get());
-+}
-+
 +void ScrollingTreeFrameScrollingNodeCoordinated::commitLayerPositions()
 +{
-+    commitPosition(static_cast<CoordinatedPlatformLayer*>(scrolledContentsLayer()));
-+    commitPosition(m_counterScrollingLayer.get());
-+    commitPosition(m_insetClipLayer.get());
-+    commitPosition(m_rootContentsLayer.get());
-+    commitPosition(m_contentShadowLayer.get());
-+    commitPosition(m_headerLayer.get());
-+    commitPosition(m_footerLayer.get());
++    commitPositionFromScrollingTree(static_cast<CoordinatedPlatformLayer*>(scrolledContentsLayer()));
++    commitPositionFromScrollingTree(m_counterScrollingLayer.get());
++    commitPositionFromScrollingTree(m_insetClipLayer.get());
++    commitPositionFromScrollingTree(m_rootContentsLayer.get());
++    commitPositionFromScrollingTree(m_contentShadowLayer.get());
++    commitPositionFromScrollingTree(m_headerLayer.get());
++    commitPositionFromScrollingTree(m_footerLayer.get());
 +}
 +
  ScrollingTreeScrollingNodeDelegateCoordinated& ScrollingTreeFrameScrollingNodeCoordinated::delegate() const
  {
      return *static_cast<ScrollingTreeScrollingNodeDelegateCoordinated*>(m_delegate.get());
-@@ -60,26 +94,47 @@ ScrollingTreeScrollingNodeDelegateCoordinated& ScrollingTreeFrameScrollingNodeCo
+@@ -60,26 +83,47 @@ ScrollingTreeScrollingNodeDelegateCoordinated& ScrollingTreeFrameScrollingNodeCo
  
  bool ScrollingTreeFrameScrollingNodeCoordinated::commitStateBeforeChildren(const ScrollingStateNode& stateNode)
  {
@@ -242,7 +261,7 @@ index cec3460e41c8..e84c658f5c52 100644
          return false;
  
 +    if (previousScrolledContentsLayer)
-+        previousScrolledContentsLayer->resetPositionFromScrollingTree();
++        previousScrolledContentsLayer->resetPendingPositionFromScrollingTree();
 +
      if (!is<ScrollingStateFrameScrollingNode>(stateNode))
          return false;
@@ -251,38 +270,38 @@ index cec3460e41c8..e84c658f5c52 100644
  
 -    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::RootContentsLayer))
 +    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::RootContentsLayer)) {
-+        resetPositionFromScrollingTree(m_rootContentsLayer.get());
++        resetPendingPositionFromScrollingTree(m_rootContentsLayer.get());
          m_rootContentsLayer = static_cast<CoordinatedPlatformLayer*>(scrollingStateNode.rootContentsLayer());
 -    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::CounterScrollingLayer))
 +    }
 +    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::CounterScrollingLayer)) {
-+        resetPositionFromScrollingTree(m_counterScrollingLayer.get());
++        resetPendingPositionFromScrollingTree(m_counterScrollingLayer.get());
          m_counterScrollingLayer = static_cast<CoordinatedPlatformLayer*>(scrollingStateNode.counterScrollingLayer());
 -    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::InsetClipLayer))
 +    }
 +    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::InsetClipLayer)) {
-+        resetPositionFromScrollingTree(m_insetClipLayer.get());
++        resetPendingPositionFromScrollingTree(m_insetClipLayer.get());
          m_insetClipLayer = static_cast<CoordinatedPlatformLayer*>(scrollingStateNode.insetClipLayer());
 -    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::ContentShadowLayer))
 +    }
 +    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::ContentShadowLayer)) {
-+        resetPositionFromScrollingTree(m_contentShadowLayer.get());
++        resetPendingPositionFromScrollingTree(m_contentShadowLayer.get());
          m_contentShadowLayer = static_cast<CoordinatedPlatformLayer*>(scrollingStateNode.contentShadowLayer());
 -    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::HeaderLayer))
 +    }
 +    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::HeaderLayer)) {
-+        resetPositionFromScrollingTree(m_headerLayer.get());
++        resetPendingPositionFromScrollingTree(m_headerLayer.get());
          m_headerLayer = static_cast<CoordinatedPlatformLayer*>(scrollingStateNode.headerLayer());
 -    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::FooterLayer))
 +    }
 +    if (scrollingStateNode.hasChangedProperty(ScrollingStateNode::Property::FooterLayer)) {
-+        resetPositionFromScrollingTree(m_footerLayer.get());
++        resetPendingPositionFromScrollingTree(m_footerLayer.get());
          m_footerLayer = static_cast<CoordinatedPlatformLayer*>(scrollingStateNode.footerLayer());
 +    }
  
      m_delegate->updateFromStateNode(scrollingStateNode);
      return true;
-@@ -116,7 +171,7 @@ void ScrollingTreeFrameScrollingNodeCoordinated::repositionScrollingLayers()
+@@ -116,7 +160,7 @@ void ScrollingTreeFrameScrollingNodeCoordinated::repositionScrollingLayers()
          CoordinatedPlatformLayer::ForcePositionSync::Yes : CoordinatedPlatformLayer::ForcePositionSync::No;
  
      auto scrollPosition = currentScrollPosition();
@@ -291,7 +310,7 @@ index cec3460e41c8..e84c658f5c52 100644
  }
  
  void ScrollingTreeFrameScrollingNodeCoordinated::repositionRelatedLayers()
-@@ -125,7 +180,7 @@ void ScrollingTreeFrameScrollingNodeCoordinated::repositionRelatedLayers()
+@@ -125,7 +169,7 @@ void ScrollingTreeFrameScrollingNodeCoordinated::repositionRelatedLayers()
      auto layoutViewport = this->layoutViewport();
  
      if (m_counterScrollingLayer)
@@ -300,9 +319,9 @@ index cec3460e41c8..e84c658f5c52 100644
  
      auto contentInsets = obscuredContentInsets();
      if (m_insetClipLayer && m_rootContentsLayer) {
-@@ -134,11 +189,11 @@ void ScrollingTreeFrameScrollingNodeCoordinated::repositionRelatedLayers()
+@@ -134,11 +178,11 @@ void ScrollingTreeFrameScrollingNodeCoordinated::repositionRelatedLayers()
              Locker locker { m_insetClipLayer->lock() };
-             insetClipPosition = LocalFrameView::insetClipLayerRect(scrollPosition, contentInsets, sizeForVisibleContent()).location();
+             insetClipPosition = LocalFrameView::insetClipLayerRect(scrollPosition, totalContentsSize(), contentInsets, sizeForVisibleContent()).location();
          }
 -        m_insetClipLayer->setPositionForScrolling(insetClipPosition);
 +        m_insetClipLayer->setPositionFromScrollingTree(insetClipPosition);
@@ -315,7 +334,7 @@ index cec3460e41c8..e84c658f5c52 100644
      }
  
      if (m_headerLayer || m_footerLayer) {
-@@ -147,9 +202,9 @@ void ScrollingTreeFrameScrollingNodeCoordinated::repositionRelatedLayers()
+@@ -147,9 +191,9 @@ void ScrollingTreeFrameScrollingNodeCoordinated::repositionRelatedLayers()
          // then we should recompute layoutViewport.x() for the banner with a scale factor of 1.
          float horizontalScrollOffsetForBanner = layoutViewport.x();
          if (m_headerLayer)
@@ -328,51 +347,36 @@ index cec3460e41c8..e84c658f5c52 100644
  
      delegate().updateVisibleLengths();
 diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h
-index 774f932f962d..51dcdb385783 100644
+index 774f932f962d..a338eeea687f 100644
 --- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h
 +++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeFrameScrollingNodeCoordinated.h
-@@ -43,12 +43,15 @@ public:
+@@ -43,6 +43,8 @@ public:
  
      RefPtr<CoordinatedPlatformLayer> rootContentsLayer() const { return m_rootContentsLayer; }
  
-+    void commitLayerPositions();
++    void commitLayerPositions() override;
 +
  private:
      ScrollingTreeFrameScrollingNodeCoordinated(ScrollingTree&, ScrollingNodeType, ScrollingNodeID);
  
-     ScrollingTreeScrollingNodeDelegateCoordinated& delegate() const;
- 
-     bool commitStateBeforeChildren(const ScrollingStateNode&) override;
-+    void willBeDestroyed() override;
- 
-     WheelEventHandlingResult handleWheelEvent(const PlatformWheelEvent&, EventTargeting) override;
-     void currentScrollPositionChanged(ScrollType, ScrollingLayerPositionAction) override;
 diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.cpp
-index 18a817d111ab..bc15ef3ac564 100644
+index 18a817d111ab..2e6764a1a3ec 100644
 --- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.cpp
 +++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.cpp
-@@ -50,10 +50,19 @@ ScrollingTreePositionedNodeCoordinated::ScrollingTreePositionedNodeCoordinated(S
+@@ -52,8 +52,11 @@ ScrollingTreePositionedNodeCoordinated::~ScrollingTreePositionedNodeCoordinated(
  
- ScrollingTreePositionedNodeCoordinated::~ScrollingTreePositionedNodeCoordinated() = default;
- 
-+void ScrollingTreePositionedNodeCoordinated::willBeDestroyed()
-+{
-+    if (m_layer)
-+        m_layer->resetPositionFromScrollingTree();
-+}
-+
  bool ScrollingTreePositionedNodeCoordinated::commitStateBeforeChildren(const ScrollingStateNode& stateNode)
  {
 -    if (stateNode.hasChangedProperty(ScrollingStateNode::Property::Layer))
 +    if (stateNode.hasChangedProperty(ScrollingStateNode::Property::Layer)) {
 +        if (m_layer)
-+            m_layer->resetPositionFromScrollingTree();
++            m_layer->resetPendingPositionFromScrollingTree();
          m_layer = static_cast<CoordinatedPlatformLayer*>(stateNode.layer());
 +    }
  
      return ScrollingTreePositionedNode::commitStateBeforeChildren(stateNode);
  }
-@@ -69,7 +78,13 @@ void ScrollingTreePositionedNodeCoordinated::applyLayerPositions()
+@@ -69,7 +72,13 @@ void ScrollingTreePositionedNodeCoordinated::applyLayerPositions()
      CoordinatedPlatformLayer::ForcePositionSync forceSync = ScrollingThread::isCurrentThread() && !scrollingTree()->isScrollingSynchronizedWithMainThread() ?
          CoordinatedPlatformLayer::ForcePositionSync::Yes : CoordinatedPlatformLayer::ForcePositionSync::No;
  
@@ -383,56 +387,45 @@ index 18a817d111ab..bc15ef3ac564 100644
 +void ScrollingTreePositionedNodeCoordinated::commitLayerPositions()
 +{
 +    if (m_layer)
-+        m_layer->commitPosition();
++        m_layer->commitPositionFromScrollingTree();
  }
  
  } // namespace WebCore
 diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.h b/Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.h
-index f13e6eb3c588..8bfe484ead15 100644
+index f13e6eb3c588..dba504f51294 100644
 --- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.h
 +++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreePositionedNodeCoordinated.h
-@@ -41,10 +41,13 @@ public:
+@@ -41,6 +41,8 @@ public:
  
      CoordinatedPlatformLayer* layer() const override { return m_layer.get(); }
  
-+    void commitLayerPositions();
++    void commitLayerPositions() override;
 +
  private:
      ScrollingTreePositionedNodeCoordinated(ScrollingTree&, ScrollingNodeID);
  
-     bool commitStateBeforeChildren(const ScrollingStateNode&) override;
-+    void willBeDestroyed() override;
-     void applyLayerPositions() override;
- 
-     RefPtr<CoordinatedPlatformLayer> m_layer;
 diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp
-index e3e63f535170..ef063e6b96e7 100644
+index e3e63f535170..d2eb67592f98 100644
 --- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp
 +++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.cpp
-@@ -52,10 +52,21 @@ ScrollingTreeStickyNodeCoordinated::ScrollingTreeStickyNodeCoordinated(Scrolling
+@@ -52,10 +52,15 @@ ScrollingTreeStickyNodeCoordinated::ScrollingTreeStickyNodeCoordinated(Scrolling
  {
  }
  
 +ScrollingTreeStickyNodeCoordinated::~ScrollingTreeStickyNodeCoordinated() = default;
-+
-+void ScrollingTreeStickyNodeCoordinated::willBeDestroyed()
-+{
-+    if (m_layer)
-+        m_layer->resetPositionFromScrollingTree();
-+}
 +
  bool ScrollingTreeStickyNodeCoordinated::commitStateBeforeChildren(const ScrollingStateNode& stateNode)
  {
 -    if (stateNode.hasChangedProperty(ScrollingStateNode::Property::Layer))
 +    if (stateNode.hasChangedProperty(ScrollingStateNode::Property::Layer)) {
 +        if (m_layer)
-+            m_layer->resetPositionFromScrollingTree();
++            m_layer->resetPendingPositionFromScrollingTree();
          m_layer = static_cast<CoordinatedPlatformLayer*>(stateNode.layer());
 +    }
  
      return ScrollingTreeStickyNode::commitStateBeforeChildren(stateNode);
  }
-@@ -70,12 +81,18 @@ void ScrollingTreeStickyNodeCoordinated::applyLayerPositions()
+@@ -70,12 +75,18 @@ void ScrollingTreeStickyNodeCoordinated::applyLayerPositions()
      CoordinatedPlatformLayer::ForcePositionSync forceSync = ScrollingThread::isCurrentThread() && !scrollingTree()->isScrollingSynchronizedWithMainThread() ?
          CoordinatedPlatformLayer::ForcePositionSync::Yes : CoordinatedPlatformLayer::ForcePositionSync::No;
  
@@ -443,7 +436,7 @@ index e3e63f535170..ef063e6b96e7 100644
 +void ScrollingTreeStickyNodeCoordinated::commitLayerPositions()
 +{
 +    if (m_layer)
-+        m_layer->commitPosition();
++        m_layer->commitPositionFromScrollingTree();
  }
  
  FloatPoint ScrollingTreeStickyNodeCoordinated::layerTopLeft() const
@@ -454,37 +447,34 @@ index e3e63f535170..ef063e6b96e7 100644
  
  } // namespace WebCore
 diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h
-index efa0267da7e6..e613ada238d6 100644
+index efa0267da7e6..d2fab3eca972 100644
 --- a/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h
 +++ b/Source/WebCore/page/scrolling/coordinated/ScrollingTreeStickyNodeCoordinated.h
-@@ -39,12 +39,15 @@ class CoordinatedPlatformLayer;
+@@ -39,7 +39,9 @@ class CoordinatedPlatformLayer;
  class ScrollingTreeStickyNodeCoordinated final : public ScrollingTreeStickyNode {
  public:
      static Ref<ScrollingTreeStickyNodeCoordinated> create(ScrollingTree&, ScrollingNodeID);
 -    virtual ~ScrollingTreeStickyNodeCoordinated() = default;
 +    virtual ~ScrollingTreeStickyNodeCoordinated();
 +
-+    void commitLayerPositions();
++    void commitLayerPositions() override;
  
  private:
      ScrollingTreeStickyNodeCoordinated(ScrollingTree&, ScrollingNodeID);
- 
-     bool commitStateBeforeChildren(const ScrollingStateNode&) override;
-+    void willBeDestroyed() override;
-     void applyLayerPositions() override;
-     FloatPoint layerTopLeft() const override;
-     CoordinatedPlatformLayer* layer() const override { return m_layer.get(); }
 diff --git a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp
-index e6bfe49c2329..8a403926a3e0 100644
+index 271f61212b9a..6294f433c267 100644
 --- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp
 +++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp
-@@ -180,17 +180,31 @@ void CoordinatedPlatformLayer::setPosition(FloatPoint&& position)
+@@ -176,6 +176,8 @@ void CoordinatedPlatformLayer::notifyCompositionRequired()
+ void CoordinatedPlatformLayer::setPosition(FloatPoint&& position)
+ {
+     ASSERT(m_lock.isHeld());
++    if (m_pendingPositionFromScrollingTree)
++        return;
+     if (m_position == position)
          return;
  
-     m_position = WTF::move(position);
-+    if (!m_scrollingTreePosition)
-+        m_committedPosition = m_position;
-     m_pendingChanges.add(Change::Position);
+@@ -184,15 +186,19 @@ void CoordinatedPlatformLayer::setPosition(FloatPoint&& position)
      notifyCompositionRequired();
  }
  
@@ -493,46 +483,40 @@ index e6bfe49c2329..8a403926a3e0 100644
  {
      Locker locker { m_lock };
 -    if (m_position == position && forceSync == ForcePositionSync::No)
-+    if (m_scrollingTreePosition == position && forceSync == ForcePositionSync::No)
++    if (m_pendingPositionFromScrollingTree == position && forceSync == ForcePositionSync::No)
          return;
  
 -    m_position = position;
-+    m_scrollingTreePosition = position;
+-    m_pendingChanges.add(Change::Position);
+-    notifyCompositionRequired();
++    m_pendingPositionFromScrollingTree = position;
++}
++
++void CoordinatedPlatformLayer::resetPendingPositionFromScrollingTree()
++{
++    Locker locker { m_lock };
++    m_pendingPositionFromScrollingTree = std::nullopt;
+ }
+ 
+ const FloatPoint& CoordinatedPlatformLayer::position() const
+@@ -201,20 +207,33 @@ const FloatPoint& CoordinatedPlatformLayer::position() const
+     return m_position;
+ }
+ 
+-void CoordinatedPlatformLayer::setTopLeftPositionForScrolling(const FloatPoint& position, ForcePositionSync forceSync)
++void CoordinatedPlatformLayer::commitPositionFromScrollingTree()
++{
++    Locker locker { m_lock };
++    if (!m_pendingPositionFromScrollingTree)
++        return;
++    if (m_position == *m_pendingPositionFromScrollingTree)
++        return;
++
++    m_position = *m_pendingPositionFromScrollingTree;
 +    m_pendingChanges.add(Change::Position);
 +    notifyCompositionRequired();
 +}
 +
-+void CoordinatedPlatformLayer::resetPositionFromScrollingTree()
-+{
-+    Locker locker { m_lock };
-+    if (!m_scrollingTreePosition)
-+        return;
-+
-+    m_scrollingTreePosition = std::nullopt;
-+    m_committedPosition = m_position;
-     m_pendingChanges.add(Change::Position);
-     notifyCompositionRequired();
- }
-@@ -198,23 +212,34 @@ void CoordinatedPlatformLayer::setPositionForScrolling(const FloatPoint& positio
- const FloatPoint& CoordinatedPlatformLayer::position() const
- {
-     ASSERT(m_lock.isHeld());
--    return m_position;
-+    return m_scrollingTreePosition ? *m_scrollingTreePosition : m_position;
-+}
-+
-+void CoordinatedPlatformLayer::commitPosition()
-+{
-+    Locker locker { m_lock };
-+    if (!m_scrollingTreePosition)
-+        return;
-+    if (m_committedPosition == *m_scrollingTreePosition)
-+        return;
-+    m_committedPosition = *m_scrollingTreePosition;
-+    m_pendingChanges.add(Change::Position);
- }
- 
--void CoordinatedPlatformLayer::setTopLeftPositionForScrolling(const FloatPoint& position, ForcePositionSync forceSync)
 +void CoordinatedPlatformLayer::setTopLeftPositionFromScrollingTree(const FloatPoint& position, ForcePositionSync forceSync)
  {
      FloatPoint newPosition;
@@ -553,53 +537,165 @@ index e6bfe49c2329..8a403926a3e0 100644
  }
  
  void CoordinatedPlatformLayer::setBoundsOrigin(const FloatPoint& origin)
-@@ -996,7 +1021,7 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
- {
-     if (reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::AsyncScrolling })) {
-         if (m_pendingChanges.contains(Change::Position)) {
--            layer.setPosition(m_position);
-+            layer.setPosition(m_committedPosition);
-             m_pendingChanges.remove(Change::Position);
-         }
+@@ -902,6 +921,18 @@ void CoordinatedPlatformLayer::requestComposition(CompositionReason reason)
+         m_client->requestComposition(reason);
+ }
  
-@@ -1195,7 +1220,7 @@ void CoordinatedPlatformLayer::flushCompositingStateOnSkiaTarget(const OptionSet
++void CoordinatedPlatformLayer::willCommitSceneState()
++{
++    if (m_client)
++        m_client->willCommitSceneState();
++}
++
++void CoordinatedPlatformLayer::didCommitSceneState()
++{
++    if (m_client)
++        m_client->didCommitSceneState();
++}
++
+ RunLoop* CoordinatedPlatformLayer::compositingRunLoop() const
  {
-     if (reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::AsyncScrolling })) {
-         if (m_pendingChanges.contains(Change::Position)) {
--            layer.setPosition(m_position);
-+            layer.setPosition(m_committedPosition);
-             m_pendingChanges.remove(Change::Position);
-         }
- 
+     return m_client ? m_client->compositingRunLoop() : nullptr;
 diff --git a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h
-index a0ac9db93bcc..203867edebea 100644
+index a0ac9db93bcc..54f82afe7821 100644
 --- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h
 +++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h
-@@ -110,10 +110,12 @@ public:
+@@ -78,6 +78,8 @@ public:
+         virtual bool isCompositionRequiredOrOngoing() const = 0;
+         virtual void requestComposition(CompositionReason) = 0;
+         virtual RunLoop* compositingRunLoop() const = 0;
++        virtual void willCommitSceneState() = 0;
++        virtual void didCommitSceneState() = 0;
+         virtual int maxTextureSize() const = 0;
+         virtual void willPaintTile() = 0;
+         virtual void didPaintTile() = 0;
+@@ -110,10 +112,14 @@ public:
  
      void setPosition(FloatPoint&&);
      enum class ForcePositionSync : bool { No, Yes };
 -    void setPositionForScrolling(const FloatPoint&, ForcePositionSync = ForcePositionSync::No);
 +    void setPositionFromScrollingTree(const FloatPoint&, ForcePositionSync = ForcePositionSync::No);
-+    void resetPositionFromScrollingTree();
++    void resetPendingPositionFromScrollingTree();
      const FloatPoint& position() const;
 -    void setTopLeftPositionForScrolling(const FloatPoint&, ForcePositionSync = ForcePositionSync::No);
 -    FloatPoint topLeftPositionForScrolling();
-+    void commitPosition();
++    void commitPositionFromScrollingTree();
++    void willCommitSceneState();
++    void didCommitSceneState();
 +    void setTopLeftPositionFromScrollingTree(const FloatPoint&, ForcePositionSync = ForcePositionSync::No);
 +    FloatPoint topLeftPositionFromScrollingTree();
      void setBoundsOrigin(const FloatPoint&);
      void setBoundsOriginForScrolling(const FloatPoint&);
      const FloatPoint& boundsOrigin() const;
-@@ -287,6 +289,8 @@ private:
+@@ -287,6 +293,7 @@ private:
      Lock m_lock;
      EnumSet<Change> m_pendingChanges WTF_GUARDED_BY_LOCK(m_lock);
      FloatPoint m_position WTF_GUARDED_BY_LOCK(m_lock);
-+    std::optional<FloatPoint> m_scrollingTreePosition WTF_GUARDED_BY_LOCK(m_lock);
-+    FloatPoint m_committedPosition WTF_GUARDED_BY_LOCK(m_lock);
++    std::optional<FloatPoint> m_pendingPositionFromScrollingTree WTF_GUARDED_BY_LOCK(m_lock);
      FloatPoint3D m_anchorPoint WTF_GUARDED_BY_LOCK(m_lock) { 0.5f, 0.5f, 0 };
      FloatSize m_size WTF_GUARDED_BY_LOCK(m_lock);
      FloatPoint m_boundsOrigin WTF_GUARDED_BY_LOCK(m_lock);
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CoordinatedSceneState.h b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CoordinatedSceneState.h
+index 630f621b764f..e8fcc8b611f2 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CoordinatedSceneState.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CoordinatedSceneState.h
+@@ -48,6 +48,8 @@ public:
+ 
+     WebCore::CoordinatedPlatformLayer& rootLayer() const { return m_rootLayer.get(); }
+ 
++    Lock& stateLock() LIFETIME_BOUND { return m_stateLock; }
++
+     void setRootLayerChildren(Vector<Ref<WebCore::CoordinatedPlatformLayer>>&&);
+     void addLayer(WebCore::CoordinatedPlatformLayer&);
+     void removeLayer(WebCore::CoordinatedPlatformLayer&);
+@@ -74,6 +76,7 @@ private:
+     const Ref<WebCore::CoordinatedPlatformLayer> m_rootLayer;
+     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_layers;
+     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_layersToRemove;
++    Lock m_stateLock;
+     Lock m_pendingLayersLock;
+     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_pendingLayers WTF_GUARDED_BY_LOCK(m_pendingLayersLock);
+     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_pendingLayersToRemove WTF_GUARDED_BY_LOCK(m_pendingLayersLock);
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp
+index e85ee254b131..726bd657716e 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.cpp
+@@ -366,6 +366,16 @@ RunLoop* LayerTreeHost::compositingRunLoop() const
+     return m_compositor->runLoop();
+ }
+ 
++void LayerTreeHost::willCommitSceneState()
++{
++    m_sceneState->stateLock().lock();
++}
++
++void LayerTreeHost::didCommitSceneState()
++{
++    m_sceneState->stateLock().unlock();
++}
++
+ int LayerTreeHost::maxTextureSize() const
+ {
+     return m_compositor->maxTextureSize();
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.h b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.h
+index e56aa37b46d5..64b2a311027a 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHost.h
+@@ -96,6 +96,8 @@ private:
+     bool isCompositionRequiredOrOngoing() const override;
+     void requestComposition(WebCore::CompositionReason) override;
+     RunLoop* compositingRunLoop() const override;
++    void willCommitSceneState() override WTF_IGNORES_THREAD_SAFETY_ANALYSIS;
++    void didCommitSceneState() override WTF_IGNORES_THREAD_SAFETY_ANALYSIS;
+     int maxTextureSize() const override;
+     void willPaintTile() override;
+     void didPaintTile() override;
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.cpp
+index 0bc0fc5fbdf4..5eb5c01d2ec7 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.cpp
+@@ -423,6 +423,16 @@ RunLoop* LayerTreeHost::compositingRunLoop() const
+     return m_compositor->runLoop();
+ }
+ 
++void LayerTreeHost::willCommitSceneState()
++{
++    m_sceneState->stateLock().lock();
++}
++
++void LayerTreeHost::didCommitSceneState()
++{
++    m_sceneState->stateLock().unlock();
++}
++
+ int LayerTreeHost::maxTextureSize() const
+ {
+     return m_compositor->maxTextureSize();
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.h b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.h
+index e77a0ffb5d39..d0327f5bb33b 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/LayerTreeHostPlayStation.h
+@@ -153,6 +153,8 @@ private:
+     bool isCompositionRequiredOrOngoing() const override;
+     void requestComposition(WebCore::CompositionReason) override;
+     RunLoop* compositingRunLoop() const override;
++    void willCommitSceneState() override WTF_IGNORES_THREAD_SAFETY_ANALYSIS;
++    void didCommitSceneState() override WTF_IGNORES_THREAD_SAFETY_ANALYSIS;
+     int maxTextureSize() const override;
+     void willPaintTile() override { };
+     void didPaintTile() override { };
+diff --git a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
+index 1b0d2d6ef20b..322bf0984148 100644
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
+@@ -293,6 +293,7 @@ void ThreadedCompositor::flushCompositingState(const OptionSet<CompositionReason
+     }
+ #endif
+ 
++    Locker locker { m_sceneState->stateLock() };
+     m_sceneState->rootLayer().flushCompositingState(reasons, m_useSkia);
+     for (auto& layer : m_sceneState->committedLayers())
+         layer->flushCompositingState(reasons, m_useSkia);
 -- 
 2.43.0
 
