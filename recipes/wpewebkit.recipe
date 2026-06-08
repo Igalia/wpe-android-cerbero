@@ -7,7 +7,7 @@ class Recipe(recipe.Recipe):
     remotes = {'origin' : 'https://github.com/WebKit/WebKit.git'}
     partial_clone = True
     version = 'git' #use just 'git' for individual commits or the version string for release tags
-    commit = 'b1cd52d'
+    commit = 'f72dd03'
 
     wpewebkit_commit = os.environ.get('WPEWEBKIT_COMMIT')
     if wpewebkit_commit:
@@ -78,6 +78,7 @@ class Recipe(recipe.Recipe):
 
     patches = [
         'wpewebkit/0001-GTK-WPE-Main-and-scrolling-threads-race-writing-Coor.patch',
+        'wpewebkit/0002-WPE-Decouple-touch-driven-scrolling-unconditionally.patch',
     ]
 
     files_libs = [
