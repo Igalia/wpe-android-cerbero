@@ -7,7 +7,7 @@ class Recipe(recipe.Recipe):
     remotes = {'origin' : 'https://github.com/WebKit/WebKit.git'}
     partial_clone = True
     version = 'git' #use just 'git' for individual commits or the version string for release tags
-    commit = '5a62df1'
+    commit = 'fbd28f9'
 
     wpewebkit_commit = os.environ.get('WPEWEBKIT_COMMIT')
     if wpewebkit_commit:
@@ -43,6 +43,13 @@ class Recipe(recipe.Recipe):
     # Bindings" and "specialized prefix headers in WebCore and
     # WebKit"). On the Android NDK r27 cross-build, we need to work in
     # proper fix for this.
+    #
+    # ENABLE_SWIFT_DEMO_URI_SCHEME / ENABLE_BACK_FORWARD_LIST_SWIFT: WebKit
+    # auto-enables these Swift prototype features for GTK/WPE whenever it
+    # detects Clang + Swift >= 6.3. The Android cross-build picks up the host
+    # swiftc and then fails to compile the Swift sources (no Dispatch/std module
+    # for the aarch64-linux-android target). Keep them off, as upstream's own
+    # configure error recommends.
     configure_options = '\
         -DPORT=WPE \
         -DUSE_GSTREAMER_GL=ON \
@@ -71,14 +78,15 @@ class Recipe(recipe.Recipe):
         -DENABLE_WPE_PLATFORM_DRM=OFF \
         -DENABLE_WPE_PLATFORM_WAYLAND=OFF \
         -DENABLE_WPE_PLATFORM_HEADLESS=ON \
+        -DENABLE_SWIFT_DEMO_URI_SCHEME=OFF \
+        -DENABLE_BACK_FORWARD_LIST_SWIFT=OFF \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
     '
     cmake_generator = 'ninja'
 
     patches = [
-        'wpewebkit/0001-GTK-WPE-Main-and-scrolling-threads-race-writing-Coor.patch',
-        'wpewebkit/0002-WPE-Decouple-touch-driven-scrolling-unconditionally.patch',
+        'wpewebkit/0001-WPE-Decouple-touch-driven-scrolling-unconditionally.patch',
     ]
 
     files_libs = [
