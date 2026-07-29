@@ -1,0 +1,56 @@
+From ed9fc67803dd3c0cb3ffb1c27c980b85391a8e7f Mon Sep 17 00:00:00 2001
+From: "Alejandro G. Castro" <alex@igalia.com>
+Date: Wed, 29 Jul 2026 19:41:14 +0200
+Subject: [PATCH] [Android] Keep order-based main-thread uid for the auxiliary
+ process model
+
+319887@main (0fb4ad718e, "[Linux] Detect if current thread is the main
+thread and ensure id is always 1") reserves ThreadLike uid 1 for the
+thread where getpid() == gettid() (the OS main thread) on OS(LINUX).
+
+On Android, WPE runs each auxiliary process's WebKit main() on a
+secondary thread (the embedder's service thread), not the OS main
+thread. That thread is then registered as WebKit's main thread, so
+initializeMainThread()'s RELEASE_ASSERT(!isMainThread() || uid == 1)
+fails and NetworkProcess/WebProcess abort at startup.
+
+This is only a revert: exclude OS(ANDROID) from the getpid()==gettid()
+detection, effectively reverting to the pre-319887 behaviour on Android.
+---
+ Source/WTF/wtf/Threading.cpp            | 4 +++-
+ Source/WTF/wtf/posix/ThreadingPOSIX.cpp | 2 +-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WTF/wtf/Threading.cpp b/Source/WTF/wtf/Threading.cpp
+index 7249ada7d7..4e95234de5 100644
+--- a/Source/WTF/wtf/Threading.cpp
++++ b/Source/WTF/wtf/Threading.cpp
+@@ -133,9 +133,11 @@ static std::optional<size_t> NODELETE stackSize(ThreadType threadType)
+ #endif
+ }
+ 
+-#if PLATFORM(COCOA) || OS(LINUX)
++#if PLATFORM(COCOA) || (OS(LINUX) && !OS(ANDROID))
+ // uid 1 is reserved for the main thread, assigned in Thread::initializeCurrentTLS
+ // when current thread is detected as main thread. ++s_uid yields >= 2 for every non-main thread.
++// Android runs each auxiliary process's WebKit main() on a secondary (non-OS-main) thread, so the
++// OS-identity main-thread detection below does not apply; fall back to lazy-construction order.
+ std::atomic<uint32_t> ThreadLike::s_uid { 1 };
+ #else
+ // On platforms without a way to detect the main thread before initializeMainThread()
+diff --git a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+index dce695be18..beee5a3517 100644
+--- a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
++++ b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+@@ -454,7 +454,7 @@ Thread& Thread::initializeCurrentTLS()
+     WTF::initialize();
+ #if PLATFORM(COCOA)
+     Ref thread = adoptRef(*new Thread(SchedulingPolicy::Other, pthread_main_np() ? IsMain::Yes : IsMain::No));
+-#elif OS(LINUX)
++#elif OS(LINUX) && !OS(ANDROID)
+     Ref thread = adoptRef(*new Thread(SchedulingPolicy::Other, getpid() == static_cast<pid_t>(syscall(SYS_gettid)) ? IsMain::Yes : IsMain::No));
+ #else
+     Ref thread = adoptRef(*new Thread(SchedulingPolicy::Other));
+-- 
+2.43.0
+
