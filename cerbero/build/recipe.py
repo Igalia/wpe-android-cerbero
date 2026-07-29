@@ -166,7 +166,7 @@ class BuildSteps(object):
     @classmethod
     def all_names(cls):
         members = inspect.getmembers(cls, lambda x: isinstance(x, tuple))
-        return tuple(e[1][1] for e in members)
+        return tuple(e[1][1] for e in members if not e[0].startswith('__'))
 
 
 class Recipe(FilesProvider, metaclass=MetaRecipe):
