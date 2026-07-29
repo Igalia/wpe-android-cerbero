@@ -7,7 +7,7 @@ class Recipe(recipe.Recipe):
     remotes = {'origin' : 'https://github.com/WebKit/WebKit.git'}
     partial_clone = True
     version = 'git' #use just 'git' for individual commits or the version string for release tags
-    commit = 'e9ba1c2'
+    commit = '028fba0'
 
     wpewebkit_commit = os.environ.get('WPEWEBKIT_COMMIT')
     if wpewebkit_commit:
@@ -31,7 +31,6 @@ class Recipe(recipe.Recipe):
         'libtasn1',
         'libxslt',
         'libwebp',
-        'libwpe',
         'openjpeg',
         'openxr',
     ]
@@ -68,6 +67,7 @@ class Recipe(recipe.Recipe):
         -DUSE_SYSPROF_CAPTURE=OFF \
         -DENABLE_WEBDRIVER=ON \
         -DENABLE_WPE_PLATFORM=ON \
+        -DENABLE_WPE_LEGACY_API=OFF \
         -DENABLE_WPE_PLATFORM_DRM=OFF \
         -DENABLE_WPE_PLATFORM_WAYLAND=OFF \
         -DENABLE_WPE_PLATFORM_HEADLESS=ON \
@@ -80,6 +80,7 @@ class Recipe(recipe.Recipe):
 
     patches = [
         'wpewebkit/0001-WPE-Decouple-touch-driven-scrolling-unconditionally.patch',
+        'wpewebkit/0002-Android-Keep-order-based-main-thread-uid-for-the-au.patch',
     ]
 
     files_libs = [
