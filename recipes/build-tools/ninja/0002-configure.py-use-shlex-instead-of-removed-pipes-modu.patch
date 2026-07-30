@@ -1,0 +1,34 @@
+From 48f525e22a65f7608084aab99a3b27be14ad0a16 Mon Sep 17 00:00:00 2001
+From: "Alejandro G. Castro" <alex@igalia.com>
+Date: Thu, 30 Jul 2026 12:36:43 +0200
+Subject: [PATCH] configure.py: use shlex instead of removed pipes module
+
+---
+ configure.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/configure.py b/configure.py
+index f5e5e3b..56f31fb 100755
+--- a/configure.py
++++ b/configure.py
+@@ -23,7 +23,7 @@ from __future__ import print_function
+ 
+ from optparse import OptionParser
+ import os
+-import pipes
++import shlex
+ import string
+ import subprocess
+ import sys
+@@ -268,7 +268,7 @@ n.variable('configure_args', ' '.join(configure_args))
+ env_keys = set(['CXX', 'AR', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS'])
+ configure_env = dict((k, os.environ[k]) for k in os.environ if k in env_keys)
+ if configure_env:
+-    config_str = ' '.join([k + '=' + pipes.quote(configure_env[k])
++    config_str = ' '.join([k + '=' + shlex.quote(configure_env[k])
+                            for k in configure_env])
+     n.variable('configure_env', config_str + '$ ')
+ n.newline()
+-- 
+2.43.0
+
