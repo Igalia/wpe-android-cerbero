@@ -46,7 +46,6 @@ class Package(package.Package):
         'libsoup:libs',
         'libtasn1:libs',
         'libwebp:libs',
-        'libwpe:libs',
         'libxml2:libs',
         'libxslt:libs',
         'nghttp2:libs',
@@ -67,7 +66,6 @@ class Package(package.Package):
     platform_files = {
         Platform.ANDROID: [
             'vulkan-android:libs',
-            'wpeandroid:libs:stl',
-            'wpebackend-android:libs'
+            'wpeandroid:libs:stl'
         ]
     }
