@@ -115,6 +115,7 @@ class Recipe(recipe.Recipe):
         glib_compile_resources_path = \
             path.join(self.config.build_tools_prefix, 'bin', 'glib-compile-resources')
         self.configure_options += f' \
+            -DOpenXR_DIR={self.config.prefix}/lib/cmake/openxr \
             -DICU_ROOT={self.config.prefix} \
             -DZLIB_ROOT={self.config.prefix} \
             -DFREETYPE_LIBRARY={self.config.prefix}/lib/libfreetype.so \
