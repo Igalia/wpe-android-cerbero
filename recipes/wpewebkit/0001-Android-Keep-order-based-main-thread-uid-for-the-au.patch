@@ -1,4 +1,4 @@
-From ed9fc67803dd3c0cb3ffb1c27c980b85391a8e7f Mon Sep 17 00:00:00 2001
+From 3cef947f84d77a2fecdfa427774c80f64f913a7f Mon Sep 17 00:00:00 2001
 From: "Alejandro G. Castro" <alex@igalia.com>
 Date: Wed, 29 Jul 2026 19:41:14 +0200
 Subject: [PATCH] [Android] Keep order-based main-thread uid for the auxiliary
@@ -22,10 +22,10 @@ detection, effectively reverting to the pre-319887 behaviour on Android.
  2 files changed, 4 insertions(+), 2 deletions(-)
 
 diff --git a/Source/WTF/wtf/Threading.cpp b/Source/WTF/wtf/Threading.cpp
-index 7249ada7d7..4e95234de5 100644
+index b57998417fe3..953fc432d42e 100644
 --- a/Source/WTF/wtf/Threading.cpp
 +++ b/Source/WTF/wtf/Threading.cpp
-@@ -133,9 +133,11 @@ static std::optional<size_t> NODELETE stackSize(ThreadType threadType)
+@@ -129,9 +129,11 @@ static std::optional<size_t> NODELETE stackSize(ThreadType threadType)
  #endif
  }
  
@@ -39,18 +39,18 @@ index 7249ada7d7..4e95234de5 100644
  #else
  // On platforms without a way to detect the main thread before initializeMainThread()
 diff --git a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
-index dce695be18..beee5a3517 100644
+index 0c0330cef05d..f77220e771d9 100644
 --- a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
 +++ b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
-@@ -454,7 +454,7 @@ Thread& Thread::initializeCurrentTLS()
+@@ -551,7 +551,7 @@ Thread& Thread::initializeCurrentTLS()
      WTF::initialize();
  #if PLATFORM(COCOA)
-     Ref thread = adoptRef(*new Thread(SchedulingPolicy::Other, pthread_main_np() ? IsMain::Yes : IsMain::No));
+     Ref thread = adoptRef(*new Thread(defaultQOS, SchedulingPolicy::Other, pthread_main_np() ? IsMain::Yes : IsMain::No));
 -#elif OS(LINUX)
 +#elif OS(LINUX) && !OS(ANDROID)
-     Ref thread = adoptRef(*new Thread(SchedulingPolicy::Other, getpid() == static_cast<pid_t>(syscall(SYS_gettid)) ? IsMain::Yes : IsMain::No));
+     Ref thread = adoptRef(*new Thread(defaultQOS, SchedulingPolicy::Other, getpid() == static_cast<pid_t>(syscall(SYS_gettid)) ? IsMain::Yes : IsMain::No));
  #else
-     Ref thread = adoptRef(*new Thread(SchedulingPolicy::Other));
+     Ref thread = adoptRef(*new Thread(defaultQOS, SchedulingPolicy::Other));
 -- 
-2.43.0
+2.53.0
 
