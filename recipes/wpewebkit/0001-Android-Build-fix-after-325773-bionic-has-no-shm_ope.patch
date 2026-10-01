@@ -1,0 +1,49 @@
+From b717b86cc98a05220b6d0cf9f15bf2eb1a75897a Mon Sep 17 00:00:00 2001
+From: "Alejandro G. Castro" <alex@igalia.com>
+Date: Thu, 1 Oct 2026 10:07:04 +0200
+Subject: [PATCH] [Android] Build fix after 325773: bionic has no shm_open()
+ https://bugs.webkit.org/show_bug.cgi?id=NEED_BUG_URL
+
+a506af486d6b (bug 325773) added posixShmOpen() and posixShmUnlink() for
+every OS(UNIX) platform except PlayStation. Bionic does not provide POSIX
+shared memory objects, shm_open() and shm_unlink() are not declared in the
+NDK headers, so WTF fails to build on Android:
+
+    POSIXExtras.h:142:12: error: use of undeclared identifier 'shm_open'
+
+Nothing on Android calls the wrappers: the only user is the Wayland SHM
+pool, and SharedMemoryUnix.cpp already excludes OS(ANDROID). Skip both
+wrappers there.
+
+* Source/WTF/wtf/posix/POSIXExtras.h:
+---
+ Source/WTF/wtf/posix/POSIXExtras.h | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Source/WTF/wtf/posix/POSIXExtras.h b/Source/WTF/wtf/posix/POSIXExtras.h
+index 0eadcc832b6a..b798c768601a 100644
+--- a/Source/WTF/wtf/posix/POSIXExtras.h
++++ b/Source/WTF/wtf/posix/POSIXExtras.h
+@@ -136,7 +136,10 @@ inline int posixStatx(int directoryFileDescriptor, UTF8CStringView path, int fla
+ {
+     return dlopen(path.utf8(), mode);
+ }
++#endif
+ 
++// Bionic has no POSIX shared memory objects.
++#if !PLATFORM(PLAYSTATION) && !OS(ANDROID)
+ [[nodiscard]] inline int posixShmOpen(UTF8CStringView name, int flags, mode_t mode)
+ {
+     return shm_open(name.utf8(), flags, mode);
+@@ -175,6 +178,8 @@ using WTF::posixStatx;
+ #endif
+ #if !PLATFORM(PLAYSTATION)
+ using WTF::posixDlopen;
++#endif
++#if !PLATFORM(PLAYSTATION) && !OS(ANDROID)
+ using WTF::posixShmOpen;
+ using WTF::posixShmUnlink;
+ #endif
+-- 
+2.53.0
+
