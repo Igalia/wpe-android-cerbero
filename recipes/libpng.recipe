@@ -48,7 +48,7 @@ class Recipe(recipe.Recipe):
                 arch = 'armeabi-v7a'
             elif self.config.target_arch == Architecture.ARM64:
                 arch = 'arm64-v8a'
-            self.configure_options += f" -DCMAKE_TOOLCHAIN_FILE={self.config.env['ANDROID_NDK_HOME']}/build/cmake/android.toolchain.cmake -DANDROID_ABI={arch}"
+            self.configure_options += f" -DCMAKE_TOOLCHAIN_FILE={self.config.env['ANDROID_NDK_HOME']}/build/cmake/android.toolchain.cmake -DANDROID_ABI={arch} -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
         else:
             with open(f'{self.config_src_dir}/toolchain.cmake', 'w') as f:
                 f.write(f'set(CMAKE_SYSTEM_NAME {system_name})\n')
