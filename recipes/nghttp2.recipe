@@ -13,7 +13,13 @@ class Recipe(recipe.Recipe):
     tarball_checksum = '20e73f3cf9db3f05988996ac8b3a99ed529f4565ca91a49eb0550498e10621e8'
     cmake_generator = 'ninja'
     can_msvc = True
-    configure_options = ' -DENABLE_LIB_ONLY=ON -DENABLE_DOC=OFF -DWITH_LIBXML2=OFF -DWITH_JEMALLOC=OFF -DBUILD_STATIC_LIBS=ON '
+    configure_options = [
+        '-DENABLE_LIB_ONLY=ON',
+        '-DENABLE_DOC=OFF',
+        '-DWITH_LIBXML2=OFF',
+        '-DWITH_JEMALLOC=OFF',
+        '-DBUILD_STATIC_LIBS=ON',
+    ]
     library_type = LibraryType.STATIC
 
     files_libs = ['libnghttp2']
@@ -27,7 +33,7 @@ class Recipe(recipe.Recipe):
         # Although it can build both types of library, the static ones
         # have the `_static` suffix and throw off FilesProvider
         if self.using_msvc():
-            self.configure_options += ' -DBUILD_SHARED_LIBS=OFF '
+            self.configure_options += (' -DBUILD_SHARED_LIBS=OFF ').split()
             self.library_type = LibraryType.STATIC
         else:
             self.library_type = LibraryType.BOTH

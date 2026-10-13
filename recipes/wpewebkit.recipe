@@ -42,38 +42,38 @@ class Recipe(recipe.Recipe):
     # Bindings" and "specialized prefix headers in WebCore and
     # WebKit"). On the Android NDK r27 cross-build, we need to work in
     # proper fix for this.
-    configure_options = '\
-        -DPORT=WPE \
-        -DUSE_GSTREAMER_GL=ON \
-        -DUSE_WOFF2=OFF \
-        -DENABLE_DOCUMENTATION=OFF \
-        -DENABLE_INTROSPECTION=OFF \
-        -DENABLE_JOURNALD_LOG=OFF \
-        -DENABLE_BUBBLEWRAP_SANDBOX=OFF \
-        -DENABLE_SPEECH_SYNTHESIS=OFF \
-        -DENABLE_SPELLCHECK=OFF \
-        -DENABLE_WEBXR=ON \
-        -DENABLE_WEBXR_LAYERS=ON \
-        -DENABLE_WEBXR_HIT_TEST=ON \
-        -DUSE_ATK=OFF \
-        -DUSE_LCMS=OFF \
-        -DUSE_AVIF=OFF \
-        -DUSE_GBM=OFF \
-        -DUSE_LIBHYPHEN=OFF \
-        -DUSE_LIBDRM=OFF \
-        -DUSE_JPEGXL=OFF \
-        -DUSE_LIBBACKTRACE=OFF \
-        -DUSE_SKIA_OPENTYPE_SVG=OFF \
-        -DUSE_SYSPROF_CAPTURE=OFF \
-        -DENABLE_WEBDRIVER=ON \
-        -DENABLE_WPE_LEGACY_API=OFF \
-        -DENABLE_WPE_PLATFORM_DRM=OFF \
-        -DENABLE_WPE_PLATFORM_WAYLAND=OFF \
-        -DENABLE_WPE_PLATFORM_HEADLESS=ON \
-        -DENABLE_BACK_FORWARD_LIST_SWIFT=OFF \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
-    '
+    configure_options = [
+        '-DPORT=WPE',
+        '-DUSE_GSTREAMER_GL=ON',
+        '-DUSE_WOFF2=OFF',
+        '-DENABLE_DOCUMENTATION=OFF',
+        '-DENABLE_INTROSPECTION=OFF',
+        '-DENABLE_JOURNALD_LOG=OFF',
+        '-DENABLE_BUBBLEWRAP_SANDBOX=OFF',
+        '-DENABLE_SPEECH_SYNTHESIS=OFF',
+        '-DENABLE_SPELLCHECK=OFF',
+        '-DENABLE_WEBXR=ON',
+        '-DENABLE_WEBXR_LAYERS=ON',
+        '-DENABLE_WEBXR_HIT_TEST=ON',
+        '-DUSE_ATK=OFF',
+        '-DUSE_LCMS=OFF',
+        '-DUSE_AVIF=OFF',
+        '-DUSE_GBM=OFF',
+        '-DUSE_LIBHYPHEN=OFF',
+        '-DUSE_LIBDRM=OFF',
+        '-DUSE_JPEGXL=OFF',
+        '-DUSE_LIBBACKTRACE=OFF',
+        '-DUSE_SKIA_OPENTYPE_SVG=OFF',
+        '-DUSE_SYSPROF_CAPTURE=OFF',
+        '-DENABLE_WEBDRIVER=ON',
+        '-DENABLE_WPE_LEGACY_API=OFF',
+        '-DENABLE_WPE_PLATFORM_DRM=OFF',
+        '-DENABLE_WPE_PLATFORM_WAYLAND=OFF',
+        '-DENABLE_WPE_PLATFORM_HEADLESS=ON',
+        '-DENABLE_BACK_FORWARD_LIST_SWIFT=OFF',
+        '-DCMAKE_BUILD_TYPE=Release',
+        '-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON',
+    ]
     cmake_generator = 'ninja'
 
     patches = [
@@ -110,7 +110,7 @@ class Recipe(recipe.Recipe):
         from os import path
         glib_compile_resources_path = \
             path.join(self.config.build_tools_prefix, 'bin', 'glib-compile-resources')
-        self.configure_options += f' \
+        self.configure_options += (f' \
             -DOpenXR_DIR={self.config.prefix}/lib/cmake/openxr \
             -DICU_ROOT={self.config.prefix} \
             -DZLIB_ROOT={self.config.prefix} \
@@ -122,17 +122,17 @@ class Recipe(recipe.Recipe):
             -DJPEG_INCLUDE_DIR={self.config.prefix}/include \
             -DPNG_LIBRARY={self.config.prefix}/lib/libpng.so \
             -DPNG_INCLUDE_DIR={self.config.prefix}/include \
-            '
+            ').split()
         self.append_env('CXXFLAGS', '-DXR_USE_GRAPHICS_API_OPENGL_ES')
         if self.config.target_platform in (Platform.ANDROID):
             arch_src_name = self.config.target_arch
             if self.config.target_arch == Architecture.ARMv7:
                 arch_src_name = 'arm'
-            self.configure_options += ' -DCMAKE_SYSTEM_PROCESSOR=' + arch_src_name
-            self.configure_options += ' -DANDROID=1'
+            self.configure_options += (' -DCMAKE_SYSTEM_PROCESSOR=' + arch_src_name).split()
+            self.configure_options += (' -DANDROID=1').split()
             self.append_env('CXXFLAGS', '-DXR_USE_PLATFORM_ANDROID')
             # Placeholder to allow enabling debug externally
             self.append_env('WEBKIT_DEBUG', '')
         else:
             self.append_env('LDFLAGS', '-lrt')
-            self.configure_options += ' -DCMAKE_SYSTEM_PROCESSOR=' + self.config.target_arch
+            self.configure_options += (' -DCMAKE_SYSTEM_PROCESSOR=' + self.config.target_arch).split()

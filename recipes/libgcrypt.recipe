@@ -7,7 +7,12 @@ class Recipe(recipe.Recipe):
     remotes = { 'origin': 'https://github.com/gpg/libgcrypt.git'}
     commit = '0dc49af9b5371c5e2f766b70c3bede2b10db9f7e'
     autoreconf = True
-    configure_options = ' --enable-static --enable-shared --with-gpg-error-prefix=$CERBERO_PREFIX --disable-doc'
+    configure_options = [
+        '--enable-static',
+        '--enable-shared',
+        '--with-gpg-error-prefix=$CERBERO_PREFIX',
+        '--disable-doc',
+    ]
     deps = ['libgpg-error']
 
     files_libs = ['libgcrypt']
@@ -19,4 +24,4 @@ class Recipe(recipe.Recipe):
                 self.config.target_arch in (Architecture.X86, Architecture.X86_64):
             # Fails linking with undefined symbols on function
             # implemented in assembler, so disable those for now.
-            self.configure_options += ' --disable-asm'
+            self.configure_options += (' --disable-asm').split()
