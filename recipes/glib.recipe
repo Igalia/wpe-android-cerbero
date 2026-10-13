@@ -60,6 +60,10 @@ class Recipe(recipe.Recipe):
         'glib/0012-gspawn-Replace-with-stubs-that-abort-on-tvOS-watchOS.patch',
         'glib/0013-gdbus-Disable-testing-framework-when-process-spawnin.patch',
         'glib/0014-gio-Don-t-build-gio-launch-desktop-when-process-spaw.patch',
+        # Android app processes run with AT_SECURE=1 (inherited from zygote), which
+        # GLib treats as setuid and then ignores GIO_EXTRA_MODULES/GIO_MODULE_DIR.
+        # WPE-Android relies on GIO_EXTRA_MODULES to load the TLS backend.
+        'glib/0015-Fix-GIO-module-load-paths.patch',
     ]
 
     files_libs = [
