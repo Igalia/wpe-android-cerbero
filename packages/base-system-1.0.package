@@ -21,12 +21,16 @@ class Package(custom.GStreamer, package.Package):
         Platform.WINDOWS: ['proxy-libintl:libs:lang', 'mingw-runtime'],
         Platform.DARWIN: ['proxy-libintl:libs:lang'],
         Platform.LINUX: [],
-        Platform.ANDROID: ['proxy-libintl:libs:lang', 'libiconv:libs:lang'],
+        Platform.ANDROID: ['proxy-libintl:libs:lang'],
         Platform.IOS: ['proxy-libintl:libs:lang'],
         Platform.TVOS: ['proxy-libintl:libs:lang'],
     }
 
     def prepare(self):
+        # Bionic provides iconv since API 28; GNU libiconv is only needed below that.
+        if self.config.target_platform == Platform.ANDROID and \
+                DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
+            self.platform_files[Platform.ANDROID] = self.platform_files[Platform.ANDROID] + ['libiconv:libs:lang']
         if self.config.variants.gi:
             self.files.append('gobject-introspection:libs')
 

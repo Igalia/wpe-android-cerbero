@@ -17,7 +17,11 @@ class Recipe(recipe.Recipe):
     ]
 
     def prepare(self):
-        if self.config.target_platform in (Platform.WINDOWS, Platform.ANDROID):
+        if self.config.target_platform == Platform.WINDOWS:
+            self.deps.append('libiconv')
+        # Bionic provides iconv since API 28. Don't build GNU libiconv there: its iconv.h
+        # would shadow bionic's and break every later project that links libc's iconv.
+        if self.config.target_platform == Platform.ANDROID and DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
             self.deps.append('libiconv')
 
     def post_install(self):

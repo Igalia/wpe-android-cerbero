@@ -32,8 +32,9 @@ class Package(custom.GStreamer, package.Package):
             self.files_devel.append('directxmath:files_devel')
             self.files_devel.append('directx-headers:files_devel')
 
-        if self.config.target_platform == Platform.ANDROID:
-            # Needed by libass and zbar
+        if self.config.target_platform == Platform.ANDROID and \
+                DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
+            # Needed by libass and zbar (bionic provides iconv since API 28)
             self.files.append('libiconv:libs')
 
         if self.config.variants.rust and \

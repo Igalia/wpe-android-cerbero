@@ -40,7 +40,6 @@ class Package(package.Package):
         'libgcrypt:libs',
         'libffi:libs',
         'libgpg-error:libs',
-        'libiconv:libs',
         'libjpeg-turbo:libs',
         'libpng:libs',
         'libsoup:libs',
@@ -62,6 +61,12 @@ class Package(package.Package):
     ]
 
     files_devel = ['glib']
+
+    def prepare(self):
+        # Bionic provides iconv since API 28; GNU libiconv is only needed below that.
+        if self.config.target_platform != Platform.ANDROID or \
+                DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
+            self.files.append('libiconv:libs')
 
     platform_files = {
         Platform.ANDROID: [

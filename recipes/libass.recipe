@@ -25,8 +25,10 @@ class Recipe(recipe.Recipe):
     def prepare(self):
         if Subsystem.is_apple_simulator(self.config.target_subsystem):
             self.append_env('LDFLAGS', '-Wl,-read_only_relocs,suppress')
-        if self.config.target_platform == Platform.ANDROID:
+        if self.config.target_platform == Platform.ANDROID and DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
             # Needed for codepage conversion support in subtitles
+            # Bionic provides iconv since API 28. Don't build GNU libiconv there: its iconv.h
+            # would shadow bionic's and break every later project that links libc's iconv.
             self.deps.append('libiconv')
         if self.config.target_arch == Architecture.ARMv7:
             # Not supported
