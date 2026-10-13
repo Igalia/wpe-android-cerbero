@@ -10,8 +10,9 @@ class Recipe(recipe.Recipe):
     url = 'https://github.com/%(name)s/%(name)s/releases/download/%(version)s/%(name)s-%(version)s.tar.xz'
     tarball_checksum = '480b6d25014169300669aa1fc39fb356c142d5028324ea52b3a27648b9beaad8'
     licenses = [{License.MIT: ['COPYING']}]
-    deps = ['fontconfig', 'cairo', 'glib']
-    meson_options = {'icu': 'disabled',
+    # WPE WebKit requires harfbuzz-icu
+    deps = ['fontconfig', 'cairo', 'glib', 'icu']
+    meson_options = {'icu': 'enabled',
                      'glib': 'enabled',
                      'cairo': 'enabled',  # needed for hb-view
                      'gobject': 'enabled',
@@ -22,6 +23,7 @@ class Recipe(recipe.Recipe):
     files_bins = ['hb-ot-shape-closure', 'hb-view', 'hb-shape']
     files_libs = [
         'libharfbuzz',
+        'libharfbuzz-icu',
         'libharfbuzz-gobject',
         'libharfbuzz-cairo',
         'libharfbuzz-subset',
@@ -30,6 +32,7 @@ class Recipe(recipe.Recipe):
         'include/harfbuzz/*.h',
         '%(libdir)s/pkgconfig/harfbuzz.pc',
         '%(libdir)s/pkgconfig/harfbuzz-gobject.pc',
+        '%(libdir)s/pkgconfig/harfbuzz-icu.pc',
         '%(libdir)s/pkgconfig/harfbuzz-cairo.pc',
         '%(libdir)s/pkgconfig/harfbuzz-subset.pc',
     ]
