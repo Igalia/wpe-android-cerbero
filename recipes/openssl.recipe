@@ -164,6 +164,12 @@ class Recipe(recipe.Recipe):
         if Platform.is_apple_app_platform(self.config.target_platform):
             self.library_type = LibraryType.STATIC
         if self.config.target_platform == Platform.ANDROID:
+            # Load the system CA certificates from /system/etc/security/cacerts, which
+            # Android hashes with the pre-1.0.0 (MD5) subject hash.
+            self.patches += [
+                'openssl/0001-Android-Use-etc-system-security-cacerts-for-CA-certi.patch',
+                'openssl/0005-get_cert_by_subject-backward-compatibility.patch',
+            ]
             self.prepend_env('PATH', self.get_env('ANDROID_NDK_TOOLCHAIN_BIN'), sep=os.pathsep)
             self.set_env('ANDROID_NDK_ROOT', self.get_env('ANDROID_NDK_HOME'))
 
@@ -208,6 +214,9 @@ class Recipe(recipe.Recipe):
                 config_sh += ' --debug '
             else:
                 raise AssertionError
+
+        if self.config.target_platform == Platform.ANDROID:
+            config_sh += ' --openssldir=/system/etc/security '
 
         if self.config.platform == Platform.WINDOWS:
             config_sh += ' no-tests '
