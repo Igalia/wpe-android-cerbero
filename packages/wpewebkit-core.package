@@ -33,7 +33,9 @@ class Package(package.Package):
         'fontconfig:libs',
         'freetype:libs',
         'glib:libs',
-        'glib-networking:misc',
+        # glib-networking >= 2.80 ships its GIO modules as plugins; WPE-Android only
+        # uses the OpenSSL one (see tools/scripts/bootstrap.py)
+        'glib-networking:plugins',
         'harfbuzz:libs',
         'icu:libs',
         'libepoxy:libs',
