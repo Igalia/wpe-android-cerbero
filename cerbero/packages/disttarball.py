@@ -17,6 +17,8 @@
 # Boston, MA 02111-1307, USA.
 
 import os
+import shutil
+import tempfile
 
 import cerbero.utils.messages as m
 from cerbero.utils import _
@@ -24,6 +26,7 @@ from cerbero.utils.tar import Tar
 from cerbero.enums import Platform
 from cerbero.errors import EmptyPackageError
 from cerbero.packages import PackagerBase, PackageType
+from cerbero.tools import strip
 
 
 class DistTarball(PackagerBase):
@@ -71,7 +74,12 @@ class DistTarball(PackagerBase):
 
         filenames = []
         if dist_files:
-            runtime = self._create_tarball(output_dir, PackageType.RUNTIME, dist_files, force, package_prefix)
+            if strip_binaries:
+                runtime = self._create_tarball_stripped(
+                    output_dir, PackageType.RUNTIME, dist_files, force, package_prefix
+                )
+            else:
+                runtime = self._create_tarball(output_dir, PackageType.RUNTIME, dist_files, force, package_prefix)
             filenames.append(runtime)
 
         if split and debug_files:
@@ -112,6 +120,27 @@ class DistTarball(PackagerBase):
             package_type,
             ext,
         )
+
+    def _create_tarball_stripped(self, output_dir, package_type, files, force, package_prefix):
+        # Upstream dropped this in favour of a split debug package, which isn't
+        # generated on Android, so packages with strip = True got unstripped libraries.
+        tmpdir = tempfile.mkdtemp(dir=self.config.home_dir)
+
+        for f in files:
+            tmp_file = os.path.join(tmpdir, f)
+            os.makedirs(os.path.dirname(tmp_file), exist_ok=True)
+            shutil.copy(os.path.join(self.prefix, f), tmp_file, follow_symlinks=False)
+        strip.Strip(self.config, self.package.strip_excludes).strip_dir(tmpdir)
+
+        prefix_restore = self.prefix
+        self.prefix = tmpdir
+        try:
+            tarball = self._create_tarball(output_dir, package_type, files, force, package_prefix)
+        finally:
+            self.prefix = prefix_restore
+            shutil.rmtree(tmpdir)
+
+        return tarball
 
     def _create_tarball(self, output_dir, package_type, files, force, package_prefix):
         filename = os.path.join(output_dir, self._get_name(package_type))
