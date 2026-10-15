@@ -758,6 +758,10 @@ class CMake(MakefilesBase):
                 # The toolchain file defaults to the static libc++, which would put one
                 # copy of it in each C++ library. WPE-Android ships libc++_shared.so.
                 '-DANDROID_STL=c++_shared',
+                # The NDK's flags.cmake uses if(IN_LIST), which needs policy CMP0057.
+                # Projects that require CMake < 3.3, such as qrencode, leave it unset,
+                # and CMake 3.x then fails to configure them. CMake 4 always sets it.
+                '-DCMAKE_POLICY_DEFAULT_CMP0057=NEW',
             ]
         # A toolchain file triggers specific cross compiling logic
         # in wavpack and taglib
