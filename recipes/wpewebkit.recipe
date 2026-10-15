@@ -75,6 +75,10 @@ class Recipe(recipe.Recipe):
         '-DCMAKE_BUILD_TYPE=Release',
         '-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON',
     ]
+    # Cerbero passes -DCMAKE_BUILD_TYPE=<build_variant> (RelWithDebInfo by default) after
+    # configure_options, so take the build type from the option above. wpe-android's
+    # bootstrap.py rewrites that option to make debug builds.
+    build_variant = next(o.split('=', 1)[1] for o in configure_options if o.startswith('-DCMAKE_BUILD_TYPE='))
     cmake_generator = 'ninja'
 
     patches = [
