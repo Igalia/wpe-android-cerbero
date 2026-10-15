@@ -538,8 +538,9 @@ class Recipe(custom.GStreamer):
         self.enable_plugin('va', 'codecs', 'va', dep='libva')
 
         self.enable_plugin('rsvg', 'codecs', variant='rust', dep='librsvg')
-        if self.config.target_platform == Platform.ANDROID:
-            # librsvg is not built on Android, and WebKit does not need this element
+        if self.config.target_platform == Platform.ANDROID and self.config.variants.rust:
+            # librsvg is not built on Android, and WebKit does not need this element.
+            # Without the rust variant, enable_plugin() above didn't add it.
             self.disable_plugin('rsvg', 'codecs', dep='librsvg')
 
         if self.config.target_subsystem == Subsystem.TVOS_SIMULATOR and self.config.target_arch == Architecture.X86_64:
