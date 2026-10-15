@@ -33,6 +33,7 @@ class Recipe(recipe.Recipe):
         'libwebp',
         'openjpeg',
         'openxr',
+        'xkbcommon',
     ]
     # FIXME: support accessibility, woff2, hyphenation
     #
