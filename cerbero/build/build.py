@@ -752,6 +752,9 @@ class CMake(MakefilesBase):
                 f'-DANDROID_ABI={arch}',
                 # Required by taglib and svt-av1
                 f'-DANDROID_PLATFORM={DistroVersion.get_android_api_version(self.config.target_distro_version)}',
+                # The toolchain file ignores LDFLAGS, so the max-page-size flag from
+                # android.config doesn't reach CMake projects. Ask it for 16 KB pages.
+                '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON',
             ]
         # A toolchain file triggers specific cross compiling logic
         # in wavpack and taglib
