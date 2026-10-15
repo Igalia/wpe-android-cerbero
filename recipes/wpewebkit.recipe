@@ -83,6 +83,7 @@ class Recipe(recipe.Recipe):
 
     patches = [
         'wpewebkit/0001-Android-Build-fix-after-325773-bionic-has-no-shm_ope.patch',
+        'wpewebkit/0002-GLib-AcceleratedSurface-destroyed-on-the-main-thread.patch',
     ]
 
     files_libs = [
