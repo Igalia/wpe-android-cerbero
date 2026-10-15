@@ -755,6 +755,9 @@ class CMake(MakefilesBase):
                 # The toolchain file ignores LDFLAGS, so the max-page-size flag from
                 # android.config doesn't reach CMake projects. Ask it for 16 KB pages.
                 '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON',
+                # The toolchain file defaults to the static libc++, which would put one
+                # copy of it in each C++ library. WPE-Android ships libc++_shared.so.
+                '-DANDROID_STL=c++_shared',
             ]
         # A toolchain file triggers specific cross compiling logic
         # in wavpack and taglib
