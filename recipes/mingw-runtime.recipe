@@ -13,20 +13,30 @@ class Recipe(recipe.Recipe):
 
     files_bins = []
     files_libs = ['libwinpthread-1', 'libstdc++-6']
-    files_devel = ['lib/libstdc++.a', 'lib/libstdc++.la']
-    files_static = []
-    files_headers = ['include/GL']
+    files_devel = ['%(libdir)s/libstdc++.a', '%(libdir)s/libstdc++.la']
+    files_headers_devel = ['include/GL', 'include/KHR',]
 
     def prepare(self):
         if self.config.target_platform != Platform.WINDOWS:
             raise InvalidRecipeError(self, "Invalid platform")
-        if self.config.variants.uwp:
+        if self.config.variants.visualstudio and self.config.cross_compiling():
             self.runtime_dep = False
+        # Stripping any of these makes GCC tools die
+        # libgcc_s_seh-1.dll
+        # libstdc++-6.dll
+        # libwinpthread-1.dll
+        self.skip_steps = [BuildSteps.DSYMUTIL]
+        lib_suffix = ''
+        if self.config.platform != Platform.WINDOWS:
+            lib_suffix = f'/{self.config.build}'
         if self.config.target_arch == Architecture.X86:
-            gcclib = 'lib/gcc/x86_64-w64-mingw32/8.2.0/32/'
+            gcclib = f'lib{lib_suffix}/gcc/x86_64-w64-mingw32/14.2.0/32/'
+            # MinGW x86 requires changing GCC's exception model to DWARF2
+            # See https://fedoraproject.org/wiki/Changes/Mingw32GccDwarf2
+            # self._ehlib = 'libgcc_s_dw2-1'
             self._ehlib = 'libgcc_s_sjlj-1'
         else:
-            gcclib = 'lib/gcc/x86_64-w64-mingw32/8.2.0/'
+            gcclib = f'lib{lib_suffix}/gcc/x86_64-w64-mingw32/14.2.0/'
             self._ehlib = 'libgcc_s_seh-1'
 
         # mingw's static libraries
@@ -36,7 +46,7 @@ class Recipe(recipe.Recipe):
                                    'libmoldname.a']
         self.gcc_static_files = [gcclib + 'libgcc.a',
                                  gcclib + 'libgcc_eh.a']
-        self.files_static += [os.path.join('lib', os.path.basename(f))
+        self.files_devel += [f'%(libdir)s/{os.path.basename(f)}'
                               for f in self.mingw_static_files + self.gcc_static_files]
 
         self.files_libs.append(self._ehlib)
@@ -71,6 +81,11 @@ class Recipe(recipe.Recipe):
             shutil.copy(
                 os.path.join(libmingw, f),
                 os.path.join(self.config.prefix, 'bin', f))
+            # and to <toolchain>/bin because dlltool depends on it
+            binwinpthread = os.path.join(self.config.toolchain_prefix, 'bin', f)
+            if not os.path.exists(binwinpthread):
+                shutil.copy(
+                    os.path.join(libmingw, f), binwinpthread)
         for f in ['libstdc++-6.dll']:
             shutil.copy(
                 os.path.join(libdir, f),
@@ -108,7 +123,7 @@ class Recipe(recipe.Recipe):
                     with open(dest, 'w+') as d:
                         d.writelines(content)
         # install headers and static libraries
-        for f in self.files_headers:
+        for f in self.files_headers_devel:
             src = os.path.join(sysroot, f)
             dest = os.path.join(self.config.prefix, f)
             if os.path.exists(dest):

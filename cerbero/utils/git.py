@@ -17,6 +17,7 @@
 # Boston, MA 02111-1307, USA.
 
 import os
+import shutil
 import time
 import cerbero.utils.messages as m
 
@@ -24,8 +25,11 @@ from cerbero.config import Platform
 from cerbero.utils import shell, _
 from cerbero.errors import FatalError
 
-
-GIT = 'git'
+if shell.PLATFORM == Platform.WINDOWS:
+    # We do not want the MSYS2 Git because it mucks consumption by Cargo
+    GIT = shutil.which('git', path=shell.get_path_minus_msys(os.environ['PATH']))
+else:
+    GIT = 'git'
 
 
 def ensure_user_is_set(git_dir, logfile=None):
@@ -233,7 +237,8 @@ def get_hash(git_dir, commit, logfile=None):
     @param commit: the commit to log
     @type commit: str
     """
-    if not os.path.isdir(os.path.join(git_dir, '.git')):
+    # worktrees have .git as a file
+    if not os.path.exists(os.path.join(git_dir, '.git')):
         # If a recipe's source type is switched from tarball to git, then we
         # can get called from built_version() when the directory isn't git.
         # Return a fixed string + unix time to trigger a full fetch.

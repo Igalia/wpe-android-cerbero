@@ -3,20 +3,18 @@ from cerbero.tools.libtool import LibtoolLibrary
 
 class Recipe(recipe.Recipe):
     name = 'libnice'
-    version = '0.1.22'
+    version = '0.1.24'
     stype = SourceType.TARBALL
     btype = BuildType.MESON
-    url = 'https://nice.freedesktop.org/releases/%(name)s-%(version)s.tar.gz'
-    tarball_checksum = 'a5f724cf09eae50c41a7517141d89da4a61ec9eaca32da4a0073faed5417ad7e'
+    url = 'https://libnice.freedesktop.org/releases/%(name)s-%(version)s.tar.gz'
+    tarball_checksum = 'cfb5e8e778534f2f5b3c6f4958a1eb057c6b95c537c0f100817a537cf5d64fcc'
     # Either LGPL-2.1+ or MPL-1.1
     licenses = [License.LGPLv2_1Plus, License.MPLv1_1]
     meson_options = {'tests' : 'disabled',
                      'gupnp' : 'disabled',
                      'gstreamer' : 'enabled',
                      'crypto-library' : 'openssl'}
-    deps = ['glib', 'gstreamer-1.0']
-
-    patches = []
+    deps = ['glib', 'gstreamer-1.0', 'openssl']
 
     files_bins = ['stunbdc', 'stund']
     files_libs = ['libnice']
@@ -32,11 +30,11 @@ class Recipe(recipe.Recipe):
     # FIXME - if_arp.h? (iOS)
 
     def prepare(self):
-        if self.config.target_platform != Platform.LINUX or self.config.cross_compiling():
-            self.deps.append('openssl')
-        else:
-            # openssl on Linux
-            self.use_system_libs = True
+        if self.config.variants.noassert:
+            self.meson_options.update({'glib_assert': 'false'})
+
+        if self.config.variants.nochecks:
+            self.meson_options.update({'glib_checks': 'false'})
 
     def post_install (self):
         nice_deps = ['gio-2.0', 'gthread-2.0', 'ssl', 'crypto']

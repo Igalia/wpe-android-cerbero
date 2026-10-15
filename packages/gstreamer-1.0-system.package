@@ -11,28 +11,35 @@ class Package(custom.GStreamer, package.Package):
     deps = ['gstreamer-1.0-core']
 
     files = ['gst-plugins-base-1.0:plugins_sys', 'gst-plugins-good-1.0:plugins_sys',
-            'gst-plugins-ugly-1.0:plugins_sys', 'gst-plugins-bad-1.0:plugins_sys',
-            'graphene:libs']
+            'gst-plugins-ugly-1.0:plugins_sys', 'gst-plugins-bad-1.0:plugins_sys']
     files_devel = ['gst-plugins-base-1.0:plugins_sys_devel',
             'gst-plugins-good-1.0:plugins_sys_devel',
             'gst-plugins-ugly-1.0:plugins_sys_devel',
             'gst-plugins-bad-1.0:plugins_sys_devel']
 
     platform_files = {
-      Platform.IOS : ['moltenvk:libs'],
-      Platform.DARWIN : ['moltenvk:libs'],
+      Platform.DARWIN: ['moltenvk:libs'],
+      Platform.IOS: ['moltenvk:libs'],
+      Platform.TVOS: ['moltenvk:libs'],
     }
 
     def prepare(self):
         if self.config.variants.cdparanoia:
             self.files += ['cdparanoia:libs']
 
-        if self.config.variants.uwp:
-            self.files.remove('graphene:libs')
-            if self.config.target_arch in (Architecture.X86, Architecture.X86_64, Architecture.ARM64, Architecture.UNIVERSAL):
-                self.files.append('angle-uwp:libs')
-                self.files_devel.append('angle-uwp:headers')
-
-        if self.config.variants.rust:
+        if self.config.variants.rust and \
+           (self.config.target_platform != Platform.WINDOWS or \
+            self.config.target_arch != Architecture.ARM64):
             self.files.append('gst-plugins-rs:plugins_sys')
             self.files_devel.append('gst-plugins-rs:plugins_sys_devel')
+
+        if self.config.target_platform == Platform.ANDROID:
+            self.files += ['tinyalsa:libs']
+            self.files_devel += ['tinyalsa:files_devel']
+
+        # webview2 is linked statically into the corresponding plugin, so we
+        # don't want to distribute any files belonging to the package. However,
+        # we must include an empty file category here so that fetch-package
+        # works correctly.
+        if self.config.target_platform == Platform.WINDOWS:
+            self.files_devel += ['webview2:files_devel']

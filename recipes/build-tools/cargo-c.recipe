@@ -2,21 +2,22 @@
 
 class Recipe(recipe.Recipe):
     name = 'cargo-c'
-    version = '0.9.30'
+    version = '0.10.23'
     stype = SourceType.TARBALL
     btype = BuildType.CARGO
-    url = 'https://github.com/lu-zero/cargo-c/archive/refs/tags/v0.9.30.tar.gz'
-    tarball_checksum = '174cfc3a69263c3e54b95e00c4bd61b13377f7f72d4bf60aa714fd9e7ed3849c'
+    url = 'https://github.com/lu-zero/cargo-c/archive/refs/tags/v%(version)s.tar.gz'
+    tarball_checksum = '17679af6c00a70ce1d70668023e993045539afdc7ab0ca1a081aa8ef6993a595'
     tarball_dirname = '%(name)s-%(version)s'
     # Get this from the release page on github
     cargo_lock = f'{name}/{version}-Cargo.lock'
-    # Need system openssl on Linux
-    use_system_libs = True
+    patches = [
+    ]
 
     deps = ['zlib', 'pkg-config']
     # Need openssl on macOS. On Windows, a prebuilt openssl crate is downloaded.
     platform_deps = {
         Platform.DARWIN: ['openssl'],
+        Platform.LINUX:  ['openssl']
     }
 
     files_bins = ['cargo-capi', 'cargo-cbuild', 'cargo-cinstall', 'cargo-ctest']

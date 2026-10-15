@@ -25,9 +25,10 @@ import subprocess
 import asyncio
 import collections
 from collections import defaultdict
+from pathlib import Path
 
 from cerbero.config import Distro, Architecture
-from cerbero.errors import FatalError
+from cerbero.errors import CommandError, FatalError
 from cerbero.ide.pkgconfig import PkgConfig
 from cerbero.utils import shell, run_tasks, run_until_complete
 from cerbero.utils import messages as m
@@ -60,6 +61,7 @@ class FrameworkLibrary(object):
         else:
             libraries = self.libraries
 
+        m.action(f'Creating framework library at {self.libname}')
         self._create_framework_library(libraries)
 
     def _libraries_paths(self, libraries):
@@ -191,10 +193,22 @@ class StaticFrameworkLibrary(FrameworkLibrary):
 
     async def _check_duplicated_symbols(self, file, tmpdir):
         syms = defaultdict(list)
-        symbols = (await shell.async_call_output(['nm', '-UA', file], tmpdir, env=self.env)).split('\n')
+        # Get llvm-nm if available (fixes Unknown attribute errors if the
+        # libraries include Rust code)
+        try:
+            root_dir = shell.check_output(['rustc', '--print', 'sysroot'], env=self.env).strip()
+            tools = list(Path(root_dir).glob('**/llvm-nm'))
+            if tools:
+                nm = tools[0]
+            else:
+                m.warning('llvm-nm not found, the check may fail if Rust objects are found!')
+                nm = 'nm'
+        except CommandError:
+            nm = 'nm'
+        symbols = await shell.async_call_output([nm, '-UA', '--quiet', file], tmpdir, env=self.env)
         # nm output is: test.o: 00000000 T _gzwrite
         # (filename, address, symbol type, symbols_name)
-        for s in symbols:
+        for s in symbols.splitlines():
             s = s.split(' ')
             if len(s) == 4 and s[2] == 'T':
                 syms[s[3]].append(s)
@@ -205,6 +219,17 @@ class StaticFrameworkLibrary(FrameworkLibrary):
         if dups:
             m.warning('The static library contains duplicated symbols')
         for k, v in dups.items():
+            # Skip symbols with ___, these are compiler-inserted symbols
+            if k.startswith('___'):
+                continue
+            # Skip C++ duplicated symbols, most of these are spurious
+            skip = False
+            for line in v:
+                if 'cc.o:' in line[0] or 'cpp.o:' in line[0]:
+                    skip = True
+                    break
+            if skip:
+                continue
             m.message(k)  # symbol name
             for line in v:
                 m.message('     %s' % line[0])  # file
@@ -250,7 +275,7 @@ class StaticFrameworkLibrary(FrameworkLibrary):
                     split_queue.task_done()
                     continue
 
-                obj_files = shell.ls_files(['*.o'], lib_tmpdir)
+                obj_files = shell.ls_files(['*.o', '*.obj'], lib_tmpdir)
                 obj_dict = {}
                 for obj_f in obj_files:
                     obj_path = os.path.join(lib_tmpdir, obj_f)

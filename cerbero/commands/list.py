@@ -18,7 +18,7 @@
 
 from cerbero.commands import Command, register_command
 from cerbero.build.cookbook import CookBook
-from cerbero.utils import _, N_
+from cerbero.utils import _, N_, ArgparseArgument
 from cerbero.utils import messages as m
 from cerbero.packages.packagesstore import PackagesStore
 
@@ -59,17 +59,37 @@ class ShowConfig(Command):
     name = 'show-config'
 
     def __init__(self):
-        Command.__init__(self, [])
+        arguments = [
+            ArgparseArgument('--archs', action='store_true', default=False, help=_('Show also the arch config if any')),
+            ArgparseArgument(
+                '--build-tools', action='store_true', default=False, help=_('Show also the boot tools config if any')
+            ),
+        ]
+        Command.__init__(self, arguments)
 
     def run(self, config, args):
+        self._print_config(config)
+        if args.archs and config.arch_config and len(config.arch_config) > 0 and tuple(config.arch_config) != (None,):
+            archs = list(config.arch_config.keys())
+            archs.sort()
+            print('Arch configs:', ', '.join(archs))
+            for a in archs:
+                print(a, 'arch:')
+                self._print_config(config.arch_config[a])
+        if args.build_tools and config.build_tools_config:
+            print('Build tools config:')
+            self._print_config(config.build_tools_config)
+
+    def _print_config(self, config):
         for n in config._properties:
-            if n == 'variants':
-                print('%25s :' % (n))
-                variants = getattr(config, n).__dict__
-                for v in variants:
-                    print('%30s : %s' % (v, variants[v]))
-            else:
-                print('%25s : %s' % (n, getattr(config, n)))
+            print('%25s : %s' % (n, getattr(config, n)))
+        # Now the variants
+        print('%25s :' % 'variants')
+        variants = config.variants.__dict__
+        for v in variants:
+            if v.startswith('_'):
+                continue
+            print('%30s : %s' % (v, variants[v]))
 
 
 register_command(List)

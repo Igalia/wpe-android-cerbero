@@ -24,7 +24,8 @@
 ARGS=$@
 SCRIPTDIR="`dirname $0`"
 
-if [ "$OSTYPE" = "msys" ]; then
+# https://www.msys2.org/news/#2025-02-14-moving-msys2-closer-to-cygwin
+if [ "$OSTYPE" = "msys" ] || [ "$OSTYPE" = "cygwin" ]; then
    if [ -f "/mingw/bin/mingw-get.exe" ]; then
        MSYS_VERSION=1
    elif  [ -f "/usr/bin/pacman" ]; then
@@ -36,16 +37,40 @@ if [ "$OSTYPE" = "msys" ]; then
    fi
 fi
 
+find_non_msys2_python() {
+    which -a python | while read i; do
+        if (( $(echo $i | cut -f2 -d/ | wc -c) > 2 )); then
+            continue
+        fi
+        echo $i
+        break
+    done
+}
+
 case "$MSYS_VERSION" in
-    1) PYTHON="py -3";;
+    1)
+        if type -p py &>/dev/null; then
+            PYTHON="py -3"
+        else
+            PYTHON="python"
+        fi
+        ;;
     2)
+        if type -p py &>/dev/null; then
+            PYTHON="py -3"
+        else
+            PYTHON="$(find_non_msys2_python)"
+        fi
+
+        if test -z "$PYTHON"; then
+            echo "Could not find a non-MSYS2 Python"
+            exit 1
+        fi
         # winpty is needed to get stdin working in many cases, but it will
         # immediately bail out if run in an environment without stdin, such as
         # on CI.
-        if [ -n "$CI" ]; then
-            PYTHON="py -3"
-        else
-            PYTHON="winpty py -3"
+        if [ -z "$CI" ]; then
+            PYTHON="winpty $PYTHON"
         fi
         ;;
     *) PYTHON="python3";;
@@ -121,6 +146,19 @@ sys.path.insert(0, os.path.abspath(curdir))
 # Need to set sys.argv since we can't pass args when called with -c
 if sys.argv == ['-c']:
     sys.argv = ['$0'] + shlex.split('$ARGS')
+
+# Env vars that can affect our build
+cleanup = (
+    'GIO_EXTRA_MODULES', 'PYGI_DLL_DIRS', 'GI_TYPELIB_PATH',
+    'GST_PLUGIN_SCANNER', 'GST_PLUGIN_SCANNER_1_0', 'GST_REGISTRY_1_0',
+    'GST_REGISTRY', 'GST_PLUGIN_SYSTEM_PATH', 'GST_PLUGIN_SYSTEM_PATH_1_0',
+    'GST_PLUGIN_PATH', 'GST_PLUGIN_PATH_1_0', 'GST_PYTHONPATH',
+    'GST_PYTHONPATH_1_0', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH',
+    'PKG_CONFIG_PATH', 'PKG_CONFIG_LIBDIR',
+)
+for v in cleanup:
+    if v in os.environ:
+        os.environ.pop(v)
 
 from cerbero.main import main
 main()

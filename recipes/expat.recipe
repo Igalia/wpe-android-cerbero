@@ -1,29 +1,46 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+from pathlib import Path
+import shutil
+
 from cerbero.tools.libtool import LibtoolLibrary
 
 
 class Recipe(recipe.Recipe):
     name = 'expat'
-    version = '2.6.2'
-    licenses = [{License.BSD_like: ['COPYING']}]
+    version = '2.7.1'
+    licenses = [{License.MIT: ['COPYING']}]
     stype = SourceType.TARBALL
     btype = BuildType.CMAKE
-    url = 'https://github.com/libexpat/libexpat/releases/download/R_2_6_2/%(name)s-%(version)s.tar.xz'
-    tarball_checksum = 'ee14b4c5d8908b1bec37ad937607eab183d4d9806a08adee472c3c3121d27364'
+    url = 'https://github.com/libexpat/libexpat/releases/download/R_2_7_1/%(name)s-%(version)s.tar.xz'
+    tarball_checksum = '354552544b8f99012e5062f7d570ec77f14b412a3ff5c7d8d0dae62c0d217c30'
     cmake_generator = 'ninja'
     can_msvc = True
-    configure_options = '-DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_TESTS=OFF -DEXPAT_BUILD_DOCS=OFF -DEXPAT_BUILD_FUZZERS=OFF -DEXPAT_BUILD_PKGCONFIG=ON'
+    configure_options = [
+        '-DEXPAT_BUILD_EXAMPLES=OFF',
+        '-DEXPAT_BUILD_TESTS=OFF',
+        '-DEXPAT_BUILD_DOCS=OFF',
+        '-DEXPAT_BUILD_FUZZERS=OFF',
+        '-DEXPAT_BUILD_PKGCONFIG=ON'
+    ]
 
     files_libs = ['libexpat']
     files_devel = ['include/expat.h', 'include/expat_external.h', '%(libdir)s/pkgconfig/expat.pc']
 
     def prepare(self):
         # We only want static libs on iOS and Android
-        if self.config.target_platform in (Platform.IOS):
-            self.configure_options += ' -DBUILD_SHARED_LIBS=OFF '
+        if Platform.is_app_platform(self.config.target_platform):
             self.library_type = LibraryType.STATIC
         else:
             self.library_type = LibraryType.SHARED
+
+    async def install(self):
+        await super(recipe.Recipe, self).install()
+        if self.using_msvc():
+            shutil.move(
+                    os.path.join(self.config.libdir, 'libexpat.lib'),
+                    os.path.join(self.config.libdir, 'expat.lib'))
+            shell.replace(f'{self.config.libdir}/cmake/expat-{self.version}/expat-{self.build_variant.lower()}.cmake', {'lib/libexpat.lib:': 'lib/expat.lib'})
+            shell.replace(f'{self.config.libdir}/pkgconfig/expat.pc', {'-llibexpat': '-lexpat'})
 
     def post_install(self):
         libtool_la = LibtoolLibrary('libexpat', None, None, None, self.config.libdir,

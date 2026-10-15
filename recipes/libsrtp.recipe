@@ -5,18 +5,18 @@ import shutil
 
 class Recipe(recipe.Recipe):
     name = 'libsrtp'
-    version = '2.5.0'
+    version = '2.8.0'
     stype = SourceType.TARBALL
     url = 'https://github.com/cisco/%(name)s/archive/v%(version)s.tar.gz'
-    tarball_checksum = '8a43ef8e9ae2b665292591af62aa1a4ae41e468b6d98d8258f91478735da4e09'
-    licenses = [{License.BSD_like: ['LICENSE']}]
+    tarball_checksum = 'd123dcff5c56d4f1a9006f2b311ea99a85016cbf3bb24b1007885d422237db85'
+    licenses = [{License.BSD_3_Clause: ['LICENSE']}]
 
     btype = BuildType.MESON
     meson_options = {
         # XXX: should we use openssl?
         'crypto-library': 'none',
         'doc': 'disabled',
-        'tests': 'enabled',
+        'tests': 'disabled',
         'pcap-tests': 'disabled'
     }
 
@@ -29,7 +29,7 @@ class Recipe(recipe.Recipe):
         await super(Recipe, self).install()
         libdir = os.path.join(self.config.prefix,
                               'lib' + self.config.lib_suffix)
-        shutil.copy(os.path.join(self.build_dir, 'srtp.def'), libdir)
+        shutil.copy(os.path.join(self.config_src_dir, 'srtp.def'), libdir)
 
     def post_install(self):
         libtool_la = LibtoolLibrary('srtp2', None, None, None, self.config.libdir,

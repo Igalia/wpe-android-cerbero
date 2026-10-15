@@ -17,9 +17,20 @@
 # Boston, MA 02111-1307, USA.
 
 import os
+from pathlib import Path
+import pickle
+import sys
 import stat
 import shutil
 from urllib.parse import urlparse
+
+if __name__ == '__main__':
+    # Add cerbero dir to path when invoked as a script so
+    # that the cerbero imports below resolve correctly.
+    parent = os.path.dirname(__file__)
+    parent = os.path.dirname(parent)
+    parent = os.path.dirname(parent)
+    sys.path.append(parent)
 
 from cerbero.bootstrap import BootstrapperBase
 from cerbero.utils import shell
@@ -34,8 +45,8 @@ class RustBootstrapper(BootstrapperBase):
     """
 
     SERVER = 'https://static.rust-lang.org'
-    RUSTUP_VERSION = '1.26.0'
-    RUST_VERSION = '1.76.0'
+    RUSTUP_VERSION = '1.29.0'
+    RUST_VERSION = '1.96.0'
     RUSTUP_URL_TPL = '{server}/rustup/archive/{version}/{triple}/rustup-init{exe_suffix}'
     RUSTUP_NAME_TPL = 'rustup-init-{version}-{triple}{exe_suffix}'
     CHANNEL_URL_TPL = '{server}/dist/channel-rust-{version}.toml'
@@ -44,18 +55,17 @@ class RustBootstrapper(BootstrapperBase):
     TOMLI_URL = 'https://files.pythonhosted.org/packages/c0/3f/d7af728f075fb08564c5949a9c95e44352e23dee646869fa104a3b2060a3/tomli-2.0.1.tar.gz'
     DOWNLOAD_CHECKSUMS = {
         # Rust packages metadata
-        'channel-rust-1.76.0.toml': '7b89a56897a1581ca66312468276ee08e6d596a3254128a567c1658c6f733c76',
+        'channel-rust-1.96.0.toml': '9af50610e1d82699f78a40b985c9277ae1a2c5a0bec86ae430cfe58832038285',
         # Tomli Python module
         'tomli-2.0.1.tar.gz': 'de526c12914f0c550d15924c62d72abc48d6fe7364aa87328337a31007fe8a4f',
         # Rustup
-        'rustup-init-1.26.0-aarch64-unknown-linux-gnu': '673e336c81c65e6b16dcdede33f4cc9ed0f08bde1dbe7a935f113605292dc800',
-        'rustup-init-1.26.0-x86_64-unknown-linux-gnu': '0b2f6c8f85a3d02fde2efc0ced4657869d73fccfce59defb4e8d29233116e6db',
-        'rustup-init-1.26.0-aarch64-apple-darwin': 'ed299a8fe762dc28161a99a03cf62836977524ad557ad70e13882d2f375d3983',
-        'rustup-init-1.26.0-x86_64-apple-darwin': 'f6d1a9fac1a0d0802d87c254f02369a79973bc8c55aa0016d34af4fcdbd67822',
-        'rustup-init-1.26.0-i686-pc-windows-msvc.exe': '3fcfaf0018c12b96c49dc7e13e8638bd8de686ab27dd14238c3f11d0a936c003',
-        'rustup-init-1.26.0-x86_64-pc-windows-msvc.exe': '365d072ac4ef47f8774f4d2094108035e2291a0073702db25fa7797a30861fc9',
-        'rustup-init-1.26.0-i686-pc-windows-gnu.exe': 'f2cb7bb1e662a74bd9fa071cc0799dc4c814b3a56af979d6eba1169c3d98338b',
-        'rustup-init-1.26.0-x86_64-pc-windows-gnu.exe': '32e9128a82ac130043012463ca5f9cb507c349a3f16e3c2b98a3f7a32e294e59',
+        'rustup-init-1.29.0-x86_64-unknown-linux-gnu': '4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10',
+        'rustup-init-1.29.0-aarch64-unknown-linux-gnu': '9732d6c5e2a098d3521fca8145d826ae0aaa067ef2385ead08e6feac88fa5792',
+        'rustup-init-1.29.0-x86_64-apple-darwin': '33cf85df9142bc6d29cbc62fa5ca1d4c29622cddb55213a4c1a43c457fb9b2d7',
+        'rustup-init-1.29.0-aarch64-apple-darwin': 'aeb4105778ca1bd3c6b0e75768f581c656633cd51368fa61289b6a71696ac7e1',
+        'rustup-init-1.29.0-x86_64-pc-windows-gnu.exe': '03dbaae1d33a4d220bd0d202e5092955dae859c119074192ca513f8c4713fff7',
+        'rustup-init-1.29.0-x86_64-pc-windows-msvc.exe': '86478e53f769379d7f0ebfa7c9aa97cb76ca92233f79aa2cc0dbee2efaac73c7',
+        'rustup-init-1.29.0-aarch64-pc-windows-msvc.exe': '3af309e6c3062aa11df0e932954f69d13b734d8a431e593812f3ecd9ff9e6ef6',
     }
     # The triple for the build platform/arch
     build_triple = None
@@ -64,27 +74,36 @@ class RustBootstrapper(BootstrapperBase):
     target_triples = None
     # Downloaded rustup path
     rustup = None
-    # Downloadad rust channel
+    # Downloaded rust channel
     channel = None
 
     def __init__(self, config, offline):
         super().__init__(config, offline, 'rust')
+
+        self.manifest = {}
+        self.manifest_path = Path(self.config.rustup_home) / 'cerbero.rustup'
+
+        # Not yet processed
+        self.installed = False
         self.offline = offline
         self.build_triple = self.config.rust_build_triple
-        self.target_triples = self.config.rust_target_triples
+        self.target_triples = set(self.config.rust_target_triples)
         if self.config.platform == Platform.WINDOWS:
-            # On Windows, build-tools always use MSVC so we need to always
-            # bootstrap $arch-windows-msvc
-            bs_triple = self.config.rust_triple(self.config.arch, self.config.platform, True)
-            if bs_triple not in self.target_triples:
-                self.target_triples.append(bs_triple)
+            tgt = set()
+            # On Windows, build tools must be built using MSVC. However,
+            # the current variant determines the default target.
+            # So we need to always bootstrap $arch-windows-msvc,
+            # and override the build triple accordingly
+            self.build_triple = self.config.rust_triple(self.config.arch, self.config.platform, None, True)
+            tgt.add(self.build_triple)
             # rustup-init wants to always install both 64-bit and 32-bit
             # toolchains, so ensure that we fetch and install both
             archs = {Architecture.X86_64, Architecture.X86}
             other_arch = (archs - {self.config.arch}).pop()
-            arch_triple = self.config.rust_triple(other_arch, self.config.platform, self.config.variants.visualstudio)
-            if arch_triple not in self.target_triples:
-                self.target_triples.append(arch_triple)
+            # in both MSVC and MinGW ABIs
+            tgt.add(self.config.rust_triple(other_arch, self.config.platform, None, True))
+            tgt.add(self.config.rust_triple(other_arch, self.config.platform, None, False))
+            self.target_triples.update(tgt)
         self.fetch_urls = self.get_fetch_urls()
         self.fetch_urls_func = self.get_more_fetch_urls
         self.extract_steps = []
@@ -134,6 +153,8 @@ class RustBootstrapper(BootstrapperBase):
         # We need tomli now, and we need cargo-c in the function we call next
         await self.extract()
         self.extract_steps = []
+        # Get the existing targets
+        self.load_manifest()
 
         if not self.config.find_toml_module(system_only=True):
             # tomli-<version>.tar.gz
@@ -171,17 +192,23 @@ class RustBootstrapper(BootstrapperBase):
             entry = channel_data['pkg'][c]['target'][self.build_triple]
             urls += list(get_entry_urls(entry))
 
-        # And then maybe also rust-std for the target machine
-        for triple in self.target_triples:
+        # Then maybe also rust-std for the existing + new targets
+        installed_targets = self.manifest.get('targets', set())
+        required_targets = self.target_triples.union(installed_targets)
+        for triple in required_targets:
             if triple != self.build_triple:
                 entry = channel_data['pkg']['rust-std']['target'][triple]
+                urls += list(get_entry_urls(entry))
+            # And rust-mingw for any MinGW targets
+            if 'windows-gnu' in triple:
+                entry = channel_data['pkg']['rust-mingw']['target'][triple]
                 urls += list(get_entry_urls(entry))
 
         return (urls, self.install_toolchain_for_cargoc_fetch)
 
     async def install_toolchain_for_cargoc_fetch(self):
         m.action('Installing Rust toolchain so cargo-c.recipe can fetch deps')
-        await self.install_toolchain()
+        await self.install_rustup()
         return ([], None)
 
     def get_rustup_env(self):
@@ -193,6 +220,41 @@ class RustBootstrapper(BootstrapperBase):
         rustup_env['RUSTUP_DIST_SERVER'] = 'file://{}'.format(self.config.local_sources)
         return rustup_env
 
+    def load_manifest(self):
+        """
+        Read Rust toolchain install state
+        """
+        if self.manifest_path.exists() and not self.manifest:
+            with self.manifest_path.open('rb') as f:
+                try:
+                    self.manifest = pickle.load(f)
+                except Exception:
+                    m.warning('Could not recover Rust toolchain status, assuming installation from scratch')
+
+    def save_manifest(self):
+        """
+        Save updates and newly installed targets (if any)
+        """
+        with self.manifest_path.open('wb') as f:
+            try:
+                pickle.dump(self.manifest, f)
+            except IOError as ex:
+                m.warning('Could not save Rust toolchain status: %s' % ex)
+
+    async def install_rustup(self):
+        """
+        Install Rustup and the specified targets
+        (with the ability to skip components)
+        """
+        if self.installed:
+            return
+
+        self.load_manifest()
+        await self.install_toolchain()
+        await self.install_targets()
+        self.save_manifest()
+        self.installed = True
+
     async def install_toolchain(self):
         """
         Run rustup to install the downloaded toolchain. We pretend that
@@ -200,7 +262,15 @@ class RustBootstrapper(BootstrapperBase):
         toolchain, rustup will automatically remove the older toolchain, which
         it wouldn't do if we installed a specific version.
         """
-        # Install Rust toolchain with rustup-init
+        rust_version = self.manifest.get('rust_version', None)
+        if rust_version == self.RUST_VERSION:
+            m.action(f'Skipping Rust host toolchain deploy ({rust_version} installed)')
+            return
+
+        # Update is required, ZAP
+        if os.path.exists(self.config.rustup_home):
+            shutil.rmtree(self.config.rustup_home)
+
         st = os.stat(self.rustup)
         os.chmod(self.rustup, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         rustup_args = [
@@ -215,17 +285,146 @@ class RustBootstrapper(BootstrapperBase):
             '--component',
             'llvm-tools-preview',
         ]
-        for triple in self.target_triples:
-            rustup_args += ['--target', triple]
         rustup_env = self.get_rustup_env()
         for suffix in ('', '.asc', '.sha256'):
             stable_channel = f'{os.path.dirname(self.channel)}/channel-rust-stable.toml'
             shutil.copyfile(self.channel + suffix, stable_channel + suffix)
-        if os.path.exists(self.config.rustup_home):
-            shutil.rmtree(self.config.rustup_home)
         # Use async_call_output to discard stdout which contains messages that will confuse the user
         await shell.async_call_output(rustup_args, cpu_bound=False, env=rustup_env)
         m.message('Rust toolchain v{} installed at {}'.format(self.RUST_VERSION, self.config.rust_prefix))
 
+        cargo_bin = Path(self.config.cargo_home) / 'bin'
+        cargo = cargo_bin / f'cargo{self.config._get_exe_suffix()}'
+
+        if self.config.platform == Platform.WINDOWS and cargo.is_symlink():
+            # Workaround for https://github.com/rust-lang/rustup/issues/4291
+            try:
+                import subprocess
+
+                subprocess.check_output([str(cargo), '--version'], env=rustup_env)
+            except FileNotFoundError:
+                m.warning('Found broken symbolic link support: https://github.com/rust-lang/rustup/issues/4291')
+                symlinks = [f for f in cargo_bin.glob('*') if f.is_symlink()]
+                for f in symlinks:
+                    src = f.resolve()
+                    f.unlink()
+                    shutil.copy(src, f)
+
+        self.manifest['rust_version'] = self.RUST_VERSION
+        # Update the target triples so that install_targets will reinstall them
+        installed_targets = self.manifest.get('targets', set())
+        self.target_triples = self.target_triples.union(installed_targets)
+        self.manifest['targets'] = set()
+
+    async def install_targets(self):
+        """
+        Install Rust toolchain with rustup-init
+        """
+        installed_targets = self.manifest.get('targets', set())
+        if self.target_triples.issubset(installed_targets):
+            m.action(f'Skipping target components deploy, {installed_targets} installed')
+            return
+        cargo_bin = Path(self.config.cargo_home) / 'bin'
+        rustup = cargo_bin / f'rustup{self.config._get_exe_suffix()}'
+        rustup_args = [rustup, 'target', 'add', *self.target_triples]
+        # Use async_call_output to discard stdout which contains messages that
+        # will confuse the user
+        await shell.async_call_output(rustup_args, cpu_bound=False, env=self.get_rustup_env())
+
+        installed_targets.update(self.target_triples)
+        self.manifest['targets'] = installed_targets
+
     async def start(self, jobs=0):
-        await self.install_toolchain()
+        await self.install_rustup()
+
+
+if __name__ == '__main__':
+    import re
+    import argparse
+    import urllib.request
+    from hashlib import sha256
+    from cerbero.config import RUST_TRIPLE_MAPPING
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('rust_version', nargs='?', help='Rust version to update to')
+    parser.add_argument('rustup_version', nargs='?', help='Rustup version to update to')
+    args = parser.parse_args()
+
+    def get_rustup_version():
+        d = urllib.request.urlopen('https://sh.rustup.rs', timeout=20)
+        s = d.read().decode('utf-8')
+        m = re.search('rustup-init ([0-9.]+)', s)
+        return m.groups(0)[0]
+
+    def get_tomllib():
+        import importlib
+
+        if sys.version_info >= (3, 11, 0):
+            return importlib.import_module('tomllib')
+        for mod in ('tomli', 'toml', 'tomlkit'):
+            try:
+                return importlib.import_module(mod)
+            except ModuleNotFoundError:
+                continue
+        raise RuntimeError('No toml python module available')
+
+    def get_rust_version():
+        d = urllib.request.urlopen('https://static.rust-lang.org/dist/channel-rust-stable.toml', timeout=20)
+        tomllib = get_tomllib()
+        data = tomllib.loads(d.read().decode('utf-8'))
+        return data['pkg']['rust']['version'].split()[0]
+
+    def get_checksum(url):
+        print(url + ' ', end='', flush=True)
+        d = urllib.request.urlopen(url, timeout=20)
+        h = sha256()
+        while True:
+            chunk = d.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+            print('.', end='', flush=True)
+        print('')
+        return h.hexdigest()
+
+    cls = RustBootstrapper
+    kwargs = {'server': cls.SERVER}
+    checksums = {}
+
+    rust_version = args.rust_version
+    if not rust_version:
+        rust_version = get_rust_version()
+    if rust_version != cls.RUST_VERSION:
+        kwargs['version'] = rust_version
+        name = f'channel-rust-{rust_version}.toml'
+        checksums[name] = get_checksum(cls.CHANNEL_URL_TPL.format(**kwargs))
+
+    rustup_version = args.rustup_version
+    if not rustup_version:
+        rustup_version = get_rustup_version()
+    if rustup_version != cls.RUSTUP_VERSION:
+        kwargs['version'] = rustup_version
+        kwargs['exe_suffix'] = ''
+        for platform in (Platform.LINUX, Platform.DARWIN):
+            for arch in (Architecture.X86_64, Architecture.ARM64):
+                kwargs['triple'] = RUST_TRIPLE_MAPPING[(platform, arch)]
+                name = cls.RUSTUP_NAME_TPL.format(**kwargs)
+                checksums[name] = get_checksum(cls.RUSTUP_URL_TPL.format(**kwargs))
+
+        platform = Platform.WINDOWS
+        kwargs['exe_suffix'] = '.exe'
+        for toolchain in ('gnu', 'msvc'):
+            for arch in (Architecture.X86_64, Architecture.ARM64):
+                if toolchain == 'gnu' and arch == Architecture.ARM64:
+                    continue
+                kwargs['triple'] = RUST_TRIPLE_MAPPING[(platform, arch, toolchain)]
+                name = cls.RUSTUP_NAME_TPL.format(**kwargs)
+                checksums[name] = get_checksum(cls.RUSTUP_URL_TPL.format(**kwargs))
+
+    for key, value in checksums.items():
+        print(' ' * 8, end='')
+        print(f"'{key}': '{value}',")
+    if rustup_version != cls.RUSTUP_VERSION:
+        print(f"RUSTUP_VERSION = '{rustup_version}'")
+    if rust_version != cls.RUST_VERSION:
+        print(f"RUST_VERSION = '{rust_version}'")

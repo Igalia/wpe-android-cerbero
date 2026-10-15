@@ -19,26 +19,29 @@
 import os
 import logging
 import shutil
-import tempfile
-import time
 import inspect
 import asyncio
 from functools import reduce
+import glob
+from itertools import chain
 from pathlib import Path
+import re
 
-from cerbero.enums import License, LicenseDescription, LibraryType
+from cerbero.enums import License, LicenseDescription
 from cerbero.build import build, source
-from cerbero.build.filesprovider import FilesProvider, UniversalFilesProvider, UniversalFlatFilesProvider
-from cerbero.config import Platform
-from cerbero.errors import FatalError, CommandError
+from cerbero.build.filesprovider import FilesProvider, UniversalFilesProvider, UniversalMergedFilesProvider
+from cerbero.config import Distro, Platform
+from cerbero.errors import FatalError, CommandError, InvalidRecipeError
 from cerbero.ide.pkgconfig import PkgConfig
 from cerbero.ide.vs.genlib import GenLib, GenGnuLib
 from cerbero.tools.osxuniversalgenerator import OSXUniversalGenerator
 from cerbero.tools.osxrelocator import OSXRelocator
-from cerbero.utils import N_, _
-from cerbero.utils import shell, add_system_libs, run_tasks
+from cerbero.utils import N_
+from cerbero.utils import shell, run_tasks, get_system_pc_path, split_version
 from cerbero.utils import messages as m
+from cerbero.tools import dsymutil
 from cerbero.tools.libtool import LibtoolLibrary
+from cerbero.enums import LibraryType
 
 LICENSE_INFO_FILENAME = 'README-LICENSE-INFO.txt'
 
@@ -46,9 +49,9 @@ LICENSE_INFO_FILENAME = 'README-LICENSE-INFO.txt'
 def log_step_output(recipe, stepfunc):
     def open_file():
         step = stepfunc.__name__
-        path = "%s/%s-%s.log" % (recipe.config.logs, recipe.name, step)
-        recipe.old_logfile = recipe.logfile # Allow calling build steps recursively
-        recipe.logfile = open(path, 'w+')
+        path = '%s/%s-%s.log' % (recipe.config.logs, recipe.name, step)
+        recipe.old_logfile = recipe.logfile  # Allow calling build steps recursively
+        recipe.logfile = open(path, 'w+', encoding='utf-8', errors='replace')
 
     def close_file():
         # if logfile is empty, remove it
@@ -65,7 +68,7 @@ def log_step_output(recipe, stepfunc):
             step = step[1]
             if step == current_step:
                 break
-            path = "%s/%s-%s.log" % (recipe.config.logs, recipe.name, step)
+            path = '%s/%s-%s.log' % (recipe.config.logs, recipe.name, step)
             try:
                 logfiles.append(open(path, 'r'))
             except OSError:
@@ -73,9 +76,9 @@ def log_step_output(recipe, stepfunc):
         return logfiles
 
     def handle_exception():
-        '''
+        """
         Dump contents of log files for current and previous steps on error
-        '''
+        """
         logfiles = get_all_prev_steps_logfiles()
         # log file of current step
         recipe.logfile.seek(0)
@@ -88,61 +91,64 @@ def log_step_output(recipe, stepfunc):
             if data:
                 print(data)
 
-    def wrapped():
+    def wrapped(*args, **kwargs):
         open_file()
         try:
-            stepfunc()
+            ret = stepfunc(*args, **kwargs)
         except FatalError:
             handle_exception()
             raise
         close_file()
+        return ret
 
-    async def async_wrapped():
+    async def async_wrapped(*args, **kwargs):
         open_file()
         try:
-            await stepfunc()
+            ret = await stepfunc(*args, **kwargs)
         except FatalError:
             handle_exception()
             raise
         close_file()
+        return ret
 
     if asyncio.iscoroutinefunction(stepfunc):
         return async_wrapped
     else:
         return wrapped
 
+
 class MetaRecipe(type):
-    ''' This metaclass modifies the base classes of a Receipt, adding 2 new
+    """This metaclass modifies the base classes of a Recipe, adding 2 new
     base classes based on the class attributes 'stype' and 'btype'.
 
-    class NewReceipt(Receipt):
-        btype = Class1    ------>  class NewReceipt(Receipt, Class1, Class2)
+    class NewRecipe(Recipe):
+        btype = Class1    ------>  class NewRecipe(Recipe, Class1, Class2)
         stype = Class2
-    '''
+    """
 
     def __new__(cls, name, bases, dct):
         clsname = '%s.%s' % (dct['__module__'], name)
         recipeclsname = '%s.%s' % (cls.__module__, 'Recipe')
-        # only modify it for Receipt's subclasses
+        # only modify it for Recipe's subclasses
         if clsname != recipeclsname and name == 'Recipe':
-            # get the default build and source classes from Receipt
-            # Receipt(DefaultSourceType, DefaultBaseType)
+            # get the default build and source classes from Recipe
+            # Recipe(DefaultSourceType, DefaultBuildType)
             basedict = {'btype': bases[0].btype, 'stype': bases[0].stype}
             # if this class define stype or btype, override the default one
-            # Receipt(OverridenSourceType, OverridenBaseType)
+            # Recipe(OverridenSourceType, OverridenBuildType)
             for base in ['stype', 'btype']:
                 if base in dct:
                     basedict[base] = dct[base]
-            # finally add this classes the Receipt bases
-            # Receipt(BaseClass, OverridenSourceType, OverridenBaseType)
+            # finally add this classes the Recipe bases
+            # Recipe(BaseClass, OverridenSourceType, OverridenBuildType)
             bases = bases + tuple(basedict.values())
         return type.__new__(cls, name, bases, dct)
 
 
 class BuildSteps(object):
-    '''
+    """
     Enumeration factory for build steps
-    '''
+    """
 
     FETCH = (N_('Fetch'), 'fetch')
     EXTRACT = (N_('Extract'), 'extract')
@@ -157,20 +163,29 @@ class BuildSteps(object):
     MERGE = (N_('Merge universal binaries'), 'merge')
     RELOCATE_OSX_LIBRARIES = (N_('Relocate OSX libraries'), 'relocate_osx_libraries')
     CODE_SIGN = (N_('Codesign build-tools'), 'code_sign')
+    DSYMUTIL = (N_('Generating symbolication bundle'), 'symbolicate')
 
     def __new__(cls):
-        return [BuildSteps.FETCH, BuildSteps.EXTRACT,
-                BuildSteps.CONFIGURE, BuildSteps.COMPILE, BuildSteps.INSTALL,
-                BuildSteps.POST_INSTALL]
+        return [
+            BuildSteps.FETCH,
+            BuildSteps.EXTRACT,
+            BuildSteps.CONFIGURE,
+            BuildSteps.COMPILE,
+            BuildSteps.INSTALL,
+            BuildSteps.POST_INSTALL,
+            BuildSteps.DSYMUTIL,
+        ]
 
     @classmethod
     def all_names(cls):
-        members = inspect.getmembers(cls, lambda x: isinstance(x, tuple))
-        return tuple(e[1][1] for e in members if not e[0].startswith('__'))
+        # In 3.13, __static_attributes__ is a new tuple attribute. Just ignore
+        # all attributes starting with __.
+        members = inspect.getmembers(cls, lambda x: isinstance(x, tuple) and x and not x[0].startswith('__'))
+        return tuple(e[1][1] for e in members)
 
 
 class Recipe(FilesProvider, metaclass=MetaRecipe):
-    '''
+    """
     Base class for recipes.
     A Recipe describes a module and the way it's built.
 
@@ -194,7 +209,7 @@ class Recipe(FilesProvider, metaclass=MetaRecipe):
     @type runtime_dep: bool
     @cvar bash_completions: list of bash completion scripts for shell
     @type bash_completions: list
-    '''
+    """
 
     # Licenses are declared as an array of License.enums or dicts of the type:
     #
@@ -244,10 +259,10 @@ class Recipe(FilesProvider, metaclass=MetaRecipe):
     force = False
     logfile = None
     _default_steps = BuildSteps()
-    _licenses_disclaimer = '''\
+    _licenses_disclaimer = """\
 DISCLAIMER: THIS LICENSING INFORMATION IS PROVIDED ON A BEST-EFFORT BASIS
 AND IS NOT MEANT TO BE LEGAL ADVICE. PLEASE TALK TO A LAWYER FOR ADVICE ON
-SOFTWARE LICENSE COMPLIANCE.\n\n'''
+SOFTWARE LICENSE COMPLIANCE.\n\n"""
     _licenses_terms = 'The {} in this package may be used under the terms of license file(s):\n\n'
     # Used in recipes/custom.py. See also: cookbook.py:_load_recipes_from_dir()
     _using_manifest_force_git = False
@@ -267,19 +282,14 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
         Platform.WINDOWS: (
             'fatal error C1083: Cannot open compiler generated file:',
             'STATUS_STACK_BUFFER_OVERRUN',
+            'The process cannot access the file because it is being used by another process',
         ),
     }
 
     def __init__(self, config, env):
         self.config = config
         if self.package_name is None:
-            self.package_name = "%s-%s" % (self.name, self.version)
-        if not hasattr(self, 'repo_dir'):
-            self.repo_dir = os.path.join(self.config.local_sources,
-                    self.package_name)
-        self.repo_dir = os.path.abspath(self.repo_dir)
-        self.build_dir = os.path.abspath(os.path.join(self.config.sources, self.package_name))
-        self.config_src_dir = self.build_dir
+            self.package_name = '%s-%s' % (self.name, self.version)
         self.deps = self.deps or []
         if self.config.prefix_is_build_tools():
             if self.btype == build.BuildType.MESON:
@@ -298,19 +308,25 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
         self.platform_deps = self.platform_deps or {}
 
         self.skip_steps = self.skip_steps or []
-        allowed_skip = {BuildSteps.RELOCATE_OSX_LIBRARIES, BuildSteps.CODE_SIGN}
+        allowed_skip = {BuildSteps.MERGE, BuildSteps.RELOCATE_OSX_LIBRARIES, BuildSteps.CODE_SIGN, BuildSteps.DSYMUTIL}
         bad_skip = set(self.skip_steps) - allowed_skip
         if bad_skip:
-            raise FatalError(f"Can only skip steps {allowed_skip}, not {bad_skip}")
+            raise FatalError(f'Can only skip steps {allowed_skip}, not {bad_skip}')
 
         self._steps = self._default_steps[:]
         if self.config.target_platform == Platform.WINDOWS:
             self._steps.append(BuildSteps.GEN_LIBFILES)
         if self.config.target_platform == Platform.DARWIN:
             self._steps.append(BuildSteps.RELOCATE_OSX_LIBRARIES)
-        if self.config.target_platform == Platform.DARWIN and \
-                self.config.prefix == self.config.build_tools_prefix:
+        if self.config.target_platform == Platform.DARWIN and self.config.prefix == self.config.build_tools_prefix:
             self._steps.append(BuildSteps.CODE_SIGN)
+
+        if (
+            self.config.target_platform == Platform.ANDROID
+            or self.config.prefix == self.config.build_tools_prefix
+            or self.config.variants.nodebug
+        ):
+            self._steps.remove(BuildSteps.DSYMUTIL)
 
         FilesProvider.__init__(self, config)
         try:
@@ -326,13 +342,13 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
         return self.name
 
     def __repr__(self):
-        return "<Recipe %s>" % self.name
+        return '<Recipe %s>' % self.name
 
     def decorate_build_steps(self):
-        '''
+        """
         Decorate build step functions with a function that sets self.logfile
         for each build step for this recipe
-        '''
+        """
         steps = BuildSteps.all_names()
         for name, func in inspect.getmembers(self, inspect.ismethod):
             if name not in steps:
@@ -340,16 +356,17 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
             setattr(self, name, log_step_output(self, func))
 
     def prepare(self):
-        '''
+        """
         Can be overriden by subclasess to modify the recipe in function of
         the configuration
-        '''
+        """
         pass
 
     async def retry_run(self, func, *args, **kwargs):
         errors = self.SPURIOUS_ERRORS.get(self.config.platform, None)
+
         def is_spurious_error():
-            assert(self.logfile)
+            assert self.logfile
             self.logfile.seek(0)
             for line in self.logfile:
                 for error in errors:
@@ -370,14 +387,9 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
                 retries -= 1
                 m.action(f'Retrying, caught spurious failure: {ret.strip()}')
 
-    def _get_arch_prefix(self):
-        if self.config.cross_universal_type() == 'flat':
-            return os.path.join(self.config.prefix, self.config.target_arch)
-        return self.config.prefix
-
-    def _get_la_deps_from_pc (self, laname, pcname, env):
+    def _get_la_deps_from_pc(self, laname, pcname, env):
         pkgc = PkgConfig([pcname], env=env)
-        libs =  set(pkgc.static_libraries())
+        libs = set(pkgc.static_libraries())
         # Don't add the library itself to the list of dependencies
         return ['lib' + lib for lib in libs if lib != laname[3:]]
 
@@ -410,14 +422,14 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
         return ret
 
     def fixup_pc_files(self):
-        '''
+        """
         Make all .pc files relocatable by setting `prefix` relative to
         ${pcfiledir}
-        '''
+        """
         for f in self.files_list_by_category(self.DEVEL_CAT):
             if not f.endswith('.pc'):
                 continue
-            fpath = os.path.join(self._get_arch_prefix(), f)
+            fpath = os.path.join(self.config.prefix, f)
             if not os.path.isfile(fpath):
                 m.warning(f'{self.config.target_arch} {fpath} not found')
                 continue
@@ -431,13 +443,54 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
                 for line in contents:
                     if line.startswith('prefix=') and 'pcfiledir' not in line:
                         line = f'prefix={prefix_value}'
+                    elif f'={self.config.prefix}' in line:
+                        line = line.replace(self.config.prefix, '${prefix}')
                     fo.write(line + '\n')
 
+    def relocate_site_packages(self):
+        """
+        Relocate Python packages from the distro default
+        to the standard site-packages
+        """
+        extensions = self.extensions.copy()
+        if self.config.target_distro == Distro.DEBIAN:
+            extensions['pydir'] = Path(self.config.prefix, 'lib', 'python3', 'dist-packages').as_posix()
+        else:
+            extensions['pydir'] = Path(self.config.prefix, self.config.py_macos_prefix).as_posix()
+
+        srcfiles = []
+        for f in self.files_python:
+            f = Path(f % extensions)
+            # srcfiles can be a glob if multidist extensions
+            if '*' in f.as_posix():
+                fs = glob.glob(f.as_posix(), recursive=True)
+                srcfiles.extend(Path(f) for f in fs)
+            else:
+                srcfiles.append(f)
+
+        # WARNING: self.files_python contains the *unresolved* globs
+        # In the next step, these are *unresolved* from srcfiles
+        relocated_files_python = [str(f).replace(extensions['pydir'], '%(pydir)s') for f in srcfiles]
+
+        destdir = Path(self.config.prefix) / self.config.get_python_prefix()
+        destdir.mkdir(parents=True, exist_ok=True)
+        extensions['pydir'] = Path(self.config.prefix, self.config.get_python_prefix()).as_posix()
+        destfiles = [Path(f % extensions) for f in relocated_files_python]
+
+        for src, dest in zip(srcfiles, destfiles):
+            if src.is_file():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dest)
+            elif src.is_dir():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(src, dest, dirs_exist_ok=True)
+
     def generate_gst_la_files(self):
-        '''
+        """
         Generate .la files for all libraries and plugins packaged by this Meson
         recipe using the pkg-config files installed by our Meson build files.
-        '''
+        """
+
         class GeneratedLA(object):
             name = None
             major = None
@@ -464,38 +517,46 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
                 return self.name == other.name and self.libdir == other.libdir
 
             def __str__(self):
-                return "<GeneratedLA:%s@%s version:%s.%s.%s in \'%s\' deps: [%s]" % (
-                        str(self.name), str(hex(id(self))), str(self.major),
-                        str(self.minor), str(self.micro), str(self.libdir),
-                        ", ".join(self.deps))
+                return "<GeneratedLA:%s@%s version:%s.%s.%s in '%s' deps: [%s]" % (
+                    str(self.name),
+                    str(hex(id(self))),
+                    str(self.major),
+                    str(self.minor),
+                    str(self.micro),
+                    str(self.libdir),
+                    ', '.join(self.deps),
+                )
 
         lib_to_pcname_map = {
-            'gstadaptivedemux-1.0' : None,
-            'gstbadaudio-1.0' : 'gstreamer-bad-audio-1.0',
-            'gstbasecamerabinsrc-1.0' : None,
-            'gstcodecs-1.0' : None,
-            'gstisoff-1.0' : None,
-            'gsturidownloader-1.0' : None,
-            'gstrtspserver-1.0' : 'gstreamer-rtsp-server-1.0',
-            'gstvalidate-1.0' : 'gstreamer-validate-1.0',
-            'gstvalidate-default-overrides-1.0' : None,
-            'ges-1.0' : 'gst-editing-services-1.0',
+            'gstadaptivedemux-1.0': None,
+            'gstbadaudio-1.0': 'gstreamer-bad-audio-1.0',
+            'gstbasecamerabinsrc-1.0': None,
+            'gstcodecs-1.0': None,
+            'gstisoff-1.0': None,
+            'gsturidownloader-1.0': None,
+            'gstrtspserver-1.0': 'gstreamer-rtsp-server-1.0',
+            'gstvalidate-1.0': 'gstreamer-validate-1.0',
+            'gstvalidate-default-overrides-1.0': None,
+            'ges-1.0': 'gst-editing-services-1.0',
             'gstwinrt-1.0': None,
             'gstwebrtcnice-1.0': 'gstreamer-webrtc-nice-1.0',
-            'gstdxva-1.0' : None,
+            'gstdxva-1.0': None,
+            'gstd3dshader-1.0': None,
+            # Melded library for gst-plugins-rs, not a plugin
+            # but also not an ABI component of gstreamer
+            'gstrsworkspace': 'gstrsworkspace',
         }
         generated_libs = []
 
         pluginpcdir = os.path.join(self.config.libdir, 'gstreamer-1.0', 'pkgconfig')
         env = self.env.copy()
-        if self.use_system_libs:
-            add_system_libs(self.config, env, self.env)
         PkgConfig.add_search_dir(pluginpcdir, env, self.config)
+        PkgConfig.add_search_dir(self.config.get_custom_pkg_config_path(), env, self.config)
         if self.config.qt5_pkgconfigdir:
             PkgConfig.add_search_dir(self.config.qt5_pkgconfigdir, env, self.config)
 
         # retrieve the list of files we need to generate
-        for f in self.devel_files_list():
+        for f in self.devel_files_list(only_existing=False):
             libdir = self.config.rel_libdir + '/'
             if not f.endswith('.a') or not f.startswith(libdir):
                 continue
@@ -503,15 +564,15 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
                 libtype = 'plugin'
             else:
                 libtype = 'library'
-            fpath = os.path.join(self._get_arch_prefix(), f)
+            fpath = os.path.join(self.config.prefix, f)
             if not os.path.isfile(fpath):
                 arch = self.config.target_arch
                 m.warning('{} {} {!r} not found'.format(arch, libtype, fpath))
                 continue
-            pcname = os.path.basename(f)[3:-6 if f.endswith('.dll.a') else -2]
+            pcname = os.path.basename(f)[3 : -6 if f.endswith('.dll.a') else -2]
             la_path = os.path.splitext(f)[0]
             ladir, laname = os.path.split(la_path)
-            ladir = os.path.join(self._get_arch_prefix(), ladir)
+            ladir = os.path.join(self.config.prefix, ladir)
 
             major = minor = micro = None
             if libtype == 'library':
@@ -524,7 +585,8 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
                 if not pcname:
                     continue
 
-                minor, micro = (map(int, self.version.split('.')[1:3]))
+                # gst-plugins-rs and x264 have components with non-number chars
+                minor, micro = map(int, map(lambda s: re.match(r'([0-9]+)', s).group(0), self.version.split('.')[1:3]))
                 minor = minor * 100 + micro
                 major = micro = 0
 
@@ -556,13 +618,14 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
                         dep = dep[3:]
                     dep_libs.append('-l' + dep)
 
-            LibtoolLibrary(lib.name, lib.major, lib.minor, lib.micro, lib.libdir,
-                      self.config.target_platform, deps=dep_libs).save()
+            LibtoolLibrary(
+                lib.name, lib.major, lib.minor, lib.micro, lib.libdir, self.config.target_platform, deps=dep_libs
+            ).save()
 
     def relocate_osx_libraries(self):
-        '''
+        """
         Make OSX libraries relocatable
-        '''
+        """
         if BuildSteps.RELOCATE_OSX_LIBRARIES in self.skip_steps:
             return
 
@@ -570,22 +633,19 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
             return os.path.realpath(os.path.join(self.config.prefix, fp))
 
         def file_is_relocatable(fp):
-            return fp.split('/')[0] in ['lib', 'bin', 'libexec'] and \
-                    os.path.splitext(fp)[1] not in ['.a', '.pc', '.la']
+            return fp.split('/')[0] in ['lib', 'bin', 'libexec'] and os.path.splitext(fp)[1] not in ['.a', '.pc', '.la']
 
-        relocator = OSXRelocator(self.config.prefix, self.config.libdir, True,
-                logfile=self.logfile)
+        relocator = OSXRelocator(self.config.prefix, self.config.prefix, True, logfile=self.logfile)
         # Only relocate files are that are potentially relocatable and
         # remove duplicates by symbolic links so we relocate libs only
         # once.
-        for f in set([get_real_path(x) for x in self.files_list() \
-                if file_is_relocatable(x)]):
+        for f in set([get_real_path(x) for x in self.files_list() if file_is_relocatable(x)]):
             relocator.relocate_file(f)
 
     def code_sign(self):
-        '''
+        """
         Codesign OSX build-tools binaries
-        '''
+        """
         if BuildSteps.CODE_SIGN in self.skip_steps:
             return
 
@@ -595,25 +655,181 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
         def file_is_bin(fp):
             return fp.split('/')[0] in ['bin']
 
-        for f in set([get_real_path(x) for x in self.files_list() \
-                if file_is_bin(x)]):
+        for f in set([get_real_path(x) for x in self.files_list() if file_is_bin(x)]):
             shell.new_call(['codesign', '-f', '-s', '-', f], logfile=self.logfile, env=self.env)
 
+    def _symbolicable_files(self):
+        """
+        Shim for calling down to the per recipe override of symbolicable_files
+        (this one goes through getattr)
+        """
+        return self.symbolicable_files()
+
+    def symbolicate(self):
+        """
+        Generate symbols for dylibs and binaries
+        """
+
+        if BuildSteps.DSYMUTIL in self.skip_steps:
+            return
+
+        if self.config.target_platform == Platform.ANDROID:
+            # No devel package on Android, Studio does its own stripping
+            return
+
+        auto_sym, manual_sym = self.symbolicable_files()
+        auto_sym = dsymutil.symbolicable_files(auto_sym, self.config.prefix, self.config.target_platform)
+        manual_sym = dsymutil.symbolicable_files(manual_sym, self.config.prefix, self.config.target_platform)
+
+        if Platform.is_apple(self.config.target_platform):
+            # generate dSYM for those we can, fish out the rest
+            dsymutil.symbolicate_macho_files(auto_sym, logfile=self.logfile, env=self.env)
+        elif not self.using_msvc():
+            # these are embedded automatically into the ELF/PE
+            dsymutil.symbolicate_gnu_files(chain(auto_sym, manual_sym), logfile=self.logfile, env=self.env)
+            # Clear them, already symbolicated
+            manual_sym = []
+
+        if manual_sym:
+            # for non-GNU platforms, we must fish out the dSYM/pdb
+            symbols = Path(self.build_dir).glob(f"**/*{self.extensions['debugext']}")
+
+            symbols = set(list(f.resolve() for f in symbols))
+
+            for pdb in symbols:
+                # Rust has a different convention e.g. cargo-capi.exe == cargo_capi.pdb
+                # And CMake can result in wavpack.pdb -> libwavpack.dll
+                def possible_names(binary):
+                    suffixes = ''.join(binary.suffixes)
+                    real_stem = binary.name[: -len(suffixes)]
+                    return (
+                        binary.stem in pdb.stem
+                        or binary.stem.replace('-', '_') in pdb.stem
+                        or pdb.stem == binary.stem[3:]
+                        # cargo-c unSOversioned
+                        or real_stem in pdb.stem
+                    )
+
+                def exact_names(binary):
+                    # For fished Cargo symbols, it's `dragonfire-<hash>.dSYM`
+                    # or `libfoo.dylib.dSYM` -- be careful with the latter!
+                    return (
+                        binary.name == pdb.stem or binary.stem == pdb.stem or binary.stem.replace('-', '_') == pdb.stem
+                    )
+
+                # libfoo-2.0-0.dll -> libfoo-2.0-0.pdb, libfoo.pdb, foo.pdb
+                potential_matches = list(filter(possible_names, manual_sym))
+
+                # for frei0r plugins where they have "3dflippo" and "flippo"
+                exact_matches = list(filter(exact_names, potential_matches))
+
+                # Allow fuzzy matches...
+                is_fuzzy_match = len(potential_matches) == 1
+                suffixes = None
+                real_name = None
+                # Except on Apple platforms where we can have prefix matches
+                # with unrelated Rust-generated symbols
+                # (eg. gst-ptp-helper-test)
+                if is_fuzzy_match and Platform.is_apple(self.config.target_platform):
+                    match = potential_matches[0]
+                    suffixes = ''.join(match.suffixes)
+                    real_name = match.name[: -len(suffixes)] + match.suffix
+                    # Unless it's an executable renamed by Meson (gst-dots-viewer)
+                    if pdb.stem.startswith(match.stem.replace('-', '_')):
+                        is_fuzzy_match = True
+                    # Or a cargo-c generated dylib that forgot its soversion)
+                    elif pdb.stem == real_name:
+                        is_fuzzy_match = True
+
+                if not potential_matches:
+                    continue
+                elif len(exact_matches) == 1:
+                    match = exact_matches[0]
+                    # frei0r sleid0r-foo_bar plugins
+                    if match.stem == pdb.stem:
+                        dst = match.parent / pdb.name
+                    # Rust naming normalization
+                    elif match.stem.replace('-', '_') != match.stem:
+                        dst = match.parent / pdb.name.replace('_', '-')
+                    else:
+                        dst = match.parent / pdb.name
+                elif is_fuzzy_match:
+                    match = potential_matches[0]
+                    dst = match.parent / pdb.name
+                    # If Cargo-C
+                    needs_cargo_c_fix = pdb.stem == real_name
+                    # If CMake (wavpack) or Meson (gst-devtools-1.0)
+                    needs_relocating = (
+                        match.stem.startswith('lib') and pdb.stem != match.stem[3:]
+                    ) or pdb.stem.startswith(match.stem.replace('-', '_'))
+                    if needs_cargo_c_fix:
+                        dst = dst.with_stem(match.name)
+                    elif needs_relocating:
+                        dst = dst.with_stem(match.stem)
+                else:
+                    m.warning(
+                        f'Too many matches for dSYM file {pdb} or fuzzy matching not applicable: {potential_matches}',
+                        logfile=self.logfile,
+                    )
+                    continue
+
+                if pdb.is_dir():
+                    m.log(f'Mirroring {pdb} to {dst}', logfile=self.logfile)
+                    shutil.rmtree(dst.as_posix())
+                    shutil.copytree(pdb, dst)
+                else:
+                    m.log(f'Copying {pdb} to {dst}', logfile=self.logfile)
+                    shutil.copy(pdb, dst)
+
+        if Platform.is_apple(self.config.target_platform):
+            # NOTE: the name of gst-dots-viewer (and other rustc-only, Meson-built
+            # executables) needs to be corrected to read the executable name,
+            # without the disambiguation hash
+            for sym in manual_sym:
+                # The prefix here comes from the proxy recipe
+                symbol_name = sym.with_suffix(sym.suffix + '.dSYM').relative_to(self.config.prefix)
+                output_dir = Path(self.config.prefix, symbol_name)
+                # Correct naming for rustc built binaries
+                canonical_name = sym.name
+                contents_dir = output_dir / 'Contents'
+                relocations_dir = contents_dir / 'Resources' / 'Relocations'
+                # now edit the .yml and change the line
+                # binary-path:     '<path to Cerbero sources folder>/darwin_universal/<arch>/<package-version>/_builddir/<triplet>/release/deps/libgstaws.dylib'
+                # to read the manual_sym path
+                for f in relocations_dir.glob('**/*.yml'):
+                    src = open(f, 'r', encoding='utf-8').read()
+                    src = re.sub(r"binary-path:(\s+)'.+'", rf"binary-path:\1'{sym}'", src, count=1)
+                    # Correct the name if necessary
+                    if f.name == canonical_name + '.yml':
+                        open(f, 'w', encoding='utf-8').write(src)
+                    else:
+                        g = f.with_name(canonical_name + '.yml')
+                        open(g, 'w', encoding='utf-8').write(src)
+                        f.unlink()
+                # correct DWARF file now
+                dwarf_dir = contents_dir / 'Resources' / 'DWARF'
+                inputs = list(dwarf_dir.glob('*'))
+                if len(inputs) == 1:
+                    os.rename(inputs[0], inputs[0].with_name(canonical_name))
+
+        # Runs the validation and prints missing files warning
+        # (this is the only step needed in MSVC and buidltools)
+        return self.debug_files_list(only_existing=True)
+
     def _install_srcdir_license(self, lfiles, install_dir):
-        '''
+        """
         Copy specific licenses from the project's source dir. Used for BSD,
         MIT, and other licenses which have copyright headers that are important
         to fulfilling the licensing terms.
-        '''
+        """
         files = []
         for f in lfiles:
             fname = f.replace('/', '_')
             if fname == LICENSE_INFO_FILENAME:
-                raise RuntimeError('{}.recipe: license file collision: {!r}'
-                                   .format(self.name, LICENSE_INFO_FILENAME))
+                raise RuntimeError('{}.recipe: license file collision: {!r}'.format(self.name, LICENSE_INFO_FILENAME))
             dest = str(install_dir / fname)
 
-            src = os.path.join(self.config_src_dir, f)
+            src = os.path.join(self.src_dir, f)
             if shell.DRY_RUN:
                 print('Copying {!r} to {!r}'.format(src, dest))
             else:
@@ -622,18 +838,20 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
         return files
 
     def _install_datadir_license(self, lobj, install_dir):
-        '''
+        """
         Copy generic licenses from the cerbero licenses datadir.
-        '''
+        """
         if lobj == License.Proprietary:
             # No license file needed, binaries will not be publicly redistributed
             return []
-        if lobj == License.PublicDomain:
+        if lobj == License.Sqlite:
             return []
         if lobj.acronym.startswith(('BSD', 'MIT')):
-            msg = '{}.recipe: must specify the license file for BSD and MIT licenses ' \
-                'using a dict of the form: ' \
+            msg = (
+                '{}.recipe: must specify the license file for BSD and MIT licenses '
+                'using a dict of the form: '
                 "{License.enum: ['path-to-license-file-in-source-tree']}"
+            )
             raise RuntimeError(msg.format(self.name))
         fname = lobj.acronym + '.txt'
         dest = str(install_dir / fname)
@@ -658,11 +876,11 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
             lfiles = []
             if isinstance(each, dict):
                 for lobj, value in each.items():
-                    assert(isinstance(lobj, LicenseDescription))
+                    assert isinstance(lobj, LicenseDescription)
                     if value is None:
                         lfiles += self._install_datadir_license(lobj, install_dir)
                     else:
-                        assert(isinstance(value, list))
+                        assert isinstance(value, list)
                         lfiles += self._install_srcdir_license(value, install_dir)
             elif isinstance(each, LicenseDescription):
                 lfiles = self._install_datadir_license(each, install_dir)
@@ -672,11 +890,11 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
         return licenses_files
 
     def install_licenses(self):
-        '''
+        """
         NOTE: This list of licenses is only indicative and is not guaranteed to
         match the actual licenses and copyright headers you need to display in
         your application or adhere to during license compliance.
-        '''
+        """
         install_dir = Path(self.config.prefix) / 'share' / 'licenses' / self.name
         # Install licenses for libraries
         if isinstance(self.licenses, list):
@@ -698,29 +916,36 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
             raise AssertionError('{}.recipe: unknown licenses_bins type'.format(self.name))
 
     def post_install(self):
-        '''
+        """
         Runs post installation steps
-        '''
-        self.fixup_pc_files()
-        if self.name.startswith('gst'):
-            self.generate_gst_la_files()
+        """
         self.install_licenses()
+        if (
+            self.config.variants.python
+            and (self.config.target_distro == Distro.DEBIAN or self.config.target_platform == Platform.DARWIN)
+            and hasattr(self, 'files_python')
+        ):
+            self.relocate_site_packages()
+        # FIXME: remove once 1.26 is published
+        if self.name.startswith('gst') and self.config.target_platform == Platform.ANDROID:
+            self.generate_gst_la_files()
+        self.fixup_pc_files()
 
     def built_version(self):
-        '''
+        """
         Gets the current built version of the recipe.
         Sources can override it to provide extended info in the version
         such as the commit hash for recipes using git and building against
         master: eg (1.2.0~git+2345435)
-        '''
+        """
         if hasattr(self.stype, 'built_version'):
             return self.stype.built_version(self)
         return self.version
 
     def list_deps(self):
-        '''
+        """
         List all dependencies including conditional dependencies
-        '''
+        """
         deps = []
         deps.extend(self.deps)
         if self.config.target_platform in self.platform_deps:
@@ -732,11 +957,11 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
 
     @staticmethod
     def flatten_licenses(licenses):
-        '''
+        """
         self.licenses* can be arrays of LicenseDescription or arrays of dicts
         with LicenseDescription as keys. Flatten that to just get a list of
         licenses.
-        '''
+        """
         flattened = []
         for each in licenses:
             if isinstance(each, LicenseDescription):
@@ -751,8 +976,7 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
         licenses = {}
         for c in categories:
             if c in licenses:
-                raise Exception('multiple licenses for the same category %s '
-                                'defined' % c)
+                raise Exception('multiple licenses for the same category %s ' 'defined' % c)
 
             if not c:
                 licenses[None] = self.flatten_licenses(self.licenses)
@@ -763,65 +987,64 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
             if hasattr(self, attr):
                 licenses[c] = self.flatten_licenses(getattr(self, attr))
             elif hasattr(self, platform_attr):
-                l = getattr(self, platform_attr)
-                licenses[c] = self.flatten_licenses(l.get(self.platform, []))
+                license = getattr(self, platform_attr)
+                licenses[c] = self.flatten_licenses(license.get(self.platform, []))
             else:
                 licenses[c] = self.flatten_licenses(self.licenses)
         return licenses
 
     def gen_library_file(self, output_dir=None):
-        '''
+        """
         Generates library files (.lib or .dll.a) for the DLLs provided by this recipe
-        '''
+        """
         # Don't need import libraries for runtime-only deps
         if self.runtime_dep:
             return
-        # Don't need to generate .dll.a import libraries when building for UWP
-        if self.using_uwp():
-            return
         if output_dir is None:
-            output_dir = os.path.join(self.config.prefix,
-                                      'lib' + self.config.lib_suffix)
+            output_dir = os.path.join(self.config.prefix, 'lib' + self.config.lib_suffix)
         # Generate a GNU import library or an MSVC import library
         genlibcls = GenGnuLib if self.using_msvc() else GenLib
         genlib = genlibcls(self.config, self.logfile)
         # Generate the .dll.a or .lib file as needed
-        for (libname, dllpaths) in list(self.libraries().items()):
+        for libname, dllpaths in list(self.libraries().items()):
             if len(dllpaths) > 1:
-                m.warning("BUG: Found multiple DLLs for libname {!r}:\n{}".format(libname, '\n'.join(dllpaths)))
+                m.warning('BUG: Found multiple DLLs for libname {!r}:\n{}'.format(libname, '\n'.join(dllpaths)))
                 continue
             if len(dllpaths) == 0:
-                m.warning("Could not create import library for {!r}, no matching DLLs found".format(libname))
+                m.warning('Could not create import library for {!r}, no matching DLLs found'.format(libname))
                 continue
             try:
-                implib = genlib.create(libname,
+                implib = genlib.create(
+                    libname,
                     os.path.join(self.config.prefix, dllpaths[0]),
-                    self.config.platform, self.config.target_arch,
-                    output_dir)
+                    self.config.platform,
+                    self.config.target_arch,
+                    output_dir,
+                )
                 logging.debug('Created %s' % implib)
             except FatalError as e:
-                m.warning("Could not create {!r}: {}".format(genlib.filename, e.msg))
+                m.warning('Could not create {!r}: {}'.format(genlib.filename, e.msg))
 
     def recipe_dir(self):
-        '''
+        """
         Gets the directory path where this recipe is stored
 
         @return: directory path
         @rtype: str
-        '''
+        """
         return os.path.dirname(self.__file__)
 
     def relative_path(self, path):
-        '''
+        """
         Gets a path relative to the recipe's directory
 
         @return: absolute path relative to the pacakge's directory
         @rtype: str
-        '''
+        """
         return os.path.abspath(os.path.join(self.recipe_dir(), path))
 
     def get_checksum(self):
-        '''
+        """
         Returns the current checksum of the recipe file and other files
         it depends on, like patches.
         This checksum is used in the cache to determine if a
@@ -829,52 +1052,55 @@ SOFTWARE LICENSE COMPLIANCE.\n\n'''
 
         @return: a checksum of the recipe file and its dependencies
         @rtype: str
-        '''
+        """
         return shell.files_checksum(self._get_files_dependencies())
 
     def get_mtime(self):
-        '''
+        """
         Returns the recipe last modification time, including the dependent
         files
 
         @return: last modification time
         @rtype: str
-        '''
-        return  max(map(os.path.getmtime, self._get_files_dependencies()))
+        """
+        return max(map(os.path.getmtime, self._get_files_dependencies()))
 
     @property
     def steps(self):
         return self._steps
 
     def get_for_arch(self, arch, name):
-        return getattr (self, name)
+        return getattr(self, name)
 
 
 class MetaUniversalRecipe(type):
-    '''
+    """
     Wraps all the build steps for the universal recipe to be called for each
     one of the child recipes.
-    '''
+    """
 
     def __init__(cls, name, bases, ns):
         step_func = ns.get('_do_step')
         for _, step in BuildSteps():
+
             async def doit(recipe, step_name=step):
                 ret = step_func(recipe, step_name)
                 if asyncio.iscoroutine(ret):
-                    await ret
+                    ret = await ret
+                return ret
+
             if step_func:
                 setattr(cls, step, doit)
 
 
 class BaseUniversalRecipe(object, metaclass=MetaUniversalRecipe):
-    '''
+    """
     Stores similar recipe objects that are going to be built together
 
     Useful for the universal architecture, where the same recipe needs
     to be built for different architectures before being merged. For the
     other targets, it will likely be a unitary group
-    '''
+    """
 
     def __init__(self, config):
         self._config = config
@@ -888,15 +1114,15 @@ class BaseUniversalRecipe(object, metaclass=MetaUniversalRecipe):
         return super(UniversalRecipe, self).__str__()
 
     def add_recipe(self, recipe):
-        '''
+        """
         Adds a new recipe to the group
-        '''
+        """
         if self._proxy_recipe is None:
             self._proxy_recipe = recipe
         else:
             for attr in ('name', 'deps', 'platform_deps'):
                 if getattr(recipe, attr) != getattr(self._proxy_recipe, attr):
-                    raise FatalError(_("Recipes must have the same " + attr))
+                    raise FatalError(N_('Recipes must have the same ' + attr))
         self._recipes[recipe.config.target_arch] = recipe
 
     def is_empty(self):
@@ -904,9 +1130,13 @@ class BaseUniversalRecipe(object, metaclass=MetaUniversalRecipe):
 
     def __getattr__(self, name):
         if not self._proxy_recipe:
-            raise AttributeError(_("Attribute %s was not found in the "
-                "Universal recipe, which is empty. You might need to add a "
-                "recipe first."))
+            raise AttributeError(
+                N_(
+                    'Attribute %s was not found in the '
+                    'Universal recipe, which is empty. You might need to add a '
+                    'recipe first.' % name
+                )
+            )
         return getattr(self._proxy_recipe, name)
 
     def __setattr__(self, name, value):
@@ -922,13 +1152,12 @@ class BaseUniversalRecipe(object, metaclass=MetaUniversalRecipe):
         return self._proxy_recipe.steps[:]
 
     async def _do_step(self, step):
-
         async def _async_run_step(recipe, step, arch):
             # Call the step function
             stepfunc = getattr(recipe, step)
             try:
                 ret = stepfunc()
-                if asyncio.iscoroutine (ret):
+                if asyncio.iscoroutine(ret):
                     await ret
             except FatalError as e:
                 e.arch = arch
@@ -948,49 +1177,55 @@ class BaseUniversalRecipe(object, metaclass=MetaUniversalRecipe):
 
         tasks = []
         for arch, recipe in self._recipes.items():
-            if step in (BuildSteps.CONFIGURE[1],) \
-               or (step == BuildSteps.EXTRACT[1] \
-                   and self.stype in (source.SourceType.TARBALL,)) \
-               or (step == BuildSteps.COMPILE[1] \
-                   and self.btype == build.BuildType.CARGO_C):
+            if (
+                step in (BuildSteps.CONFIGURE[1],)
+                or (step == BuildSteps.EXTRACT[1] and self.stype in (source.SourceType.TARBALL,))
+                or (step == BuildSteps.COMPILE[1] and self.btype == build.BuildType.CARGO_C)
+            ):
                 tasks.append(asyncio.ensure_future(_async_run_with_lock(recipe, step, arch)))
             else:
                 await _async_run_step(recipe, step, arch)
         if tasks:
-            await run_tasks (tasks)
+            await run_tasks(tasks)
 
     def get_for_arch(self, arch, name):
         if arch:
-            return getattr (self._recipes[arch], name)
+            return getattr(self._recipes[arch], name)
         else:
-            return getattr (self, name)
+            return getattr(self, name)
 
 
 class UniversalRecipe(BaseUniversalRecipe, UniversalFilesProvider):
-    '''
+    """
     Unversal recipe for Android with subdirs for each architecture
-    '''
+    """
 
     def __init__(self, config):
         super().__init__(config)
         UniversalFilesProvider.__init__(self, config)
 
 
-class UniversalFlatRecipe(BaseUniversalRecipe, UniversalFlatFilesProvider):
-    '''
-    Unversal recipe for iOS and OS X creating flat libraries
+class UniversalMergedRecipe(BaseUniversalRecipe, UniversalMergedFilesProvider):
+    """
+    Unversal recipe for iOS and OS X creating merged (fat) libraries
     in the target prefix instead of subdirs for each architecture
-    '''
+    """
 
     def __init__(self, config):
         super().__init__(config)
-        UniversalFlatFilesProvider.__init__(self, config)
+        UniversalMergedFilesProvider.__init__(self, config)
 
     @property
     def steps(self):
         if self.is_empty():
             return []
-        return self._proxy_recipe.steps[:] + [BuildSteps.MERGE]
+        s = self._proxy_recipe.steps[:]
+        s.append(BuildSteps.MERGE)
+        if BuildSteps.DSYMUTIL in s:
+            # Must be the last step
+            s.remove(BuildSteps.DSYMUTIL)
+            s.append(BuildSteps.DSYMUTIL)
+        return s
 
     # The two following steps are not wrapped by the metaclass
     # because they are not part of the default set.
@@ -1005,7 +1240,80 @@ class UniversalFlatRecipe(BaseUniversalRecipe, UniversalFlatFilesProvider):
         for _arch, recipe in self._recipes.items():
             recipe.relocate_osx_libraries()
 
+    def symbolicate(self):
+        if BuildSteps.DSYMUTIL in self.skip_steps:
+            return
+
+        archs = {k: Path(v.config.prefix) for k, v in self._recipes.items()}
+
+        for _, recipe in self._recipes.items():
+            recipe.symbolicate()
+
+        if len(archs) == 1:
+            return
+
+        if not Platform.is_apple(self.config.target_platform):
+            raise FatalError('Can only run Mach-O symbolication on Apple platforms')
+
+        # Calls up to the shim -- see the note above code_sign
+        auto_sym, manual_sym = self._symbolicable_files()
+        auto_sym = dsymutil.symbolicable_files(auto_sym, self.config.prefix, self.config.target_platform)
+        manual_sym = dsymutil.symbolicable_files(manual_sym, self.config.prefix, self.config.target_platform)
+
+        # We must generate the dSYM from the fat binary
+        # https://issues.chromium.org/issues/41243372#comment7
+        dsymutil.symbolicate_macho_files(auto_sym, logfile=self.logfile, env=self.env)
+        # The foo.dSYM/Contents/Resources/DWARF member must be
+        # lipo'd, the rest can be copied in place
+        # NOTE: the name of gst-dots-viewer (and other rustc-only, Meson-built
+        # executables) needs to be corrected to read the executable name,
+        # without the disambiguation hash
+        for sym in manual_sym:
+            # The prefix here comes from the proxy recipe
+            symbol_name = sym.with_suffix(sym.suffix + '.dSYM').relative_to(self.config.prefix)
+            symbol_srcs = [prefix.joinpath(symbol_name) for _, prefix in archs.items()]
+            output_dir = Path(self.config.prefix, symbol_name)
+            # Correct naming for rustc built binaries
+            canonical_name = sym.name
+            # Copy the info.plist
+            shutil.rmtree(output_dir, ignore_errors=True)
+            info_plist = symbol_srcs[0] / 'Contents' / 'Info.plist'
+            contents_dir = output_dir / 'Contents'
+            contents_dir.mkdir(parents=True)
+            shutil.copy(info_plist, contents_dir)
+            # Copy the Resources/Relocations folder
+            relocations_dir = contents_dir / 'Resources' / 'Relocations'
+            for f in symbol_srcs:
+                src = f / 'Contents' / 'Resources' / 'Relocations'
+                # m.log(f'Mirroring {src} to {relocations_dir}', logfile=self.logfile)
+                shutil.copytree(src, relocations_dir, dirs_exist_ok=True)
+            # now edit the .yml and change the line
+            # binary-path:     '<path to Cerbero sources folder>/darwin_universal/<arch>/<package-version>/_builddir/<triplet>/release/deps/libgstaws.dylib'
+            # to read the manual_sym path
+            for f in relocations_dir.glob('**/*.yml'):
+                src = open(f, 'r', encoding='utf-8').read()
+                src = re.sub(r"binary-path:(\s+)'.+'", rf"binary-path:\1'{sym}'", src, count=1)
+                open(f, 'w', encoding='utf-8').write(src)
+            # lipo now!
+            dwarf_dir = contents_dir / 'Resources' / 'DWARF'
+            dwarf_dir.mkdir(parents=True)
+            dwarf_name = dwarf_dir.relative_to(output_dir)
+            input_pairs = zip(*[f.joinpath(dwarf_name).glob('*') for f in symbol_srcs])
+            for inputs in input_pairs:
+                shell.new_call(
+                    ['lipo', *inputs, '-create', '-output', canonical_name],
+                    cmd_dir=dwarf_dir,
+                    env=self.env,
+                    logfile=self.logfile,
+                )
+
+        # Runs the validation and prints missing files warning
+        # return self.debug_files_list()
+
     async def merge(self):
+        if BuildSteps.MERGE in self.skip_steps:
+            return
+
         arch_inputs = {}
         for arch, recipe in self._recipes.items():
             arch_inputs[arch] = set(recipe.files_list())
@@ -1028,3 +1336,94 @@ class UniversalFlatRecipe(BaseUniversalRecipe, UniversalFlatFilesProvider):
         # merge the architecture specific files
         for f, archs in arch_files.items():
             await generator.merge_files([f], [recipe.config.prefix for arch, recipe in archs])
+
+
+def import_recipe(file, class_name='Recipe'):
+    """
+    Mechanism to load a recipe from other file in order to inherit from it
+    @file The path where the .recipe file is
+    @class_name The recipe to return, by default 'Recipe'
+    """
+    upframe = inspect.stack()[1].frame
+    new_globals = upframe.f_globals.copy()
+    new_globals['__file__'] = file
+    exec(open(file).read(), new_globals)
+    recipe_class = new_globals[class_name]
+    # Cerbero checks for the __module__ being 'builtins' in order to load it again
+    recipe_class.__module__ = None
+    return recipe_class
+
+
+class SystemRecipe(Recipe):
+    name = None
+    # min_version can be a str to use the same version with all the pkgconfig
+    # files or a dict where the key in the pkgconfig_file and the version
+    min_version = None
+    pkgconfig_files = None
+    stype = source.SourceType.CUSTOM
+
+    def __init__(self, config, env):
+        self.library_type = LibraryType.NONE
+        self._steps = [BuildSteps.INSTALL]
+        self.__file__ = __file__
+        self.pkgconfig_files = self.pkgconfig_files or []
+        self.deps = []
+        self.platform_deps = {}
+        self.config = config
+        FilesProvider.__init__(self, config)
+        if config.cross_compiling():
+            raise InvalidRecipeError(self, 'System recipes cannot be used when cross-compiling')
+        self._validate_and_ensure_version()
+
+    def get_checksum(self):
+        return self.name
+
+    def built_version(self):
+        "system"
+
+    def fetch(self):
+        """Needed because fetch-bootstrap"""
+        pass
+
+    def install(self):
+        self._copy_pcfiles()
+
+    def get_mtime(self):
+        return os.path.getmtime(self.__file__)
+
+    def _copy_pcfiles(self):
+        for pkgconfig_file in self.pkgconfig_files:
+            self._copy_pcfile(pkgconfig_file)
+
+    def _copy_pcfile(self, pkgconfig_file):
+        custom_pkg_config_path = self.config.get_custom_pkg_config_path()
+
+        pc_path = get_system_pc_path(self.config, pkgconfig_file)
+        dest = os.path.join(custom_pkg_config_path, os.path.basename(pc_path))
+
+        if not os.path.exists(custom_pkg_config_path):
+            os.makedirs(custom_pkg_config_path)
+
+        if os.path.exists(dest):
+            # Force delete to avoid FileExistsError
+            os.unlink(dest)
+
+        shell.symlink(pc_path, dest)
+
+    def _validate_and_ensure_version(self):
+        for pkgconfig_file in self.pkgconfig_files:
+            try:
+                get_system_pc_path(self.config, pkgconfig_file)
+            except FatalError:
+                raise InvalidRecipeError(self, f'{pkgconfig_file} not found in the system and required by {self.name}')
+            if not self.min_version:
+                return
+            lib = PkgConfig(pkgconfig_file)
+            version = lib.modversion()
+            if split_version(version) < split_version(self.min_version):
+                raise InvalidRecipeError(
+                    self, f'System pkgconfig file {pkgconfig_file} is too old ({version} < {self.min_version})'
+                )
+
+    def __repr__(self):
+        return '<SystemRecipe %s>' % self.name

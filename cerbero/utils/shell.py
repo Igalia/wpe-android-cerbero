@@ -16,41 +16,35 @@
 # Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 # Boston, MA 02111-1307, USA.
 
-import logging
 import subprocess
 import asyncio
 import sys
 import os
 import re
-import tarfile
 import zipfile
 import tempfile
 import time
 import glob
 import shutil
 import hashlib
-import urllib.request
-import urllib.error
 import collections
-from pathlib import Path, PurePath
+from pathlib import Path
 
 from cerbero.enums import CERBERO_VERSION, Platform, Distro
-from cerbero.utils import _, system_info, split_version, CerberoSemaphore
+from cerbero.utils import _, system_info, split_version, to_winpath, verify_checksum
+from cerbero.utils import CerberoSemaphore
 from cerbero.utils import messages as m
-from cerbero.utils import to_winpath
-from cerbero.errors import CommandError, FatalError
+from cerbero.utils.tar import Tar
+from cerbero.errors import CommandError, FatalError, ChecksumError
 
 
 PATCH = 'patch'
-TAR = 'tar'
-HOMEBREW_TAR = 'gtar'
-TARBALL_SUFFIXES = ('tar.gz', 'tgz', 'tar.bz2', 'tbz2', 'tar.xz')
 SUBPROCESS_EXCEPTIONS = (FileNotFoundError, PermissionError, subprocess.CalledProcessError)
 
-info = system_info()
-PLATFORM = info[0]
-DISTRO = info[2]
-CPU_BOUND_SEMAPHORE = CerberoSemaphore(info[4])
+_info = system_info()
+PLATFORM = _info[0]
+DISTRO = _info[3]
+CPU_BOUND_SEMAPHORE = CerberoSemaphore(_info[5])
 NON_CPU_BOUND_SEMAPHORE = CerberoSemaphore(2)
 DRY_RUN = False
 
@@ -196,23 +190,40 @@ def check_output(cmd, cmd_dir=None, fail=True, logfile=None, env=None, quiet=Fal
 
     if sys.stdout.encoding:
         o = o.decode(sys.stdout.encoding, errors='replace')
+    elif isinstance(o, bytes):
+        o = o.decode()
     return o
 
 
-def new_call(cmd, cmd_dir=None, fail=True, logfile=None, env=None, verbose=False, interactive=False, shell=False):
+def new_call(
+    cmd, cmd_dir=None, fail=True, logfile=None, env=None, verbose=False, interactive=False, shell=False, input=None
+):
     cmd = _cmd_string_to_array(cmd, env)
     if logfile:
-        logfile.write(f'Running command {cmd!r} in {cmd_dir}\n')
+        if input:
+            logfile.write(f'Running command {cmd!r} with stdin {input} in {cmd_dir}\n')
+        else:
+            logfile.write(f'Running command {cmd!r} in {cmd_dir}\n')
         logfile.flush()
     if verbose:
         m.message('Running {!r}\n'.format(cmd))
-    if not interactive:
+    if input:
+        stdin = None
+    elif not interactive:
         stdin = subprocess.DEVNULL
     else:
         stdin = None
     try:
         subprocess.run(
-            cmd, cwd=cmd_dir, env=env, stdout=logfile, stderr=subprocess.STDOUT, stdin=stdin, shell=shell, check=True
+            cmd,
+            cwd=cmd_dir,
+            env=env,
+            stdout=logfile,
+            stderr=subprocess.STDOUT,
+            stdin=stdin,
+            input=input,
+            shell=shell,
+            check=True,
         )
     except SUBPROCESS_EXCEPTIONS as e:
         returncode = getattr(e, 'returncode', -1)
@@ -293,30 +304,15 @@ async def async_call_output(cmd, cmd_dir=None, logfile=None, cpu_bound=True, env
             logfile.write(f'Running command {cmd!r} in {cmd_dir}\n')
             logfile.flush()
 
-        if PLATFORM == Platform.WINDOWS:
-            import cerbero.hacks
-
-            # On Windows, create_subprocess_exec with a PIPE fails while creating
-            # a named pipe using tempfile.mktemp because we override os.path.join
-            # to use / on Windows. Override the tempfile module's reference to the
-            # original implementation, then change it back later so it doesn't leak.
-            # XXX: Get rid of this once we move to Path.as_posix() everywhere
-            tempfile._os.path.join = cerbero.hacks.oldjoin
-            # The tempdir is derived from TMP and TEMP which use / as the path
-            # separator, which fails for the same reason as above. Ensure that \ is
-            # used instead.
-            tempfile.tempdir = str(PurePath(tempfile.gettempdir()))
-
         proc = await asyncio.create_subprocess_exec(
             *cmd, cwd=cmd_dir, stdout=subprocess.PIPE, stderr=logfile, stdin=subprocess.DEVNULL, env=env
         )
         (output, unused_err) = await proc.communicate()
 
-        if PLATFORM == Platform.WINDOWS:
-            os.path.join = cerbero.hacks.join
-
         if sys.stdout.encoding:
             output = output.decode(sys.stdout.encoding, errors='replace')
+        elif isinstance(output, bytes):
+            output = output.decode()
 
         if proc.returncode != 0:
             raise CommandError(output, cmd, proc.returncode)
@@ -339,7 +335,7 @@ def apply_patch(patch, directory, strip=1, logfile=None):
     new_call([PATCH, f'-p{strip}', '-f', '-i', patch], cmd_dir=directory, logfile=logfile)
 
 
-async def unpack(filepath, output_dir, logfile=None, force_tarfile=False):
+async def unpack(filepath, output_dir, logfile=None):
     """
     Extracts a tarball
 
@@ -347,23 +343,11 @@ async def unpack(filepath, output_dir, logfile=None, force_tarfile=False):
     @type filepath: str
     @param output_dir: output directory
     @type output_dir: str
-    @param force_tarfile: forces use of tarfile
-    @type force_tarfile: bool
     """
     m.log('Unpacking {} in {}'.format(filepath, output_dir), logfile)
 
-    if filepath.endswith(TARBALL_SUFFIXES):
-        # Recent versions of tar are much faster than the tarfile module, but we
-        # can't use tar on Windows because MSYS tar is ancient and buggy.
-        if DISTRO == Distro.MSYS or force_tarfile:
-            cmode = 'bz2' if filepath.endswith('bz2') else filepath[-2:]
-            tf = tarfile.open(filepath, mode='r:' + cmode)
-            tf.extractall(path=output_dir)
-        else:
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            await async_call([get_tar_cmd(), '-C', output_dir, '-xf', filepath, '--no-same-owner'])
-
+    if filepath.endswith(Tar.TARBALL_SUFFIXES):
+        await Tar(filepath).unpack(output_dir, logfile)
     elif filepath.endswith('.zip'):
         zf = zipfile.ZipFile(filepath, 'r')
         zf.extractall(path=output_dir)
@@ -371,8 +355,7 @@ async def unpack(filepath, output_dir, logfile=None, force_tarfile=False):
         out_dir_name = os.path.splitext(os.path.split(filepath)[1])[0]
         with tempfile.TemporaryDirectory() as vol_name:
             output_dir = os.path.join(output_dir, out_dir_name)
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
+            os.makedirs(output_dir, exist_ok=True)
             await async_call(
                 ['hdiutil', 'attach', '-readonly', '-mountpoint', vol_name, filepath], logfile=logfile, cpu_bound=False
             )
@@ -382,7 +365,7 @@ async def unpack(filepath, output_dir, logfile=None, force_tarfile=False):
         raise FatalError('Unknown tarball format %s' % filepath)
 
 
-async def download(url, dest, check_cert=True, overwrite=False, logfile=None, fallback_urls=None):
+async def download(url, dest, check_cert=True, overwrite=False, logfile=None, fallback_urls=None, checksum=None):
     """
     Downloads a file
 
@@ -403,14 +386,19 @@ async def download(url, dest, check_cert=True, overwrite=False, logfile=None, fa
         urls += fallback_urls
 
     if not overwrite and os.path.exists(dest):
-        if logfile is None:
-            logging.info('File %s already downloaded.' % dest)
-        return
-    else:
-        if not os.path.exists(os.path.dirname(dest)):
-            os.makedirs(os.path.dirname(dest))
-        m.log('Downloading {}'.format(url), logfile)
+        download = False
+        if checksum:
+            try:
+                verify_checksum(dest, checksum, logfile=logfile)
+            except ChecksumError:
+                download = True
+        if not download:
+            m.log(f'File {dest} already downloaded', logfile)
+            return
 
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+
+    MAX_TRIES = 1  # the command will retry
     if sys.platform.startswith('win'):
         cmd = [
             'powershell',
@@ -420,16 +408,7 @@ async def download(url, dest, check_cert=True, overwrite=False, logfile=None, fa
             f'Invoke-WebRequest -UserAgent {user_agent} -OutFile {dest} '
             '-Method Get -Uri %s',
         ]
-    elif shutil.which('wget2'):
-        cmd = ['wget2', '--user-agent', user_agent, '--tries=2', '--timeout=20', '-O', dest]
-        if not check_cert:
-            cmd += ['--no-check-certificate']
-        cmd += ['%s']
-    elif shutil.which('wget'):
-        cmd = ['wget', '--user-agent', user_agent, '--tries=2', '--timeout=20', '--progress=dot:giga', '-O', dest]
-        if not check_cert:
-            cmd += ['--no-check-certificate']
-        cmd += ['%s']
+        MAX_TRIES = 3  # Need to manually retry twice
     elif shutil.which('curl'):
         cmd = [
             'curl',
@@ -448,23 +427,63 @@ async def download(url, dest, check_cert=True, overwrite=False, logfile=None, fa
         if not check_cert:
             cmd += ['-k']
         cmd += ['%s']
+    elif shutil.which('wget2'):
+        cmd = ['wget2', '--user-agent', user_agent, '--tries=2', '--timeout=20', '-O', dest]
+        if not check_cert:
+            cmd += ['--no-check-certificate']
+        cmd += ['%s']
+    elif shutil.which('wget'):
+        cmd = ['wget', '--user-agent', user_agent, '--tries=2', '--timeout=20', '--progress=dot:giga', '-O', dest]
+        if not check_cert:
+            cmd += ['--no-check-certificate']
+        cmd += ['%s']
     else:
         raise FatalError('Need either wget or curl to download things')
 
     errors = []
     url_fmt = cmd[-1]
     cmd = cmd[:-1]
-    for murl in urls:
-        tries = 2
+    for idx, murl in enumerate(urls):
+        m.log(f'Downloading {murl}', logfile)
+        tries = MAX_TRIES
         while tries > 0:
             try:
-                return await async_call(cmd + [url_fmt % murl], cpu_bound=False, logfile=logfile)
+                await async_call(cmd + [url_fmt % murl], cpu_bound=False, logfile=logfile)
             except Exception as ex:
                 if os.path.exists(dest):
                     os.remove(dest)
                 tries -= 1
                 if tries == 0:
                     errors.append((murl, ex))
+                m.log(f'{murl} failed to download: {ex!r}', logfile)
+                continue
+
+            if checksum is not None:
+                try:
+                    verify_checksum(dest, checksum, url=murl, logfile=logfile)
+                except ChecksumError as exc:
+                    if checksum == '':
+                        # No expected checksum: we just want to get the
+                        # expected checksum. Return early.
+                        raise exc
+                    if idx == 0 and fallback_urls:
+                        m.action(f'{murl} failed checksum verification! Trying mirrors...')
+                    errors.append((murl, exc))
+                    # No point retrying on checksum failure. Try the next
+                    # URL (mirror). Sometimes the main URL is broken and
+                    # returns an error page or a broken tarball, or maybe
+                    # the URL is compromised.
+                    tries = 0
+                    continue
+            return
+
+    assert errors
+    # If all URLs failed to download, maybe it's a checksum error
+    for failed_url, error in errors:
+        if isinstance(error, ChecksumError):
+            error.other_errors = [(url, exc) for url, exc in errors if url != failed_url or exc is not error]
+            raise error
+
     if len(errors) == 1:
         errors = errors[0]
     raise FatalError('Failed to download {!r}: {!r}'.format(url, errors))
@@ -495,7 +514,7 @@ def ls_dir(dirpath, prefix):
         _root = root.split(prefix)[1]
         if _root[0] == '/':
             _root = _root[1:]
-        files.extend([os.path.join(_root, x) for x in filenames])
+        files.extend([Path(_root, x).as_posix() for x in filenames])
     return files
 
 
@@ -516,11 +535,13 @@ def replace(filepath, replacements):
 
 
 def find_files(pattern, prefix):
-    return glob.glob(os.path.join(prefix, pattern))
+    return glob.glob(Path(prefix, pattern).as_posix())
 
 
-def prompt(message, options=[]):
+def prompt(message, options=None):
     """Prompts the user for input with the message and options"""
+    if options is None:
+        options = []
     if len(options) != 0:
         message = '%s [%s] ' % (message, '/'.join(options))
     res = input(message)
@@ -540,16 +561,15 @@ def prompt_multiple(message, options):
     return options[int(res)]
 
 
-def copy_dir(src, dest):
+def copy_dir(src, dest, follow_symlinks=True):
     if not os.path.exists(src):
         return
     for path in os.listdir(src):
         s = os.path.join(src, path)
         d = os.path.join(dest, path)
-        if not os.path.exists(os.path.dirname(d)):
-            os.makedirs(os.path.dirname(d))
+        os.makedirs(os.path.dirname(d), exist_ok=True)
         if os.path.isfile(s):
-            shutil.copy(s, d)
+            shutil.copy(s, d, follow_symlinks=follow_symlinks)
         elif os.path.isdir(s):
             copy_dir(s, d)
 
@@ -646,16 +666,17 @@ C:\\msys64\\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -c '
             bat_tpl = MSYSBAT
         else:
             bat_tpl = MSYS2BAT
-        msysbatdir = tempfile.mkdtemp()
-        msysbat = os.path.join(msysbatdir, 'msys.bat')
-        bashrc = os.path.join(msysbatdir, 'bash.rc')
-        with open(msysbat, 'w+') as f:
-            f.write(bat_tpl % bashrc)
-        with open(bashrc, 'w+') as f:
-            f.write(shellrc)
-        subprocess.check_call(msysbat, shell=True, env=env)
-        # We should remove the temporary directory
-        # but there is a race with the bash process
+        with tempfile.TemporaryDirectory() as msysbatdir:
+            bashrc = Path(msysbatdir, 'bash.rc').as_posix()
+            with open(bashrc, 'w+') as f:
+                f.write(shellrc)
+            if os.environ['MSYSTEM'] == 'UCRT64':
+                subprocess.check_call([os.environ['SHELL'], '--rcfile', bashrc], shell=False, env=env)
+            else:
+                msysbat = os.path.join(msysbatdir, 'msys.bat')
+                with open(msysbat, 'w+') as f:
+                    f.write(bat_tpl % bashrc)
+                subprocess.check_call(msysbat, shell=True, env=env)
     else:
         with tempfile.TemporaryDirectory() as tmp:
             rc_tmp = open(os.path.join(tmp, rc_file), 'w+')
@@ -671,25 +692,6 @@ C:\\msys64\\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -c '
                 else:
                     env['CERBERO_ENV'] = '[cerbero-%s-%s]' % (platform, arch)
                     os.execlpe(shell, shell, env)
-
-
-def get_tar_cmd():
-    """
-    Returns the tar command to use
-
-    @return: the tar command
-    @rtype: str
-    """
-    # Use bsdtar with MSYS2 since tar hangs
-    # https://github.com/msys2/MSYS2-packages/issues/1548
-    if DISTRO == Distro.MSYS2:
-        return 'bsdtar'
-    # Allow using Homebrewed tar since it's GNU compatible
-    # (macOS uses FreeBSD tar)
-    elif shutil.which(HOMEBREW_TAR):
-        return HOMEBREW_TAR
-    else:
-        return TAR
 
 
 def get_path_minus_msys(path):

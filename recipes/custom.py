@@ -5,7 +5,7 @@ from collections import defaultdict
 from cerbero.build import recipe
 from cerbero.build.source import SourceType
 from cerbero.build.cookbook import CookBook
-from cerbero.enums import License, FatalError
+from cerbero.enums import CERBERO_VERSION, License, FatalError, Platform, Architecture
 
 
 def running_on_cerbero_ci():
@@ -21,7 +21,7 @@ def running_on_cerbero_ci():
 
 class GStreamer(recipe.Recipe):
     licenses = [License.LGPLv2Plus]
-    version = '1.24.8'
+    version = CERBERO_VERSION
     tagged_for_release = True
 
     # Decide what stype to use
@@ -57,8 +57,9 @@ class GStreamer(recipe.Recipe):
             # different subproject from it.
             subproject = self.name.replace('-1.0', '')
             self.repo_dir = os.path.abspath(os.path.join(self.config.local_sources, 'gstreamer-1.0'))
-            self.config_src_dir = os.path.abspath(os.path.join(self.config.sources, 'gstreamer-1.0'))
-            self.build_dir = os.path.join(self.config_src_dir, 'subprojects', subproject)
+            self.src_dir = os.path.abspath(os.path.join(self.config.sources, 'gstreamer-1.0'))
+            self.build_dir = os.path.join(self.src_dir, 'subprojects', subproject, 'b')
+            self.config_src_dir = os.path.join(self.src_dir, 'subprojects', subproject)
             # Force using the commit/remotes from 'gstreamer-1.0' recipe, if set
             # in the config, on all gstreamer recipes because they share the same
             # git repository.
@@ -147,7 +148,9 @@ def list_gstreamer_1_0_plugins_by_category(config):
         'gst-editing-services-1.0',
         'gst-rtsp-server-1.0',
     ]
-    if config.variants.rust:
+    if config.variants.rust and (
+        config.target_platform != Platform.WINDOWS or config.target_arch != Architecture.ARM64
+    ):
         recipes.append('gst-plugins-rs')
     for r in recipes:
         r = cookbook.get_recipe(r)
@@ -167,6 +170,9 @@ def list_gstreamer_1_0_plugins_by_category(config):
                 e = os.path.basename(e)
                 # Only pick static libs
                 if not e.endswith('.a'):
+                    continue
+                # and skip the melded gst-plugins-rs library
+                if 'rsworkspace' in e:
                     continue
                 if e.startswith('libgst'):
                     e = e[6:-2]

@@ -10,12 +10,12 @@ class Package(custom.GStreamer, package.Package):
     uuid = 'a2e545d5-7819-4636-9e86-3660542f08e5'
     deps = ['gstreamer-1.0-core', 'base-crypto']
 
-    files = ['dav1d:libs', 'flac:libs', 'libdv:libs',
-            'libogg:libs', 'speex:libs', 'libass:libs',
+    files = ['dav1d:libs', 'flac:libs', 'libdv:libs', 'lcevcdec:libs',
+            'fmt:libs', 'libogg:libs', 'speex:libs', 'libass:libs',
             'libtheora:libs', 'wavpack:libs', 'libvpx:libs',
-            'opus:libs', 'libvorbis:libs', 'openjpeg:libs',
+            'opus:libs', 'libvorbis:libs', 'openjpeg:libs', 'opencore-amr:libs',
             'openh264:libs', 'taglib:libs', 'tiff:libs', 'spandsp:libs',
-            'sbc:libs', 'mpg123:libs', 'lame:libs', 'zbar:libs',
+            'sbc:libs', 'mpg123:libs', 'lame:libs', 'zbar:libs', 'svt-av1:libs',
             'gst-plugins-base-1.0:plugins_codecs', 'gst-plugins-good-1.0:plugins_codecs',
             'gst-plugins-bad-1.0:plugins_codecs', 'gst-plugins-ugly-1.0:plugins_codecs',
             ]
@@ -32,21 +32,27 @@ class Package(custom.GStreamer, package.Package):
             self.files_devel.append('directxmath:files_devel')
             self.files_devel.append('directx-headers:files_devel')
 
-        if self.config.variants.vaapi:
-            self.files.append('gstreamer-vaapi-1.0:plugins_codecs')
-            self.files_devel.append('gstreamer-vaapi-1.0:plugins_codecs_devel')
-
-        if self.config.target_platform in (Platform.WINDOWS, Platform.ANDROID):
-            # Needed by zbar library
+        if self.config.target_platform == Platform.ANDROID:
+            # Needed by libass and zbar
             self.files.append('libiconv:libs')
 
-        if self.config.variants.rust:
+        if self.config.variants.rust and \
+           (self.config.target_platform != Platform.WINDOWS or \
+            self.config.target_arch != Architecture.ARM64):
             self.files.append('gst-plugins-rs:plugins_codecs')
             self.files_devel.append('gst-plugins-rs:plugins_codecs_devel')
 
-        if self.config.variants.uwp:
-            self.files = [
-                'libvpx:libs', 'openh264:libs', 'opus:libs',
-                'gst-plugins-base-1.0:plugins_codecs', 'gst-plugins-good-1.0:plugins_codecs',
-                'gst-plugins-bad-1.0:plugins_codecs', 'gst-plugins-ugly-1.0:plugins_codecs',
-            ]
+        if self.config.target_arch == Architecture.X86_64:
+            self.files.append('svt-jpeg-xs:libs')
+
+        if self.config.target_platform == Platform.WINDOWS:
+            if self.config.target_arch != Architecture.X86_64:
+                self.files.remove('lcevcdec:libs')
+            if self.config.target_arch == Architecture.ARM64:
+                # Needs libiconv, which needs MinGW
+                self.files.remove('zbar:libs')
+                # Needs MinGW
+                self.files.remove('mpg123:libs')
+            else:
+                # Needed by libass (optionally) and zbar
+                self.files.append('libiconv:libs')

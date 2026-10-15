@@ -53,7 +53,7 @@ class Package(Command):
                     default=False,
                     help=_(
                         '(only meaningfull when --tarball is set) Create one single '
-                        'tarball with devel and runtime files'
+                        'tarball with devel, runtime, and debug files'
                     ),
                 ),
                 ArgparseArgument(
@@ -85,6 +85,14 @@ class Package(Command):
                     ),
                 ),
                 ArgparseArgument(
+                    '--exclude',
+                    '-e',
+                    action='append',
+                    type=str,
+                    default=None,
+                    help=_('Recipes to exclude when building, only when using --only-build-deps'),
+                ),
+                ArgparseArgument(
                     '-k', '--keep-temp', action='store_true', default=False, help=_('Keep temporary files for debug')
                 ),
                 ArgparseArgument(
@@ -99,9 +107,9 @@ class Package(Command):
                 ArgparseArgument(
                     '--compress-method',
                     type=str,
-                    choices=['default', 'xz', 'bz2', 'none'],
+                    choices=['default', 'xz', 'bz2', 'zst', 'none'],
                     default='default',
-                    help=_('Select compression method for tarballs'),
+                    help=_('Select compression method when tarball output is selected with --tarball'),
                 ),
                 ArgparseArgument(
                     '--jobs',
@@ -110,6 +118,15 @@ class Package(Command):
                     type=int,
                     default=0,
                     help=_('How many recipes to build concurrently. ' '0 = number of CPUs.'),
+                ),
+                ArgparseArgument(
+                    '--artifact',
+                    type=str,
+                    choices=['tarball', 'msi', 'pkg', 'wheel', 'inno', 'xcframework'],
+                    default=None,
+                    help=_(
+                        'Select installation method (default is tarball for Linux and Android, msi for Windows, pkg for macOS and iOS)'
+                    ),
                 ),
             ],
         )
@@ -121,8 +138,11 @@ class Package(Command):
         if args.skip_deps_build and args.only_build_deps:
             raise UsageError(_('Cannot use --skip-deps-build together with ' '--only-build-deps'))
 
+        if args.exclude and not args.only_build_deps:
+            raise UsageError(_('Cannot use --exclude without --only-build-deps'))
+
         if not args.skip_deps_build:
-            self._build_deps(config, p, args.no_devel, args.offline, args.dry_run, args.jobs)
+            self._build_deps(config, p, args.no_devel, args.exclude, args.offline, args.dry_run, args.jobs)
 
         if args.only_build_deps or args.dry_run:
             return
@@ -136,21 +156,21 @@ class Package(Command):
 
         p.pre_package()
         packager_class = Packager
-        if args.tarball:
+
+        if args.tarball and args.artifact:
+            raise UsageError('Cannot mix --tarball with --artifact')
+
+        if args.tarball or args.artifact == 'tarball':
             if config.target_platform == Platform.ANDROID and config.target_arch == Architecture.UNIVERSAL:
                 packager_class = AndroidPackager
             else:
                 packager_class = DistTarball
-        elif config.variants.uwp:
-            # Split devel/runtime packages are useless for UWP since we will
-            # need both when building the package, and all needed runtime DLLs
-            # are packaged with the app as assets.
-            m.warning('Forcing single-tarball output for UWP package')
-            args.no_split = True
-            packager_class = DistTarball
 
         m.action(_('Creating package for %s') % p.name)
-        pkg = packager_class(config, p, self.store)
+        if packager_class == Packager:
+            pkg = packager_class(config, p, self.store, artifact_type=args.artifact)
+        else:
+            pkg = packager_class(config, p, self.store)
         output_dir = os.path.abspath(args.output_dir)
         if isinstance(pkg, DistTarball):
             paths = pkg.pack(
@@ -163,11 +183,14 @@ class Package(Command):
         paths = p.post_package(paths, output_dir) or paths
         m.action(_('Package successfully created in %s') % ' '.join([os.path.abspath(x) for x in paths]))
 
-    def _build_deps(self, config, package, has_devel, offline, dry_run, jobs):
+    def _build_deps(self, config, package, has_devel, exclude, offline, dry_run, jobs):
         build_command = build.Build()
+        deps = set(package.recipes_dependencies(has_devel))
+        if exclude:
+            deps.difference_update(exclude)
         build_command.runargs(
             config,
-            package.recipes_dependencies(has_devel),
+            deps,
             cookbook=self.store.cookbook,
             dry_run=dry_run,
             offline=offline,

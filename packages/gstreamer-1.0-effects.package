@@ -13,6 +13,8 @@ class Package(custom.GStreamer, package.Package):
     files = ['ladspa:libs',
              'libltc:libs',
              'soundtouch:libs',
+             'qrencode:libs',
+             'json-glib:libs',
              'webrtc-audio-processing:libs',
              'gst-plugins-base-1.0:plugins_effects',
              'gst-plugins-good-1.0:plugins_effects',
@@ -25,9 +27,11 @@ class Package(custom.GStreamer, package.Package):
             'gst-plugins-bad-1.0:plugins_effects_devel']
 
     def prepare(self):
-        if self.config.variants.uwp:
-            self.files.remove('ladspa:libs')
-
-        if self.config.variants.rust:
+        if self.config.variants.rust and \
+           (self.config.target_platform != Platform.WINDOWS or \
+            self.config.target_arch != Architecture.ARM64):
             self.files.append('gst-plugins-rs:plugins_effects')
             self.files_devel.append('gst-plugins-rs:plugins_effects_devel')
+
+        if not Platform.is_app_platform(self.config.target_platform):
+            self.files.append('frei0r-plugins:plugins')

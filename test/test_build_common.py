@@ -24,8 +24,15 @@ from cerbero.build import recipe
 from cerbero.utils import shell
 
 
-class Recipe1(recipe.Recipe):
+# We create a common Recipe to make the MetaRecipe do its magic
+# for recipes not named Recipe, like Recipe1
+class Recipe(recipe.Recipe):
+    pass
+
+
+class Recipe1(Recipe):
     name = 'recipe1'
+    version = '0.0.1'
     licence = 'LGPL'
     uuid = '1'
 
@@ -39,29 +46,33 @@ class Recipe1(recipe.Recipe):
     platform_files_libs = {Platform.WINDOWS: ['libgstreamer-win32'], Platform.LINUX: ['libgstreamer-x11']}
 
 
-class Recipe2(recipe.Recipe):
+class Recipe2(Recipe):
     name = 'recipe2'
+    version = '0.0.1'
     licence = 'GPL'
 
     files_misc = ['README2']
 
 
-class Recipe3(recipe.Recipe):
+class Recipe3(Recipe):
     name = 'recipe3'
+    version = '0.0.1'
     licences = 'BSD'
 
     files_misc = ['README3']
 
 
-class Recipe4(recipe.Recipe):
+class Recipe4(Recipe):
     name = 'recipe4'
+    version = '0.0.1'
     licence = 'LGPL'
 
     files_misc = ['README4']
 
 
-class Recipe5(recipe.Recipe):
+class Recipe5(Recipe):
     name = 'recipe5'
+    version = '0.0.1'
     licence = 'LGPL'
 
     files_libs = ['libtest']
@@ -69,7 +80,7 @@ class Recipe5(recipe.Recipe):
 
 def add_files(tmp):
     bindir = os.path.join(tmp, 'bin')
-    libdir = os.path.join(tmp, 'lib')
+    libdir = os.path.join(tmp, 'lib', 'x86_64-linux-gnu')
     gstlibdir = os.path.join(tmp, 'libexec', 'gstreamer-0.10')
     os.makedirs(bindir)
     os.makedirs(libdir)
@@ -90,30 +101,26 @@ def add_files(tmp):
         'bin/libgstreamer-0.10.dll '
         'bin/libgstreamer-win32.dll '
         'bin/libtest.dll '
-        'lib/libtest.so.1 '
-        'lib/libtest.la '
-        'lib/libtest.a '
-        'lib/libtest.so '
-        'lib/libtest.dll.a '
-        'lib/libtest.def '
-        'lib/test.lib '
-        'lib/libgstreamer-0.10.so.1 '
-        'lib/libgstreamer-0.10.la '
-        'lib/libgstreamer-0.10.a '
-        'lib/libgstreamer-0.10.so '
-        'lib/libgstreamer-0.10.dll.a '
-        'lib/gstreamer-0.10.lib '
-        'lib/libgstreamer-0.10.def '
-        'lib/libgstreamer-win32.la '
-        'lib/libgstreamer-win32.a '
-        'lib/libgstreamer-win32.so '
-        'lib/libgstreamer-win32.dll.a '
-        'lib/gstreamer-win32.lib '
-        'lib/libgstreamer-win32.def '
-        'lib/libgstreamer-x11.so.1 '
-        'lib/libgstreamer-x11.so '
-        'lib/libgstreamer-x11.a '
-        'lib/libgstreamer-x11.la '
+        'lib/x86_64-linux-gnu/libtest.so.1 '
+        'lib/x86_64-linux-gnu/libtest.a '
+        'lib/x86_64-linux-gnu/libtest.so '
+        'lib/x86_64-linux-gnu/libtest.dll.a '
+        'lib/x86_64-linux-gnu/libtest.def '
+        'lib/x86_64-linux-gnu/test.lib '
+        'lib/x86_64-linux-gnu/libgstreamer-0.10.so.1 '
+        'lib/x86_64-linux-gnu/libgstreamer-0.10.a '
+        'lib/x86_64-linux-gnu/libgstreamer-0.10.so '
+        'lib/x86_64-linux-gnu/libgstreamer-0.10.dll.a '
+        'lib/x86_64-linux-gnu/gstreamer-0.10.lib '
+        'lib/x86_64-linux-gnu/libgstreamer-0.10.def '
+        'lib/x86_64-linux-gnu/libgstreamer-win32.a '
+        'lib/x86_64-linux-gnu/libgstreamer-win32.so '
+        'lib/x86_64-linux-gnu/libgstreamer-win32.dll.a '
+        'lib/x86_64-linux-gnu/gstreamer-win32.lib '
+        'lib/x86_64-linux-gnu/libgstreamer-win32.def '
+        'lib/x86_64-linux-gnu/libgstreamer-x11.so.1 '
+        'lib/x86_64-linux-gnu/libgstreamer-x11.so '
+        'lib/x86_64-linux-gnu/libgstreamer-x11.a '
         'libexec/gstreamer-0.10/pluginsloader '
         'libexec/gstreamer-0.10/pluginsloader.exe ',
         tmp,
@@ -124,7 +131,7 @@ def create_cookbook(config):
     cb = CookBook(config, False)
 
     for klass in [Recipe1, Recipe2, Recipe3, Recipe4, Recipe5]:
-        r = klass(config)
+        r = klass(config, {})
         r.__file__ = 'test/test_build_common.py'
         cb.add_recipe(r)
     return cb

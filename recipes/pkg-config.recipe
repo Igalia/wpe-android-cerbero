@@ -9,7 +9,13 @@ class Recipe(recipe.Recipe):
     url = 'https://pkgconfig.freedesktop.org/releases/pkg-config-%(version)s.tar.gz'
     tarball_checksum = '6fc69c01688c9458a57eb9a1664c9aba372ccda420a02bf4429fe610e7e7d591'
     btype = BuildType.MESON
-    meson_options = {'host_tool': 'disabled', 'internal_glib': 'enabled'}
+    # Meson 1.9+ now overrides subproject's default options with cli ones
+    library_type = LibraryType.STATIC
+    meson_options = {
+        'host_tool': 'disabled',
+        'internal_glib': 'enabled',
+        'define_prefix': 'disabled',
+    }
 
     # We want to link these statically into pkg-config, so for proxy-libintl
     # don't use the existing recipe which will build only a shared version
@@ -26,10 +32,12 @@ class Recipe(recipe.Recipe):
         # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3237
         # backported into 2.74.6
         'pkg-config/0001-Fix-glib-build-on-Windows.patch',
+        # https://gitlab.freedesktop.org/gstreamer/cerbero/-/work_items/585
+        'pkg-config/0001-Always-use-as-dir-separator-on-Windows-and-escape-sp.patch',
     ]
 
     files_bins = ['pkg-config']
-    files_share = ['share/aclocal/pkg.m4']
+    files_devel = ['share/aclocal/pkg.m4']
 
     def prepare(self):
         if not self.using_msvc():

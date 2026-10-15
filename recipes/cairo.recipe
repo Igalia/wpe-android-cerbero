@@ -1,13 +1,12 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
 from cerbero.tools.libtool import LibtoolLibrary
-from cerbero.tools.libtool import get_libtool_versions
 
 class Recipe(recipe.Recipe):
     name = 'cairo'
-    version = '1.18.0'
+    version = '1.18.4'
     stype = SourceType.TARBALL
     url = 'https://cairographics.org/releases/cairo-%(version)s.tar.xz'
-    tarball_checksum = '243a0736b978a33dee29f9cca7521733b78a65b5418206fef7bd1c3d4cf10b64'
+    tarball_checksum = '445ed8208a6e4823de1226a74ca319d3600e83f6369f99b14265006599c32ccb'
     # Either LGPL-2.1+ or MPL-1.1
     licenses = [License.LGPLv2_1Plus, {License.MPLv1_1: ['COPYING-MPL-1.1']}]
     deps = ['glib', 'libpng', 'zlib', 'pixman', 'fontconfig', 'freetype']
@@ -18,14 +17,7 @@ class Recipe(recipe.Recipe):
         'tests': 'disabled',
         'xcb': 'disabled',
         'xlib': 'disabled'}
-    patches = [
-        'cairo/0001-cairo-ps-surface-fix-Walloc-size.patch',
-        'cairo/0001-Copy-font-options-during-creation-of-a-fallback-font.patch',
-        'cairo/0001-Fix-alloca-undefined-with-MSVC.patch',
-        'cairo/0001-Fix-surface-type-mismatch-error-in-pdf-interchange.patch',
-        'cairo/0001-quartz-Fix-Cairo-1.18.0-doesn-t-draw-italic-or-bold-.patch',
-        'cairo/0001-util-remove-malloc-stats.patch',
-    ]
+    patches = []
 
     files_libs = ['libcairo', 'libcairo-gobject', 'libcairo-script-interpreter']
     files_devel = [
@@ -76,6 +68,10 @@ class Recipe(recipe.Recipe):
                                     deps=['gobject-2.0', 'pixman-1', 'freetype', 'fontconfig', 'png16', 'z'])
         libtool_la.save()
         libtool_la = LibtoolLibrary('libcairo-gobject', None, None, None,
+                                    self.config.libdir, self.config.target_platform,
+                                    deps=['cairo', 'gobject-2.0', 'pixman-1', 'freetype', 'fontconfig', 'png16', 'z'])
+        libtool_la.save()
+        libtool_la = LibtoolLibrary('libcairo-script-interpreter', None, None, None,
                                     self.config.libdir, self.config.target_platform,
                                     deps=['cairo', 'gobject-2.0', 'pixman-1', 'freetype', 'fontconfig', 'png16', 'z'])
         libtool_la.save()

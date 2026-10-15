@@ -1,9 +1,10 @@
-from cerbero.config import Platform, Architecture, Distro, DistroVersion
+from cerbero.config import Platform, Subsystem, Architecture, Distro, DistroVersion
 
-target_platform=Platform.IOS
-target_arch=Architecture.UNIVERSAL
-target_distro=Distro.IOS
-universal_archs={
+target_platform = Platform.IOS
+target_subsystem = Subsystem.IOS # This is a lie
+target_arch = Architecture.UNIVERSAL
+target_distro = Distro.IOS
+universal_archs = {
     Architecture.ARM64 :  "cross-ios-arm64.cbc",
-    Architecture.X86_64 : "cross-ios-x86-64.cbc",
+    Architecture.X86_64 : "cross-ios-sim-x86-64.cbc",
 }

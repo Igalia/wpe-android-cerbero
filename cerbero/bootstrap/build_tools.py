@@ -17,6 +17,8 @@
 # Boston, MA 02111-1307, USA.
 
 import os
+import sys
+from pathlib import Path
 import venv
 import glob
 import shutil
@@ -26,7 +28,8 @@ from cerbero.build.oven import Oven
 from cerbero.build.cookbook import CookBook
 from cerbero.commands.fetch import Fetch
 from cerbero.utils import shell
-from cerbero.enums import Platform, Distro
+from cerbero.enums import Platform, Distro, Architecture
+from cerbero.utils import messages as m, split_version
 
 
 class BuildTools (BootstrapperBase, Fetch):
@@ -40,11 +43,23 @@ class BuildTools (BootstrapperBase, Fetch):
 
     def __init__(self, config, offline):
         BootstrapperBase.__init__(self, config, offline, None)
+        self._setup_build_tools_list()
+        self._setup_env()
+
+    def _setup_build_tools_list(self):
+        if self.config.override_build_tools:
+            if self.config.extra_build_tools:
+                m.warning('Ignoring "extra_build_tools" because "override_build_tools" is also defined')
+            self.BUILD_TOOLS = self.config.override_build_tools
+            return
 
         if self.config.variants.rust:
+            self.BUILD_TOOLS.append('bindgen-cli')
             self.BUILD_TOOLS.append('cargo-c')
 
-        if self.config.target_platform in (Platform.IOS, Platform.WINDOWS):
+        if self.config.target_platform == Platform.WINDOWS or Platform.is_apple_app_platform(
+            self.config.target_platform
+        ):
             # Used by ffmpeg and x264 on iOS, and by openh264 on Windows-ARM64
             self.BUILD_TOOLS.append('gas-preprocessor')
 
@@ -65,8 +80,10 @@ class BuildTools (BootstrapperBase, Fetch):
         if self.config.target_platform == Platform.WINDOWS and self.config.platform == Platform.LINUX:
             self.BUILD_TOOLS.append('wix')
 
+        if self.config.variants.rust:
+            self.BUILD_TOOLS.append('dragonfire')
+
         self.BUILD_TOOLS += self.config.extra_build_tools
-        self._setup_env()
 
     def check_build_tools(self):
         """
@@ -88,6 +105,21 @@ class BuildTools (BootstrapperBase, Fetch):
                     'nasm': ('2.13.02', '-v'),
                 }
             )
+        if self.config.platform == Platform.LINUX:
+            dn, dv = self.config.distro_version.split('_', 1)
+            dv = split_version(dv)
+            if dn == 'redhat' and dv < (9,):
+                tools.update(
+                    {
+                        # aws-lc-rs in rust needs 3.7.9 or higher because
+                        # of a GCC flag: https://github.com/ccache/ccache/issues/568
+                        # https://github.com/aws/aws-lc-rs/pull/1212
+                        'ccache': ('3.7.9', '--version')
+                    }
+                )
+        # Provided by Chocolatey -- see README and comment above
+        if self.config.platform == Platform.WINDOWS:
+            self.config.system_build_tools.append('cmake')
         for tool, (version, arg) in tools.items():
             _, _, newer = shell.check_tool_version(tool, version, env=None, version_arg=arg)
             if newer:
@@ -107,23 +139,42 @@ class BuildTools (BootstrapperBase, Fetch):
         python_glob = os.path.join(self.config.build_tools_prefix, 'bin', 'python*')
         for f in glob.glob(python_glob):
             os.remove(f)
+        m.action(f'Creating virtual env for Python {sys.version}')
         # Python relies on symlinks to work on macOS. See e.g.
         # https://github.com/python-poetry/install.python-poetry.org/issues/24#issuecomment-1226504499
         venv.create(self.config.build_tools_prefix, symlinks=self.config.platform != Platform.WINDOWS, with_pip=True)
+        # Need to set PYTHONPATH correctly on (at least) macOS to use the
+        # specified Python inside the venv for pip, but on Windows that
+        # completely breaks Python and it can't find pip.
+        python_env = self.config.env.copy()
         if self.config.platform == Platform.WINDOWS:
+            python_env = None
             # Python insists on using Scripts instead of bin on Windows for
             # scripts. Insist back, and use bin again.
             scriptsdir = os.path.join(self.config.build_tools_prefix, 'Scripts')
             bindir = os.path.join(self.config.build_tools_prefix, 'bin')
             os.makedirs(bindir, exist_ok=True)
-            for f in glob.glob('*', root_dir=scriptsdir):
-                tof = os.path.join(bindir, f)
+            for f in Path(scriptsdir).glob('*'):
+                tof = os.path.join(bindir, f.name)
                 if os.path.isfile(tof):
                     os.remove(tof)
-                shutil.move(os.path.join(scriptsdir, f), tof)
-            os.rmdir(scriptsdir)
+                shutil.move(f, tof)
+            if os.path.isdir(scriptsdir):
+                os.rmdir(scriptsdir)
         python = os.path.join(self.config.build_tools_prefix, 'bin', 'python')
-        shell.new_call([python, '-m', 'pip', 'install', 'setuptools'])
+        # pip == 26.0.1 as 26.1 removes support for Xcode's 3.9
+        # Required to avoid copying files to /tmp as that breaks CentOS.
+        # https://github.com/pypa/pip/issues/6265#issuecomment-524667548
+        shell.new_call(
+            [python, '-m', 'pip', 'install', '-U', 'setuptools==80.10.2', 'packaging', 'pip==26.0.1'], env=python_env
+        )
+        if self.config.platform == Platform.DARWIN and self.config.arch == Architecture.ARM64:
+            # Create an x86_64 python for introspection in universal builds
+            python_wrapper = os.path.join(self.config.build_tools_prefix, 'bin', 'python3-x86_64')
+            with open(python_wrapper, 'w') as f:
+                f.write('#!/bin/sh\n')
+                f.write(f'arch -x86_64 "{python}" "$@"\n')
+            os.chmod(python_wrapper, 0o755)
 
     async def start(self, jobs=0):
         self.setup_venv()

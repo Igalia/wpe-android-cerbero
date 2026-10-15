@@ -1,23 +1,26 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
-from custom import GStreamer
+from custom import GStreamer, running_on_cerbero_ci
+from cerbero.enums import DistroVersion, Symbolication
 from cerbero.errors import FatalError
+from cerbero.tools.pkgconfig import PkgConfigWriter
 from cerbero.utils import messages as m
-from cerbero.utils import shell, determine_num_cargo_jobs, determine_total_ram
+from cerbero.utils import shell
+from cerbero.utils.rust import Prelink
+
+import os
 from pathlib import Path
 import re
-import shutil
-import tempfile
 
 
 class Recipe(recipe.Recipe):
     name = 'gst-plugins-rs'
-    version = '0.12.9'
+    version = '0.15.4'
     stype = SourceType.GIT
     remotes = {'origin': 'https://gitlab.freedesktop.org/gstreamer/%(name)s.git'}
     if GStreamer.tagged_for_release:
         commit = f'gstreamer-{GStreamer.version}'
     else:
-        commit = 'origin/0.12'
+        commit = 'origin/0.15'
     # Each plugin uses one or more of these licenses.
     licenses = [{
         License.Apachev2: ['LICENSE-APACHE'],
@@ -27,32 +30,48 @@ class Recipe(recipe.Recipe):
 
     btype = BuildType.CARGO_C
     cargo_packages = [
+        'analytics',
         'audiofx',
+        'audioparsers',
         'aws',
+        'burn',
         'cdg',
         'claxon',
         'closedcaption',
         'dav1d',
+        'demucs',
+        'elevenlabs',
         'fallbackswitch',
         'ffv1',
-        'fmp4',
+        # 'file',
+        # 'flavors',
         'gif',
+        'gopbuffer',
+        'hlsmultivariantsink',
         'hlssink3',
         'hsv',
+        'icecast',
         'inter',
+        'isobmff',
         'json',
         'livesync',
         'lewton',
-        'mp4',
+        'mpegtslive',
         'ndi',
         'onvif',
+        'originalbuffer',
+        'png',
+        'quinn',
+        'raptorq',
         'rav1e',
         'regex',
         'reqwest',
-        'raptorq',
-        'png',
         'rtp',
         'rtsp',
+        # 'sodium',
+        'speechmatics',
+        # 'spotify',
+        'streamgrouper',
         'textahead',
         'textwrap',
         'threadshare',
@@ -60,27 +79,21 @@ class Recipe(recipe.Recipe):
         'tracers',
         'uriplaylistbin',
         'videofx',
+        # 'vvdec': added conditionally below
+        # 'webp',
         'webrtc',
         'webrtchttp',
     ]
 
-    # If the system has less than 8GB ram or less than 4 cores,
-    # block parallelism at both recipe and architectural level.
-    if determine_num_cargo_jobs() == 1:
-        allow_parallel_build = False
-        allow_universal_parallel_build = False
-    elif determine_total_ram() <= (32 << 30):
-        # gst-plugins-rs peaks at ~17GB per architectural build.
-        # Let's assume that > 32GB is enough, but that can be upped
-        # afterwards. Currently a 32GB box freezes when trying the
-        # universal build, as soon as it reaches the gstrswebrtc and
-        # gstaws crates.
-        allow_universal_parallel_build = False
+    deps = ['openssl', 'gstreamer-1.0', 'gst-plugins-base-1.0', 'gst-plugins-bad-1.0']
 
-    # Needed for openssl
-    use_system_libs = True
-    deps = ['gstreamer-1.0', 'gst-plugins-base-1.0', 'pango', 'cairo',
-        'gst-plugins-bad-1.0', 'dav1d']
+    files_libs = []
+
+    symbolication_patterns = {
+        # dragonfire generated library, static only
+        Symbolication.SKIP: ['rsworkspace'],
+        Symbolication.MANUAL: ['gstreamer-1.0/libgst']
+    }
 
     def enable_plugin(self, name, category):
         if self.library_type in (LibraryType.SHARED, LibraryType.BOTH):
@@ -90,305 +103,323 @@ class Recipe(recipe.Recipe):
                 self.update_categories()
             f = getattr(self, attr)
             f += [f'%(libdir)s/gstreamer-1.0/libgst{name}%(mext)s']
+        attr = f'files_plugins_{category}_devel'
+        if not hasattr(self, attr):
+            setattr(self, attr, [])
+        d = getattr(self, attr)
+        d.append(f'%(libdir)s/gstreamer-1.0/pkgconfig/gst{name}.pc')
         if self.library_type in (LibraryType.STATIC, LibraryType.BOTH):
-            attr = f'files_plugins_{category}_devel'
-            if not hasattr(self, attr):
-                setattr(self, attr, [])
-            d = getattr(self, attr)
             d += [
                 f'%(libdir)s/gstreamer-1.0/libgst{name}.a',
                 f'%(libdir)s/gstreamer-1.0/libgst{name}.la',
             ]
 
+    def requires_melding(self):
+        if Platform.is_apple(self.config.target_platform):
+            return False
+        return self.library_type in (LibraryType.STATIC, LibraryType.BOTH)
+
     def prepare(self):
-        if self.config.target_platform in (Platform.IOS, Platform.ANDROID):
+        if Platform.is_app_platform(self.config.target_platform):
             self.library_type = LibraryType.STATIC
         else:
             self.library_type = LibraryType.BOTH
 
-        if self.config.target_platform != Platform.LINUX or self.config.cross_compiling():
-            self.deps.append('openssl')
-
         plugin_files = {
-            'core': ['fallbackswitch', 'livesync', 'rsinter', 'rstracers',
-                     'threadshare', 'togglerecord'],
-            'net': ['aws', 'hlssink3', 'ndi', 'rsonvif', 'raptorq', 'reqwest',
-                    'rsrtp', 'rsrtsp', 'webrtchttp', 'rswebrtc'],
-            'effects': ['rsaudiofx', 'rsvideofx'],
-            'codecs': ['cdg', 'claxon', 'dav1d', 'rsclosedcaption', 'ffv1',
-                       'fmp4', 'mp4', 'gif', 'hsv', 'lewton', 'rav1e', 'json',
-                       'rspng', 'regex', 'textwrap', 'textahead'],
-            'playback': ['uriplaylistbin'],
+            'analytics': [
+                'rsanalytics',
+                'burn',
+            ],
+            'core': [
+                'fallbackswitch',
+                'gopbuffer',
+                'livesync',
+                'originalbuffer',
+                'rsinter',
+                'rstracers',
+                'streamgrouper',
+                'threadshare',
+                'togglerecord',
+            ],
+            'net': [
+                'aws',
+                'elevenlabs',
+                'hlssink3',
+                'hlsmultivariantsink',
+                'icecast',
+                'mpegtslive',
+                'ndi',
+                'quinn',
+                'rsonvif',
+                'raptorq',
+                'reqwest',
+                'rsrtp',
+                'rsrtsp',
+                'speechmatics', # in the audio subdir, but net seems most fitting
+                'webrtchttp',
+                'rswebrtc',
+            ],
+            'effects': [
+                'demucs',
+                'rsaudiofx',
+                'rsvideofx',
+            ],
+            'codecs': [
+                'rsaudioparsers',
+                'cdg',
+                'claxon',
+                'dav1d',
+                'rsclosedcaption',
+                'ffv1',
+                'gif',
+                'hsv',
+                'isobmff',
+                'lewton',
+                'rav1e',
+                'json',
+                'rspng',
+                'regex',
+                'textwrap',
+                'textahead',
+                # 'rswebp',
+            ],
+            'codecs_restricted': [
+                'vvdec',
+            ],
+            'playback': [
+                'uriplaylistbin',
+            ],
         }
+
+        if self.config.variants.gtk:
+            self.deps.append('gtk')
+            plugin_files['gtk4'] = ['gtk4']
+            self.cargo_packages += ['gtk4']
+
         for category, names in plugin_files.items():
             for name in names:
-                self.enable_plugin(name, category)
+                if Subsystem.is_apple_simulator(self.config.target_subsystem):
+                    if name == 'vvdec':
+                        # FIXME: bindgen needs to be upgraded in vvdec-sys
+                        # See:
+                        # - https://github.com/cadubentzen/vvdec-rs/blob/main/vvdec-sys/Cargo.toml#L13
+                        # - https://github.com/aws/aws-lc-rs/issues/761
+                        continue
+                package_name = name if name[0:2] != 'rs' else name[2:]
+                if package_name in self.cargo_packages:
+                    self.enable_plugin(name, category)
+
+        if 'dav1d' in self.cargo_packages:
+            self.deps.append('dav1d')
+
+        if 'onvif' in self.cargo_packages or 'closedcaption' in self.cargo_packages:
+            self.deps.append('pango')
+            self.deps.append('cairo')
+
+        if 'vvdec' in self.cargo_packages:
+            self.deps.append('vvdec')
 
         self.cargo_packages = [f'gst-plugin-{pkg}' for pkg in self.cargo_packages]
         # Build with Cerbero's latest glib version as minimum version
-        self.cargo_features += ['glib/v2_74', 'gio/v2_74']
-        # Enable assembly optimizations via nasm
-        self.cargo_features.append('gst-plugin-rav1e/asm')
+        if 'gst-plugin-gtk4' in self.cargo_packages:
+            self.cargo_features += ['glib/v2_74', 'gio/v2_74']
+        if 'gst-plugin-rav1e' in self.cargo_packages:
+            # Enable assembly optimizations via nasm
+            self.cargo_features.append('gst-plugin-rav1e/asm')
         # Build with the current GStreamer version as minimum version
         components = ('', '-app', '-audio', '-base', '-check', '-net', '-pbutils',
-                      '-plugin-tracers', '-rtp', '-sdp', '-utils', '-video', '-webrtc')
+                      '-rtp', '-sdp', '-utils', '-video', '-webrtc')
         for each in components:
             self.cargo_features.append(f'gst{each}/v1_22')
-        self.cargo_features.append('gst-plugin-webrtc/v1_22')
+        if 'gst-plugin-tracers' in self.cargo_packages:
+            self.cargo_features.append('gst-plugin-tracers/v1_22')
+        if 'gst-plugin-webrtc' in self.cargo_packages:
+            self.cargo_features.append('gst-plugin-webrtc/aws')
+            self.cargo_features.append('gst-plugin-webrtc/livekit')
+
+        if self.requires_melding():
+            self.workspace_lib = Path(self.config.libdir) / 'libgstrsworkspace.a'
+            # gstrsworkspace describes the dragonfire-melded workspace
+            # meta-library, not a GStreamer plugin (no gst_plugin_*_register
+            # entrypoint). Install its .pc under lib/pkgconfig/ rather than
+            # alongside the plugin .pc files in lib/gstreamer-1.0/pkgconfig/:
+            # consumers like gstreamer-sys's wildcard_plugins iterate that
+            # directory to populate gst_init_static_plugins and would try to
+            # register the meta-library, failing to link with LNK2019.
+            # Requires.private references injected into the plugin .pc files
+            # keep resolving via PKG_CONFIG_PATH, which carries both
+            # lib/pkgconfig/ and lib/gstreamer-1.0/pkgconfig/ by default.
+            self.workspace_pc = Path(self.config.libdir) / 'pkgconfig' / 'gstrsworkspace.pc'
+            # Append the melded library
+            self.files_devel.append('%(libdir)s/libgstrsworkspace.a')
+            self.files_devel.append('%(libdir)s/pkgconfig/gstrsworkspace.pc')
+            self.skip_pdb_files = ['%(libdir)s/libgstrsworkspace.a']
+
+        if self.config.platform == Platform.WINDOWS:
+            # For bindgen if it's needed
+            self.set_env('LIBCLANG_PATH', os.path.join(self.config.build_tools_prefix, 'bin', 'libclang.dll'))
+            # For aws-lc-rs -- uses CMake in the background
+            if self.using_msvc():
+                # MSVC is already set up
+                self.set_env('CMAKE_GENERATOR', 'Ninja')
+            else:
+                bindgen_args = [f'--sysroot={self.config.toolchain_prefix}/x86_64-w64-mingw32/sysroot/usr/{self.config.target}']
+                if 'gst-plugin-vvdec' in self.cargo_packages:
+                    # Use a header provided by gcc's stdlib to determine
+                    # stdbool.h's location
+                    include_folders = [f'-I{f.parent.as_posix()}' for f in Path(self.config.toolchain_prefix).glob('**/sha512intrin.h')]
+                    bindgen_args.extend(include_folders)
+                self.set_env('BINDGEN_EXTRA_CLANG_ARGS', ' '.join(bindgen_args))
+        elif self.config.target_platform == Platform.ANDROID:
+            # For aws-lc-rs
+            self.set_env('ANDROID_NDK_ROOT', self.config.env['ANDROID_NDK_HOME'])
+            # https://github.com/rust-lang/cmake-rs/issues/140
+            self.set_env("CMAKE_TOOLCHAIN_FILE", f"{self.config_src_dir}/toolchain.cmake")
+            self.set_env('BINDGEN_EXTRA_CLANG_ARGS', f'--sysroot={self.config.sysroot}')
+            self.set_env('AWS_LC_SYS_EXTERNAL_BINDGEN', '1')
+            self.set_env('CMAKE_GENERATOR', 'Ninja')
+        elif Subsystem.is_apple_simulator(self.config.target_subsystem):
+            self.set_env('AWS_LC_SYS_EXTERNAL_BINDGEN', '1')
+            self.set_env('BINDGEN_EXTRA_CLANG_ARGS', f'--sysroot={self.config.sysroot}')
 
     async def configure(self):
         # Check that the Cargo.toml version matches the recipe version
         toml_version = self.get_cargo_toml_version()
-        if toml_version != self.version:
+        if toml_version != self.version and running_on_cerbero_ci():
             msg = f'{self.name} version {self.version} doesn\'t match Cargo.toml version {toml_version}'
             if GStreamer.tagged_for_release:
                 raise FatalError(msg)
             else:
                 m.warning(msg)
+        # For aws-lc-rs/bindgen -- libclang does no introspection when using
+        # external compilers to build
+        if self.config.target_platform == Platform.ANDROID:
+            # For aws-lc-rs
+            # https://github.com/rust-lang/cmake-rs/issues/140
+            arch = self.config.target_arch
+            if self.config.target_arch == Architecture.ARMv7:
+                arch = 'armeabi-v7a'
+            elif self.config.target_arch == Architecture.ARM64:
+                arch = 'arm64-v8a'
+            with open(f'{self.config_src_dir}/toolchain.cmake', 'w') as f:
+                f.write(f'set(ANDROID_ABI {arch})\n')
+                f.write(f'set(ANDROID_PLATFORM android-{DistroVersion.get_android_api_version(self.config.target_distro_version)})\n')
+                f.write(f"include({self.config.env['ANDROID_NDK_HOME']}/build/cmake/android.toolchain.cmake)")
         await super().configure()
 
-    def post_install(self):
+    async def install(self):
+        await super(recipe.Recipe, self).install()
+
         # Cargo-C currently can't install pc files into custom dirs, so we need
         # to move these plugin pkgconfig files to the right place.
-        for f in self.files_list_by_category(self.DEVEL_CAT):
-            if not f.endswith('.pc') or not 'gstreamer-1.0' in f:
+        for f in self.files_list_by_category(self.DEVEL_CAT, only_existing=False):
+            if not f.endswith('.pc') or 'gstreamer-1.0' not in f or 'gstrsworkspace' in f:
                 continue
-            name = os.path.basename(f)
-            src = os.path.join(self.config.libdir, 'pkgconfig', name)
-            dst = os.path.join(self.config.prefix, f)
-            if os.path.exists(src):
-                shutil.copy(src, dst)
+            dst = Path(self.config.prefix, f)
+            src = Path(self.config.libdir, 'pkgconfig', dst.name)
+            with src.open('r', encoding='utf-8') as f:
+                pc_file = f.read()
+            if self.config.target_platform == Platform.WINDOWS:
+                # Patch up Rust's leakage of windows-sys prebuilt lib,
+                # the import files are already inserted inside the static libs
+                # https://github.com/rust-lang/cargo/issues/15748
+                pc_file = re.sub(r'-lwindows[0-9.]+', '', pc_file)
+                # winapi crate imports under MinGW
+                pc_file = re.sub(r'-lwinapi_', '-l', pc_file)
+            if self.requires_melding():
+                # Inject our substitute Rust workspace library
+                if re.search(r'Requires.private:\s+\w', pc_file):
+                    pc_file = pc_file.replace('Requires.private:',
+                    'Requires.private: gstrsworkspace,')
+                else:
+                    pc_file = pc_file.replace('Requires.private:', 'Requires.private: gstrsworkspace')
+            with dst.open('w', encoding='utf-8') as f:
+                f.write(pc_file)
+            src.unlink()
         # Cargo-C names MinGW DLLs as foo.dll instead of libfoo.dll
         # https://github.com/lu-zero/cargo-c/issues/280
         # It also follows MSVC convention for static/import libraries
-        if self.using_msvc():
-            for f in self.files_list_by_category(self.DEVEL_CAT):
-                if not f.endswith('.a'):
-                    continue
-                dst = Path(self.config.prefix) / f
-                src = dst.with_name(f'{dst.stem[3:]}.lib')
-                if src.exists():
-                    shutil.copy(src, dst)
-        else:
-            for f in self.dist_files_list():
-                if not f.endswith('.dll'):
-                    continue
-                name = os.path.basename(f)
-                d = os.path.dirname(f)
-                src = os.path.join(self.config.prefix, d, f'{name[3:]}')
-                dst = os.path.join(self.config.prefix, f)
-                if os.path.exists(src):
-                    shutil.copy(src, dst)
-                # if there's a .dll.a it also needs renaming
-                if os.path.exists(src + '.a'):
-                    shutil.copy(src + '.a', dst + '.a')
-            libraries = [f for f in self.devel_files_list()
+        # We must rename the files (not copy them) lest both copies end up in
+        # the package (.lib will be read as an import library)
+        if self.config.target_platform == Platform.WINDOWS:
+            if self.config.variants.visualstudio:
+                for f in self.files_list_by_category(self.DEVEL_CAT, only_existing=False):
+                    if not f.endswith('.a'):
+                        continue
+                    dst = Path(self.config.prefix) / f
+                    src = dst.with_name(f'{dst.stem[3:]}.lib')
+                    if src.exists():
+                        os.replace(src, dst)
+            else:
+                for f in self.dist_files_list(only_existing=False):
+                    if not f.endswith('.dll'):
+                        continue
+                    name = os.path.basename(f)
+                    d = os.path.dirname(f)
+                    src = os.path.join(self.config.prefix, d, f'{name[3:]}')
+                    dst = os.path.join(self.config.prefix, f)
+                    if os.path.exists(src):
+                        os.replace(src, dst)
+                    # if there's a .dll.a it also needs renaming
+                    if os.path.exists(src + '.a'):
+                        os.replace(src + '.a', dst + '.a')
+
+        if self.requires_melding():
+            libs = '-L${libdir}/gstreamer-1.0 -lgstrsworkspace'
+            if self.config.target_platform == Platform.WINDOWS:
+                # Inject default libraries to cover inclusions from stdlib.
+                # The linker will seamlessly remove any unused ones.
+                # (May need to be altered in the future!)
+                # Note: I'm sure GCC complains if these are missing, adding
+                # them to MSVC is placebo because of the below flag
+                libs += ' -lws2_32 -lntdll -lsecur32 -lcrypt32 -lncrypt -luserenv '
+            if self.config.variants.visualstudio:
+                # MSVC first resolves functions, then prunes the COMDATs.
+                # However, with melded libraries rsworkspace will introduce
+                # unneeded imports. This will guarantee that the prune passes.
+                libs += ' /FORCE:UNRESOLVED '
+
+            PkgConfigWriter(
+                'gstrsworkspace',
+                'gst-plugins-rs workspace library',
+                self.version,
+                self.config.prefix,
+                libs=libs,
+                rel_libdir=self.config.rel_libdir
+            ).save('gstrsworkspace', str(self.workspace_pc.parent))
+
+            self.workspace_lib.unlink(missing_ok=True)
+
+            files = [f for f in self.files_list_by_category(self.DEVEL_CAT, only_existing=False) if f.endswith('.a') and 'gstrsworkspace' not in f]
+
+            dragonfire = os.path.join(self.config.build_tools_prefix, 'bin', 'dragonfire')
+
+            if self.config.target_platform == Platform.WINDOWS:
+                fmt = 'coff'
+            elif Platform.is_apple(self.config.target_platform):
+                fmt = 'darwin'
+            else:
+                fmt = 'gnu'
+
+            await shell.async_call(
+                [dragonfire, '-o', self.workspace_lib, '-f', fmt, *files], cmd_dir=self.config.prefix, logfile=self.logfile, env=self.env
+            )
+
+            # These end up cached, remove them
+            for f in files:
+                src = Path(self.config.prefix, f)
+                bak = src.with_suffix('.bak')
+                bak.unlink(missing_ok=True)
+        elif self.config.target_platform == Platform.DARWIN and \
+            self.config.target_subsystem == Subsystem.MACOS:
+            libraries = [f for f in self.devel_files_list(only_existing=False)
                          if f.endswith('.a')]
+            prelinker = Prelink(self.config, self.env, self.logfile)
             for f in libraries:
-                if self.config.target_platform in (Platform.IOS, Platform.DARWIN):
-                    # Apple wants you to do Single-Object Prelink
-                    source = Path(self.config.prefix) / f
-
-                    # Only global symbols
-                    # Only symbol names
-                    # Use portable output format
-                    # Skip undefined symbols
-                    # Write pathname of the object file
-                    manifest = shell.check_output(
-                        [self.get_llvm_tool("llvm-nm"), "-gjPUA", source.absolute()],
-                        env=self.env,
-                    )
-
-                    # Now we need to match the symbols to the pattern
-
-                    # Here's the catch: Apple strip is silly enough to be unable to
-                    # -undefined suppress a .o because of the -two_level_namespace being
-                    # the default post-10.1. So we need to determine which objects have
-                    # matching symbols. The rest can be safely stripped.
-
-                    # The symbol listing format is as follows:
-                    #  ./libgstrswebrtc.a[gstrswebrtc-3a8116aacab254c2.2u9b7sba8k2fvc9v.rcgu.o]: _gst_plugin_rswebrtc_get_desc T 500 0
-                    # Field 1 has the object name between brackets.
-                    # Field 2 is the symbol name.
-                    symbol_pattern = re.compile('_gst_plugin_*')
-
-                    with tempfile.TemporaryDirectory(prefix='cerbero', dir=self.config.home_dir) as tmp:
-                        # List those symbols that will be kept
-                        symbols_to_keep = set()
-
-                        for line in manifest.splitlines():
-                            data = line.split(sep=" ")
-                            symbol = data[1]
-
-                            if symbol_pattern.match(symbol):
-                                symbols_to_keep.add(symbol)
-
-                        module = (
-                            Path(tmp) / source.name).with_suffix('.symbols')
-
-                        with module.open('w', encoding='utf-8') as f:
-                            f.write('# Stripped by Cerbero\n')
-
-                            for symbol in symbols_to_keep:
-                                f.write(f'{symbol}\n')
-
-                        m.log(
-                            f"Symbols to preserve in {source.absolute()}:", self.logfile
-                        )
-                        for symbol in symbols_to_keep:
-                            m.log(f"\t{symbol}", self.logfile)
-
-                        # Unpack archive
-                        m.log(f"Unpacking {source.absolute()} with ar", self.logfile)
-                        shell.new_call(
-                            [shutil.which('ar'), 'xv', source.absolute()], cmd_dir=tmp, logfile=self.logfile)
-
-                        # Now everything is flat in the pwd
-                        m.log("Performing Single-Object Prelinking", self.logfile)
-                        prelinked_obj = (
-                            Path(tmp) / source.name).with_suffix('.prelinked.o')
-
-                        ld = shutil.which("ld")
-
-                        if ld is None:
-                            raise FatalError(f'ld not found')
-
-                        # DO NOT split this into an array unless
-                        # you wrap this into a 'sh -c' call.
-                        # It needs the glob to be parsed by the shell!
-                        shell.new_call(
-                            ' '.join([
-                                ld,
-                                "-r",
-                                "-exported_symbols_list",
-                                str(module.absolute()),
-                                "-o",
-                                str(prelinked_obj.absolute()),
-                                "*.o",
-                            ]),
-                            cmd_dir=tmp,
-                            logfile=self.logfile,
-                        )
-
-                        # With the stripping done, all files now need to be rearchived
-                        dest = Path(tmp) / source.name
-                        m.log(f"Repacking library to {dest.absolute()}", self.logfile) 
-
-                        libtool = shutil.which("libtool")
-
-                        if libtool is None:
-                            raise FatalError(f'libtool not found')
-
-                        shell.new_call([
-                                libtool,
-                                "-static",
-                                prelinked_obj.absolute(),
-                                "-o",
-                                dest.absolute(),
-                            ],
-                            cmd_dir=tmp,
-                            logfile=self.logfile,
-                        )
-
-                        # And now we paper over
-                        os.replace(dest.absolute(), source.absolute())
-                elif self.config.target_platform in (Platform.LINUX, Platform.ANDROID): 
-                    # This is a very similar approach, however Clang
-                    # will itself do a really bad job if one supplies
-                    # a LD version script -- that'll suppress 99% of
-                    # the things needed for a working .o file.
-                    # The result, just like using
-                    # `strip --wildcard --keep-symbol=gst_plugin_*`,
-                    # is a .o that has all the symbols you want, but
-                    # placeholders/duds/broken references for all unfortunate
-                    # .rodata symbols referenced in the exported functions.
-                    #
-                    # See https://maskray.me/blog/2022-11-21-relocatable-linking
-                    source = Path(self.config.prefix) / f
-
-                    with tempfile.TemporaryDirectory(prefix='cerbero', dir=self.config.home_dir) as tmp:
-                        # Unpack archive
-                        m.log(f"Unpacking {source.absolute()} with ar", self.logfile)
-                        if self.config.target_platform == Platform.ANDROID:
-                            ar = shutil.which('llvm-ar',
-                                                path=self.config.env['ANDROID_NDK_TOOLCHAIN_BIN'])
-                        else:
-                            ar = shutil.which('llvm-ar')
-                            if not ar:
-                                ar = shutil.which('ar')
-                        if ar is None:
-                            raise FatalError('ar not found')
-                        shell.new_call(
-                            [ar, 'xv', source.absolute()], cmd_dir=tmp, logfile=self.logfile)
-
-                        # Now everything is flat in the pwd
-                        m.log("Performing Single-Object Prelinking", self.logfile)
-                        prelinked_obj = (
-                            Path(tmp) / source.name).with_suffix('.prelinked.o')
-
-                        if self.config.target_platform == Platform.ANDROID:
-                            ld = shutil.which("ld.lld",
-                                                path=self.config.env['ANDROID_NDK_TOOLCHAIN_BIN'])
-                        else:
-                            ld = shutil.which('ld')
-                        if ld is None:
-                            raise FatalError('ld not found')
-
-                        # DO NOT split this into an array unless
-                        # you wrap this into a 'sh -c' call.
-                        # It needs the glob to be parsed by the shell!
-                        shell.new_call(
-                            ' '.join([
-                                ld,
-                                "--relocatable",
-                                "--export-dynamic-symbol=gst_plugin_*",
-                                "-o",
-                                str(prelinked_obj.absolute()),
-                                "*.o",
-                            ]),
-                            cmd_dir=tmp,
-                            logfile=self.logfile,
-                        )
-
-                        # WE ARE NOT DONE! ld.lld merged all the files,
-                        # stripping those not referenced in the dynamic symbol
-                        # glob, but we still need to hide all the Rust cruft.
-                        if self.config.target_platform == Platform.ANDROID:
-                            objcopy = shutil.which("llvm-objcopy",
-                                                path=self.config.env['ANDROID_NDK_TOOLCHAIN_BIN'])
-                        else:
-                            objcopy = shutil.which("llvm-objcopy")
-                            if objcopy is None:
-                                objcopy = shutil.which("objcopy")
-                        if objcopy is None:
-                            raise FatalError('objcopy not found')
-                        shell.new_call(
-                            [
-                                objcopy,
-                                "--wildcard",
-                                "--keep-global-symbol=gst_plugin_*",
-                                prelinked_obj.absolute(),
-                            ],
-                            cmd_dir=tmp,
-                            logfile=self.logfile,
-                        )
-
-                        # With the stripping (really) done, all files now need to be rearchived
-                        dest = Path(tmp) / source.name
-                        m.log(f"Repacking library to {dest.absolute()}", self.logfile)
-
-                        shell.new_call(
-                            [
-                                ar,
-                                'rs',
-                                dest.absolute(),
-                                prelinked_obj.absolute()
-                            ],
-                            cmd_dir=tmp,
-                            logfile=self.logfile
-                        )
-
-                        # And now we paper over
-                        os.replace(dest.absolute(), source.absolute())
-
-        super().post_install()
+                prelinker.prelink(f, '_gst_plugin_*')
+            pc_files = [
+                f for f in self.files_list_by_category(self.DEVEL_CAT, only_existing=False)
+                if f.endswith('.pc') and 'gstreamer-1.0' in f
+            ]
+            for f in pc_files:
+                prelinker.patch_pkgconfig(f)

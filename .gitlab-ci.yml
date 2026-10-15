@@ -1,22 +1,40 @@
 include:
   - project: 'freedesktop/ci-templates'
-    ref: 'master'
+    ref: '3826695f80807d8a4d999f6b6efb3d405d708db9'
     file: '/templates/fedora.yml'
+  - project: 'freedesktop/ci-templates'
+    ref: '3826695f80807d8a4d999f6b6efb3d405d708db9'
+    file: '/templates/ubuntu.yml'
+  - project: 'freedesktop/ci-templates'
+    ref: '3826695f80807d8a4d999f6b6efb3d405d708db9'
+    file: '/templates/centos.yml'
+  ###
+  # IMPORTANT
+  # These are the version tags for the docker images the CI runs against.
+  # If you are hacking on them or need a them to rebuild, its enough
+  # to change any part of the string of the image you want.
+  ###
+  - local: '.gitlab-image-tags.yml'
 
 stages:
+  - 'trigger'
   - 'build docker'
   - 'check sources'
+  - 'tests'
   - 'build'
   # Use the resulting binaries
   - 'integrate'
 
 variables:
-  # CI_GSTREAMER_* variables are overridden by gstreamer's CI when it triggers cerbero CI.
-  CI_GSTREAMER_REF_NAME: '1.24'
-  CI_GSTREAMER_URL: 'https://gitlab.freedesktop.org/gstreamer/gstreamer.git'
+  # CI_GSTREAMER_* variables are set by gstreamer's CI when it triggers cerbero CI.
   CI_GSTREAMER_TRIGGERED: 'false'
-  GST_UPSTREAM_BRANCH: '1.24'
-  WINDOWS_IMAGE: 'registry.freedesktop.org/gstreamer/gstreamer/amd64/windows:2024-03-05.0-1.24'
+  GST_UPSTREAM_BRANCH: '1.28'
+  # Our gitlab instance and runner are using a proxy and have
+  # trouble with the normal fetch. git itself handles the proxy
+  # more reliably.
+  #
+  # https://doc.rust-lang.org/cargo/reference/config.html#netgit-fetch-with-cli
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
   DEFAULT_CERBERO_ARGS: >
     --variants werror
     --clocktime
@@ -55,28 +73,16 @@ default:
 
 .fedora image:
   variables:
-    ###
-    # IMPORTANT
-    # These are the version tags for the docker images the CI runs against.
-    # If you are hacking on them or need a them to rebuild, its enough
-    # to change any part of the string of the image you want.
-    ###
-    FDO_DISTRIBUTION_TAG: '2023-06-08.0'
-    FDO_DISTRIBUTION_VERSION: '37'
-    FDO_DISTRIBUTION_PACKAGES: "sudo git-core lbzip2 rsync wine which python3-distro python3-distro-info"
+    FDO_DISTRIBUTION_TAG: "$FEDORA_TAG-$GST_UPSTREAM_BRANCH"
+    FDO_DISTRIBUTION_VERSION: '42'
+    FDO_DISTRIBUTION_PACKAGES: "sudo git-core lbzip2 rsync wine which xorg-x11-server-Xvfb python3-distro python3-distro-info python3-setuptools"
     FDO_DISTRIBUTION_EXEC: ci/docker_setup.sh
     FDO_UPSTREAM_REPO: gstreamer/cerbero
 
 .checks fedora image:
   variables:
-    ###
-    # IMPORTANT
-    # These are the version tags for the docker images the CI runs against.
-    # If you are hacking on them or need a them to rebuild, its enough
-    # to change any part of the string of the image you want.
-    ###
-    FDO_DISTRIBUTION_TAG: '2023-01-12.0'
-    FDO_DISTRIBUTION_VERSION: '37'
+    FDO_DISTRIBUTION_TAG: "$CHECKS_FEDORA_TAG-$GST_UPSTREAM_BRANCH"
+    FDO_DISTRIBUTION_VERSION: '42'
     FDO_DISTRIBUTION_PACKAGES: "git-core python3-pip"
     FDO_DISTRIBUTION_EXEC: ci/checks_setup.sh
     FDO_UPSTREAM_REPO: gstreamer/cerbero
@@ -84,22 +90,83 @@ default:
 
 .android fedora image:
   variables:
-    ###
-    # IMPORTANT
-    # These are the version tags for the docker images the CI runs against.
-    # If you are hacking on them or need a them to rebuild, its enough
-    # to change any part of the string of the image you want.
-    ###
-    FDO_DISTRIBUTION_TAG: '2023-05-31.0'
-    FDO_DISTRIBUTION_VERSION: '37'
-    FDO_DISTRIBUTION_PACKAGES: "file git-core java-11-openjdk-devel lbzip2 python3-distro python3-distro-info make pkg-config unzip which xz"
+    FDO_DISTRIBUTION_TAG: "$ANDROID_FEDORA_TAG-$GST_UPSTREAM_BRANCH"
+    FDO_DISTRIBUTION_VERSION: '42'
+    FDO_DISTRIBUTION_PACKAGES: "file git-core java-21-openjdk-devel lbzip2 python3-distro python3-distro-info make pkg-config unzip which xz python3-setuptools pax-utils binutils"
     FDO_DISTRIBUTION_EXEC: ci/docker_android_setup.sh $ANDROID_HOME $ANDROID_NDK_HOME $GST_UPSTREAM_BRANCH
     FDO_UPSTREAM_REPO: gstreamer/cerbero
     FDO_REPO_SUFFIX: android
     ANDROID_HOME: "/android/sdk"
     ANDROID_NDK_HOME: "/android/ndk"
 
-.manual trigger:
+.ubuntu image:
+  variables:
+    FDO_DISTRIBUTION_TAG: "$UBUNTU_TAG-$GST_UPSTREAM_BRANCH"
+    FDO_DISTRIBUTION_VERSION: "22.04"
+    FDO_DISTRIBUTION_PACKAGES: >-
+      bash
+      ca-certificates
+      curl
+      git
+      lbzip2
+      python3-distro
+      python3-distro-info
+      python3-venv
+      python3-setuptools
+      rsync
+      ssh-client
+      sudo
+    FDO_DISTRIBUTION_EXEC: "ci/docker_setup.sh"
+    FDO_UPSTREAM_REPO: "gstreamer/cerbero"
+
+.manylinux_2_28 image:
+  variables:
+    FDO_DISTRIBUTION_TAG: "$MANYLINUX_TAG-$GST_UPSTREAM_BRANCH"
+    FDO_DISTRIBUTION_VERSION: 'manylinux_2_28_x86_64'
+    FDO_DISTRIBUTION_PACKAGES: "sudo git-core lbzip2 rsync which python39 python39-pip"
+    FDO_DISTRIBUTION_EXEC: |
+      alternatives --set python3 /usr/bin/python3.9
+      python3 -m pip install distro distro-info
+      ci/docker_setup.sh
+    FDO_UPSTREAM_REPO: gstreamer/cerbero
+    FDO_BASE_IMAGE: "quay.io/pypa/manylinux_2_28_x86_64"
+
+.tests ubuntu image:
+  variables:
+    FDO_DISTRIBUTION_TAG: "$TESTS_UBUNTU_TAG-$GST_UPSTREAM_BRANCH"
+    FDO_DISTRIBUTION_VERSION: "22.04"
+    FDO_DISTRIBUTION_PACKAGES: >-
+      bash
+      build-essential
+      ca-certificates
+      curl
+      file
+      git
+      lbzip2
+      libssl-dev
+      pkg-config
+      python3-distro
+      python3-distro-info
+      python3-venv
+      python3-setuptools
+      python3-minimal
+      python3-xmlrunner
+      rsync
+      ssh-client
+      sudo
+      xz-utils
+    FDO_DISTRIBUTION_EXEC: "ci/docker_setup.sh"
+    FDO_UPSTREAM_REPO: gstreamer/cerbero
+    FDO_REPO_SUFFIX: tests
+
+manual trigger:
+  image: "debian:stable-slim"
+  stage: "trigger"
+  variables:
+    GIT_STRATEGY: "none"
+  tags: [ "placeholder-job" ]
+  script:
+    - echo "Trigger job done, now running the pipeline."
   rules:
     # If this pipeline is triggered from gstreamer, trigger the pipeline automatically
     - if: '$CI_PIPELINE_SOURCE == "pipeline"'
@@ -118,46 +185,76 @@ default:
 
 fedora image:
   stage: "build docker"
+  needs: [ "manual trigger" ]
   extends:
-    - .manual trigger
     - .fedora image
     - .fdo.container-build@fedora
   variables:
     GIT_STRATEGY: none
-  tags: [ 'placeholder-job' ]
+  tags: [ 'kvm' ]
 
 checks fedora image:
   stage: "build docker"
+  needs: []
   extends:
     - .checks fedora image
     - .fdo.container-build@fedora
   variables:
     GIT_STRATEGY: none
-  tags: [ 'placeholder-job' ]
+  tags: [ 'kvm' ]
+
+tests ubuntu image:
+  stage: "build docker"
+  extends:
+    - .tests ubuntu image
+    - .fdo.container-build@ubuntu
+  variables:
+    GIT_STRATEGY: none
+  tags: [ 'kvm' ]
 
 android fedora image:
   stage: "build docker"
+  needs: [ "manual trigger" ]
   extends:
-    - .manual trigger
     - .android fedora image
     - .fdo.container-build@fedora
   variables:
     GIT_STRATEGY: none
-  tags: [ 'placeholder-job' ]
+  tags: [ 'kvm' ]
+
+ubuntu image:
+  stage: "build docker"
+  needs: [ "manual trigger" ]
+  extends:
+    - .ubuntu image
+    - .fdo.container-build@ubuntu
+  variables:
+    GIT_STRATEGY: none
+  tags: [ 'kvm' ]
+
+manylinux_2_28 image:
+  stage: "build docker"
+  needs: [ "manual trigger" ]
+  extends:
+    - .manylinux_2_28 image
+    - .fdo.container-build@centos
+  variables:
+    GIT_STRATEGY: none
+  tags: [ 'kvm' ]
 
 # Rules for when to use a specific job
 
 # Used when a GStreamer MR is used using the triggered pipeline
 .cerbero mr rules:
   rules:
-    - if: '$CI_GSTREAMER_TRIGGERED == "true" && $CI_PROJECT_NAMESPACE == "gstreamer"'
+    - if: '$CI_GSTREAMER_TRIGGERED == "true"'
   # Don't interrupt gstreamer MR CI when cerbero main gets pushes
   interruptible: false
 
 # Used when any other usage is encountered, cerbero MR, branch push, etc
 .cerbero not-mr rules:
   rules:
-    - if: '$CI_GSTREAMER_TRIGGERED != "true" || $CI_PROJECT_NAMESPACE != "gstreamer"'
+    - if: '$CI_GSTREAMER_TRIGGERED != "true"'
 
 # Template for all Cerbero GStreamer builds
 #
@@ -170,7 +267,7 @@ android fedora image:
   # Ensure that the runners it will be executed on
   # will have plenty of space for the cache
   tags: ['gstreamer']
-  timeout: '3h'
+  timeout: '1 hour 30 minutes'
   variables:
     CCACHE_COMPILERCHECK: "content"
     CCACHE_COMPRESS: "true"
@@ -187,8 +284,6 @@ android fedora image:
     CERBERO_RUN_SUFFIX: "" # '.exe' on cross-winXX
     CERBERO_BOOTSTRAP_SYSTEM: "no"
     HAVE_CCACHE: "yes"
-    # used by macos packages as we only ever install to a fixed directory
-    CERBERO_OVERRIDDEN_DIST_DIR: ""
     # location where the cerbero git repo is stored on the image
     CERBERO_HOST_DIR: "/"
   before_script:
@@ -207,9 +302,9 @@ android fedora image:
     when: 'always'
     paths:
       - "*/logs"
-      - "*/sources/*/*/b/meson-logs/meson-log.txt"
-      - "*/sources/*/*/b/CMakeFiles/CMakeError.log"
-      - "*/sources/*/*/b/CMakeFiles/CMakeLog.log"
+      - "*/sources/**/b/meson-logs/meson-log.txt"
+      - "*/sources/**/b/CMakeFiles/CMakeError.log"
+      - "*/sources/**/b/CMakeFiles/CMakeLog.log"
       - "*.tar.*"
     exclude:
       - .git
@@ -221,6 +316,20 @@ android fedora image:
     - .fdo.distribution-image@fedora
   needs:
     - "fedora image"
+
+.cerbero ubuntu base:
+  extends:
+    - .ubuntu image
+    - .fdo.distribution-image@ubuntu
+  needs:
+    - "ubuntu image"
+
+.cerbero manylinux_2_28 base:
+  extends:
+    - .manylinux_2_28 image
+    - .fdo.distribution-image@centos
+  needs:
+    - "manylinux_2_28 image"
 
 # Template for Cerbero GStreamer Deps
 #
@@ -267,6 +376,31 @@ pre-commit checks:
     PRE_COMMIT_HOME: '/cache/${CI_PROJECT_NAMESPACE}/pre-commit'
   tags: [ 'placeholder-job' ]
 
+tests:
+  extends:
+    - '.cerbero'
+    - .tests ubuntu image
+    - .fdo.suffixed-image@ubuntu
+  needs:
+    - "tests ubuntu image"
+  stage: 'tests'
+  script:
+    - ci/cerbero_setup.sh cerbero_test
+    - python3 -m xmlrunner --output-file tests.xml discover -s test
+  variables:
+    CERBERO_UNINSTALLED: 1
+    CERBERO_TESTSUITE: 1
+    PYTHONPATH: ':./test:./cerbero'
+    CONFIG: "linux.config"
+    ARCH: "linux_x86_64"
+  tags: ['gstreamer']
+  artifacts:
+    when: always
+    paths:
+      - tests.xml
+    reports:
+      junit: tests.xml
+
 #
 # Cerbero Linux X86_64 build
 #
@@ -285,6 +419,55 @@ build cerbero fedora x86_64:
   variables:
     CONFIG: "linux.config"
 
+cerbero deps ubuntu x86_64:
+  extends:
+    - '.cerbero ubuntu base'
+    - '.cerbero deps'
+  variables:
+    CONFIG: "linux.config"
+    ARCH: "linux_x86_64"
+  before_script:
+    - !reference [".cerbero", "before_script"]
+    # Install latest git to avoid problems with github
+    - apt update
+    - apt -y install software-properties-common gpg-agent
+    - add-apt-repository ppa:git-core/ppa
+    - apt update
+    - apt -y install git
+
+build cerbero ubuntu x86_64:
+  extends:
+    - '.cerbero ubuntu base'
+    - '.cerbero mr'
+  variables:
+    CONFIG: "linux.config"
+  before_script:
+    - !reference [".cerbero", "before_script"]
+    # Install latest git to avoid problems with github
+    - apt update
+    - apt -y install software-properties-common gpg-agent
+    - add-apt-repository ppa:git-core/ppa
+    - apt update
+    - apt -y install git
+
+#
+# Cerbero manylinux_2_28 X86_64 build
+#
+cerbero deps manylinux_2_28 x86_64:
+  extends:
+    - '.cerbero manylinux_2_28 base'
+    - '.cerbero deps'
+  variables:
+    CONFIG: "linux.config"
+    ARCH: "linux_x86_64"
+
+build cerbero manylinux_2_28 x86_64:
+  extends:
+    - '.cerbero manylinux_2_28 base'
+    - '.cerbero mr'
+  variables:
+    CONFIG: "linux.config"
+
 #
 # Cerbero Android Universal build
 #
@@ -298,9 +481,9 @@ build cerbero fedora x86_64:
     when: 'always'
     paths:
       - "*/logs"
-      - "*/sources/*/*/*/b/meson-logs/meson-log.txt"
-      - "*/sources/*/*/*/b/CMakeFiles/CMakeError.log"
-      - "*/sources/*/*/*/b/CMakeFiles/CMakeLog.log"
+      - "*/sources/**/b/meson-logs/meson-log.txt"
+      - "*/sources/**/b/CMakeFiles/CMakeError.log"
+      - "*/sources/**/b/CMakeFiles/CMakeLog.log"
       - "*[0-9].tar.*"
     exclude:
       - .git
@@ -335,9 +518,9 @@ build cerbero cross-android universal:
     when: 'always'
     paths:
       - "*/logs"
-      - "*/sources/*/*/b/meson-logs/meson-log.txt"
-      - "*/sources/*/*/b/CMakeFiles/CMakeError.log"
-      - "*/sources/*/*/b/CMakeFiles/CMakeLog.log"
+      - "*/s/**/b/meson-logs/meson-log.txt"
+      - "*/s/**/b/CMakeFiles/CMakeError.log"
+      - "*/s/**/b/CMakeFiles/CMakeLog.log"
       - "*.msi"
     exclude:
       - .git
@@ -387,30 +570,7 @@ build cerbero cross win64:
     EXAMPLES_HOME: ${CI_PROJECT_DIR}/gstreamer/subprojects
     GSTREAMER_ROOT_ANDROID: ${CI_PROJECT_DIR}/cerbero-android-universal
   script:
-    # Clone gstreamer repository to get gst-examples and gst-docs
-    - rm -rf gstreamer
-    - git clone $CI_GSTREAMER_URL -b $CI_GSTREAMER_REF_NAME --depth 1 gstreamer/
-    - mkdir -p ${OUTPUT_DIR}
-
-    # extract our binaries
-    - rm -f gstreamer-1.0-android-universal-*-runtime.tar.*
-    - mkdir ${GSTREAMER_ROOT_ANDROID}
-    - time tar -C ${GSTREAMER_ROOT_ANDROID} -xf gstreamer-1.0-android-universal-*.tar.*
-
-    # gst-examples - player
-    - chmod +x ${EXAMPLES_HOME}/gst-examples/playback/player/android/gradlew
-    - ./ci/run_retry.sh ${EXAMPLES_HOME}/gst-examples/playback/player/android/gradlew --no-daemon --project-dir ${EXAMPLES_HOME}/gst-examples/playback/player/android assembleDebug
-    - cp ${EXAMPLES_HOME}/gst-examples/playback/player/android/app/build/outputs/apk/debug/*.apk ${OUTPUT_DIR}
-
-    # gst-examples - vulkan
-    - chmod +x ${EXAMPLES_HOME}/gst-examples/vulkan/android/gradlew
-    - ./ci/run_retry.sh ${EXAMPLES_HOME}/gst-examples/vulkan/android/gradlew --no-daemon --project-dir ${EXAMPLES_HOME}/gst-examples/vulkan/android assembleDebug
-    - cp ${EXAMPLES_HOME}/gst-examples/vulkan/android/build/outputs/apk/debug/*.apk ${OUTPUT_DIR}
-
-    # gst-docs android tutorials
-    - chmod +x ${EXAMPLES_HOME}/gst-docs/examples/tutorials/android/gradlew
-    - ./ci/run_retry.sh ${EXAMPLES_HOME}/gst-docs/examples/tutorials/android/gradlew --no-daemon --project-dir ${EXAMPLES_HOME}/gst-docs/examples/tutorials/android assembleDebug
-    - cp ${EXAMPLES_HOME}/gst-docs/examples/tutorials/android/android-tutorial-*/build/outputs/apk/debug/*.apk ${OUTPUT_DIR}
+    - ci/examples_setup.sh build_android_examples
   after_script:
     - rm -rf ${GSTREAMER_ROOT_ANDROID} gstreamer
   artifacts:
@@ -447,23 +607,25 @@ cerbero cross-android universal examples:
     HAVE_CCACHE: ""
     CERBERO_HOST_DIR: "/Users/gst-ci/cerbero/"
   cache: []
+  needs: [ "manual trigger" ]
   artifacts:
     name: "${CI_JOB_NAME}_${CI_COMMIT_SHA}"
     expire_in: '5 days'
     when: 'always'
     paths:
       - "*/logs"
-      - "*/sources/*/*/*/b/meson-logs/meson-log.txt"
-      - "*/sources/*/*/*/b/CMakeFiles/CMakeError.log"
-      - "*/sources/*/*/*/b/CMakeFiles/CMakeLog.log"
+      - "*/sources/**/b/meson-logs/meson-log.txt"
+      - "*/sources/**/b/CMakeFiles/CMakeError.log"
+      - "*/sources/**/b/CMakeFiles/CMakeLog.log"
       - "gstreamer-1.0-1.*.pkg"
       - "gstreamer-1.0-devel-1.*.pkg"
+      - "*.whl"
     exclude:
       - .git
       - .git/**/*
 
 .cerbero macos arm64 image:
-  image: "registry.freedesktop.org/gstreamer/cerbero/macos-arm64/14-sonoma:2023-10-25.2"
+  image: "registry.freedesktop.org/gstreamer/cerbero/macos-arm64/26-tahoe:2025-09-30.0"
   tags:
     - gst-mac-arm
 
@@ -479,24 +641,8 @@ build cerbero cross-macos universal arm64-host:
     - '.cerbero cross-macos universal'
     - '.cerbero macos arm64 image'
 
-cerbero deps cross-macos universal x86_64-host:
-  extends:
-    - '.cerbero deps'
-    - '.cerbero cross-macos universal'
-  tags:
-    - gst-macos-13
-  when: 'manual'
-
-build cerbero cross-macos universal x86_64-host:
-  extends:
-    - '.cerbero mr'
-    - '.cerbero cross-macos universal'
-  tags:
-    - gst-macos-13
-  when: 'manual'
-
 #
-# Cerbero iOS build
+# Cerbero iOS universal (old-style) build
 #
 .cerbero cross-ios universal:
   variables:
@@ -507,15 +653,16 @@ build cerbero cross-macos universal x86_64-host:
     HAVE_CCACHE: ""
     CERBERO_HOST_DIR: "/Users/gst-ci/cerbero/"
   cache: []
+  needs: [ "manual trigger" ]
   artifacts:
     name: "${CI_JOB_NAME}_${CI_COMMIT_SHA}"
     expire_in: '5 days'
     when: 'always'
     paths:
       - "*/logs"
-      - "*/sources/*/*/*/b/meson-logs/meson-log.txt"
-      - "*/sources/*/*/*/b/CMakeFiles/CMakeError.log"
-      - "*/sources/*/*/*/b/CMakeFiles/CMakeLog.log"
+      - "*/sources/**/b/meson-logs/meson-log.txt"
+      - "*/sources/**/b/CMakeFiles/CMakeError.log"
+      - "*/sources/**/b/CMakeFiles/CMakeLog.log"
       - "gstreamer-1.0-*-ios-universal.pkg"
     exclude:
       - .git
@@ -533,21 +680,216 @@ build cerbero cross-ios universal arm64-host:
     - '.cerbero cross-ios universal'
     - '.cerbero macos arm64 image'
 
-cerbero deps cross-ios universal x86_64-host:
+#
+# Cross iOS ARM64-only build
+#
+.cerbero cross-ios:
+  variables:
+    ARCH: "ios_arm64"
+    CONFIG: "cross-ios-arm64.cbc"
+    CERBERO_ARGS: "${DEFAULT_CERBERO_ARGS} -v nowerror"
+    CERBERO_PACKAGE_ARGS: "--artifact=xcframework"
+    HAVE_CCACHE: ""
+    CERBERO_HOST_DIR: "/Users/gst-ci/cerbero/"
+  cache: []
+  needs: [ "manual trigger" ]
+  artifacts:
+    name: "${CI_JOB_NAME}_${CI_COMMIT_SHA}"
+    expire_in: '5 days'
+    when: 'always'
+    paths:
+      - "*/logs"
+      - "*/sources/**/b/meson-logs/meson-log.txt"
+      - "*/sources/**/b/CMakeFiles/CMakeError.log"
+      - "*/sources/**/b/CMakeFiles/CMakeLog.log"
+      - "gstreamer-1.0-*-ios-arm64.xcframework.tar.xz"
+    exclude:
+      - .git
+      - .git/**/*
+
+cerbero deps cross-ios arm64-host:
   extends:
     - '.cerbero deps'
-    - '.cerbero cross-ios universal'
-  tags:
-    - gst-ios-16
-  when: 'manual'
+    - '.cerbero cross-ios'
+    - '.cerbero macos arm64 image'
 
-build cerbero cross-ios universal x86_64-host:
+build cerbero cross-ios arm64-host:
   extends:
     - '.cerbero mr'
-    - '.cerbero cross-ios universal'
-  tags:
-    - gst-ios-16
-  when: 'manual'
+    - '.cerbero cross-ios'
+    - '.cerbero macos arm64 image'
+  # Disable for monorepo sub-pipelines for now
+  rules:
+    - when: 'never'
+
+#
+# Cross iOS Simulator Universal build
+#
+.cerbero cross-ios-sim universal:
+  variables:
+    ARCH: "ios_simulator"
+    CONFIG: "cross-ios-sim-universal.cbc"
+    CERBERO_ARGS: "${DEFAULT_CERBERO_ARGS} -v nowerror"
+    CERBERO_PACKAGE_ARGS: "--artifact=xcframework"
+    HAVE_CCACHE: ""
+    CERBERO_HOST_DIR: "/Users/gst-ci/cerbero/"
+  cache: []
+  needs: [ "manual trigger" ]
+  artifacts:
+    name: "${CI_JOB_NAME}_${CI_COMMIT_SHA}"
+    expire_in: '5 days'
+    when: 'always'
+    paths:
+      - "*/logs"
+      - "*/sources/**/b/meson-logs/meson-log.txt"
+      - "*/sources/**/b/CMakeFiles/CMakeError.log"
+      - "*/sources/**/b/CMakeFiles/CMakeLog.log"
+      - "gstreamer-1.0-*-ios-simulator-universal.xcframework.tar.xz"
+    exclude:
+      - .git
+      - .git/**/*
+
+cerbero deps cross-ios-sim universal arm64-host:
+  extends:
+    - '.cerbero deps'
+    - '.cerbero cross-ios-sim universal'
+    - '.cerbero macos arm64 image'
+
+build cerbero cross-ios-sim universal arm64-host:
+  extends:
+    - '.cerbero mr'
+    - '.cerbero cross-ios-sim universal'
+    - '.cerbero macos arm64 image'
+  # Does not work reliably yet it seems
+  # Disable for monorepo sub-pipelines for now
+  rules:
+    - when: 'never'
+
+#
+# Cross tvOS ARM64-only build
+#
+.cerbero cross-tvos:
+  variables:
+    ARCH: "tvos_arm64"
+    CONFIG: "cross-tvos-arm64.cbc"
+    CERBERO_ARGS: "${DEFAULT_CERBERO_ARGS} -v nowerror"
+    CERBERO_PACKAGE_ARGS: "--artifact=xcframework"
+    HAVE_CCACHE: ""
+    CERBERO_HOST_DIR: "/Users/gst-ci/cerbero/"
+  cache: []
+  needs: [ "manual trigger" ]
+  artifacts:
+    name: "${CI_JOB_NAME}_${CI_COMMIT_SHA}"
+    expire_in: '5 days'
+    when: 'always'
+    paths:
+      - "*/logs"
+      - "*/sources/**/b/meson-logs/meson-log.txt"
+      - "*/sources/**/b/CMakeFiles/CMakeError.log"
+      - "*/sources/**/b/CMakeFiles/CMakeLog.log"
+      - "gstreamer-1.0-*-tvos-arm64.xcframework.tar.xz"
+    exclude:
+      - .git
+      - .git/**/*
+
+cerbero deps cross-tvos arm64-host:
+  extends:
+    - '.cerbero deps'
+    - '.cerbero cross-tvos'
+    - '.cerbero macos arm64 image'
+
+build cerbero cross-tvos arm64-host:
+  extends:
+    - '.cerbero mr'
+    - '.cerbero cross-tvos'
+    - '.cerbero macos arm64 image'
+
+#
+# Cross tvOS Simulator Universal build
+#
+.cerbero cross-tvos-sim universal:
+  variables:
+    ARCH: "tvos_simulator"
+    CONFIG: "cross-tvos-sim-universal.cbc"
+    CERBERO_ARGS: "${DEFAULT_CERBERO_ARGS} -v nowerror"
+    CERBERO_PACKAGE_ARGS: "--artifact=xcframework"
+    HAVE_CCACHE: ""
+    CERBERO_HOST_DIR: "/Users/gst-ci/cerbero/"
+  cache: []
+  needs: [ "manual trigger" ]
+  artifacts:
+    name: "${CI_JOB_NAME}_${CI_COMMIT_SHA}"
+    expire_in: '5 days'
+    when: 'always'
+    paths:
+      - "*/logs"
+      - "*/sources/**/b/meson-logs/meson-log.txt"
+      - "*/sources/**/b/CMakeFiles/CMakeError.log"
+      - "*/sources/**/b/CMakeFiles/CMakeLog.log"
+      - "gstreamer-1.0-*-tvos-simulator-universal.xcframework.tar.xz"
+    exclude:
+      - .git
+      - .git/**/*
+
+cerbero deps cross-tvos-sim universal arm64-host:
+  extends:
+    - '.cerbero deps'
+    - '.cerbero cross-tvos-sim universal'
+    - '.cerbero macos arm64 image'
+
+build cerbero cross-tvos-sim universal arm64-host:
+  extends:
+    - '.cerbero mr'
+    - '.cerbero cross-tvos-sim universal'
+    - '.cerbero macos arm64 image'
+  # Does not work reliably yet it seems
+  # Disable for monorepo sub-pipelines for now
+  rules:
+    - when: 'never'
+
+#
+# Build an xcframework combining iOS ARM64 and iOS Simulator Universal
+#
+.cerbero xcframework:
+  stage: 'integrate'
+  script:
+    - ./cerbero-uninstalled xcframework gstreamer-1.0 \
+      --source gstreamer-1.0-*-ios-simulator-universal.xcframework.tar.xz \
+      --source gstreamer-1.0-*-ios-arm64.xcframework.tar.xz \
+      --source gstreamer-1.0-*-tvos-simulator-universal.xcframework.tar.xz \
+      --source gstreamer-1.0-*-tvos-arm64.xcframework.tar.xz
+    # TODO: build examples for ios, ios sim, tvos, tvos sim
+  artifacts:
+    name: "${CI_JOB_NAME}_${CI_COMMIT_SHA}"
+    expire_in: '5 days'
+    when: 'always'
+    paths:
+      - "gstreamer-*-xcframework.tar.xz"
+
+cerbero deps xcframework:
+  extends:
+    - '.cerbero xcframework'
+    - '.cerbero macos arm64 image'
+    - '.cerbero not-mr rules'
+  needs:
+    - 'cerbero deps cross-ios arm64-host'
+    - 'cerbero deps cross-ios-sim universal arm64-host'
+    - 'cerbero deps cross-tvos arm64-host'
+    - 'cerbero deps cross-tvos-sim universal arm64-host'
+
+build cerbero xcframework:
+  extends:
+    - '.cerbero xcframework'
+    - '.cerbero macos arm64 image'
+    - '.cerbero mr rules'
+  needs:
+    - 'build cerbero cross-ios arm64-host'
+    - 'build cerbero cross-ios-sim universal arm64-host'
+    - 'build cerbero cross-tvos arm64-host'
+    - 'build cerbero cross-tvos-sim universal arm64-host'
+  # Disable for monorepo sub-pipelines for now
+  rules:
+    - when: 'never'
 
 #
 # Build an iOS App using the iOS binaries
@@ -564,47 +906,10 @@ build cerbero cross-ios universal x86_64-host:
       CODE_SIGNING_ALLOWED="NO"
       CODE_SIGN_ENTITLEMENTS=""
   script:
-    # install the binaries
-    - installer -pkg gstreamer-1.0-devel-*-ios-universal.pkg -target CurrentUserHomeDirectory -verbose
-
-    # Clone gstreamer repository to get gst-examples and gst-docs
-    - git clone $CI_GSTREAMER_URL -b $CI_GSTREAMER_REF_NAME --depth 1 gstreamer/
-
-    # dump some useful information
-    - xcodebuild -version
-    - xcodebuild -showsdks
-    - echo ${XCODE_BUILD_ARGS} > xcode_buildargs
-
-    # gst-docs ios tutorials
-    - ./ci/run_retry.sh xcodebuild -showBuildSettings -alltargets -project ${EXAMPLES_HOME}/gst-docs/examples/tutorials/xcode\ iOS/GStreamer\ iOS\ Tutorials.xcodeproj $(cat xcode_buildargs)
-    - ./ci/run_retry.sh xcodebuild -alltargets -destination generic/platform=iOS -project ${EXAMPLES_HOME}/gst-docs/examples/tutorials/xcode\ iOS/GStreamer\ iOS\ Tutorials.xcodeproj $(cat xcode_buildargs)
-
-    # gst-examples
-    - ./ci/run_retry.sh xcodebuild -showBuildSettings -alltargets -project ${EXAMPLES_HOME}/gst-examples/playback/player/ios/GstPlay.xcodeproj $(cat xcode_buildargs)
-    - ./ci/run_retry.sh xcodebuild -alltargets -destination generic/platform=iOS -project ${EXAMPLES_HOME}/gst-examples/playback/player/ios/GstPlay.xcodeproj $(cat xcode_buildargs)
+    - ci/examples_setup.sh build_ios_examples
   after_script:
     - rm -rf gstreamer
   cache: []
-
-cross-ios universal examples x86_64-host:
-  extends:
-    - '.cross-ios universal examples'
-    - '.cerbero mr rules'
-  needs:
-    - "build cerbero cross-ios universal x86_64-host"
-  tags:
-    - gst-ios-16
-  when: 'manual'
-
-cerbero cross-ios universal examples x86_64-host:
-  extends:
-    - '.cross-ios universal examples'
-    - '.cerbero not-mr rules'
-  needs:
-    - "cerbero deps cross-ios universal x86_64-host"
-  tags:
-    - gst-ios-16
-  when: 'manual'
 
 cross-ios universal examples arm64-host:
   extends:
@@ -627,6 +932,7 @@ cerbero cross-ios universal examples arm64-host:
 #
 .cerbero windows native:
   image: $WINDOWS_IMAGE
+  needs: [ "manual trigger" ]
   tags:
     - 'docker'
     - 'windows'
@@ -639,10 +945,25 @@ cerbero cross-ios universal examples arm64-host:
     CERBERO_RUN_SUFFIX: ".exe"
     CERBERO_BOOTSTRAP_SYSTEM: "no"
     HAVE_CCACHE: ""
+    CERBERO_PACKAGE_ARGS: ""
   before_script:
     # Test that the powershell script works
     - ./cerbero-uninstalled --help
     - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_before_script"
+  artifacts:
+    name: "${CI_JOB_NAME}_${CI_COMMIT_SHA}"
+    expire_in: '5 days'
+    when: 'always'
+    paths:
+      - "*/logs"
+      - "*/s/**/b/meson-logs/meson-log.txt"
+      - "*/s/**/b/CMakeFiles/CMakeError.log"
+      - "*/s/**/b/CMakeFiles/CMakeLog.log"
+      - "*.msi"
+      - "*.whl"
+    exclude:
+      - .git
+      - .git/**/*
 
 cerbero deps msvc x86_64:
   extends: ['.cerbero deps', '.cerbero windows native']
@@ -650,14 +971,24 @@ cerbero deps msvc x86_64:
     ARCH: 'msvc_x86_64'
   script:
     - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_deps_script"
-  rules:
-    # This is an extended rule of .cerbero not-mr rules
-    - if: ($CI_GSTREAMER_TRIGGERED != "true" || $CI_PROJECT_NAMESPACE != "gstreamer") && $CI_PIPELINE_SOURCE != "schedule"
-    # Don't run automatically for scheduled pipeline
-    - if: ($CI_GSTREAMER_TRIGGERED != "true" || $CI_PROJECT_NAMESPACE != "gstreamer") && $CI_PIPELINE_SOURCE == "schedule"
-      when: 'manual'
-      # workaround for gitlab bug where it otherwise blocks the pipeline for manual jobs from rules
-      allow_failure: true
+
+cerbero deps msvc x86:
+  extends: ['.cerbero deps', '.cerbero windows native']
+  variables:
+    ARCH: 'msvc_x86'
+    CONFIG: 'win32.cbc'
+  script:
+    - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_deps_script"
+  when: 'manual'
+
+cerbero deps msvc cross-arm64:
+  extends: ['.cerbero deps', '.cerbero windows native']
+  variables:
+    ARCH: 'msvc_arm64'
+    CONFIG: 'cross-win-arm64.cbc'
+  script:
+    - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_deps_script"
+  when: 'manual'
 
 cerbero deps mingw x86_64:
   extends: ['.cerbero deps', '.cerbero windows native']
@@ -668,45 +999,40 @@ cerbero deps mingw x86_64:
     - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_deps_script"
   when: 'manual'
 
-cerbero deps msvc x86_64 msi package:
+cerbero deps mingw x86:
   extends: ['.cerbero deps', '.cerbero windows native']
   variables:
-    CERBERO_PACKAGE_ARGS: ""
+    ARCH: 'mingw_x86'
+    CONFIG: 'win32.cbc'
+    CERBERO_ARGS: "${DEFAULT_CERBERO_ARGS} -v nowerror,mingw"
   script:
     - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_deps_script"
-  artifacts:
-    name: "${CI_JOB_NAME}_${CI_COMMIT_SHA}"
-    expire_in: '5 days'
-    when: 'always'
-    paths:
-      - "*/logs"
-      - "*/sources/*/*/b/meson-logs/meson-log.txt"
-      - "*/sources/*/*/b/CMakeFiles/CMakeError.log"
-      - "*/sources/*/*/b/CMakeFiles/CMakeLog.log"
-      - "*.msi"
-    exclude:
-      - .git
-      - .git/**/*
-  rules:
-    # This is an extended rule of .cerbero not-mr rules
-    # Run automatically if it's a scheduled pipeline
-    - if: ($CI_GSTREAMER_TRIGGERED != "true" || $CI_PROJECT_NAMESPACE != "gstreamer") && $CI_PIPELINE_SOURCE == "schedule"
-    # Otherwise require manual trigger
-    - if: ($CI_GSTREAMER_TRIGGERED != "true" || $CI_PROJECT_NAMESPACE != "gstreamer") && $CI_PIPELINE_SOURCE != "schedule"
-      when: 'manual'
-      # workaround for gitlab bug where it otherwise blocks the pipeline for manual jobs from rules
-      allow_failure: true
-
-cerbero deps msvc x86 msi package:
-  extends: ['cerbero deps msvc x86_64 msi package']
-  variables:
-    ARCH: 'msvc_x86'
-    CONFIG: 'win32.cbc'
+  when: 'manual'
 
 build cerbero msvc x86_64:
   extends: ['.cerbero mr', '.cerbero windows native']
+  variables:
+    ARCH: 'msvc_x86_64'
   script:
     - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_script"
+
+build cerbero msvc x86:
+  extends: ['.cerbero mr', '.cerbero windows native']
+  variables:
+    ARCH: 'msvc_x86'
+    CONFIG: 'win32.cbc'
+  script:
+    - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_script"
+  when: 'manual'
+
+build cerbero msvc cross-arm64:
+  extends: ['.cerbero mr', '.cerbero windows native']
+  variables:
+    ARCH: 'msvc_arm64'
+    CONFIG: 'cross-win-arm64.cbc'
+  script:
+    - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_script"
+  when: 'manual'
 
 build cerbero mingw x86_64:
   extends: ['.cerbero mr', '.cerbero windows native']
@@ -717,26 +1043,12 @@ build cerbero mingw x86_64:
     - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_script"
   when: 'manual'
 
-# FIXME: UWP build is disabled until build issues with latest GLib version are sorted out
-cerbero deps uwp universal:
-  extends: ['cerbero deps msvc x86_64']
+build cerbero mingw x86:
+  extends: ['.cerbero mr', '.cerbero windows native']
   variables:
-    CONFIG: 'cross-uwp-universal.cbc'
-    ARCH: 'uwp_universal'
-    CERBERO_ARGS: "${DEFAULT_CERBERO_ARGS} -v nowerror"
-  script:
-    - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_deps_script"
-    - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "CERBERO_ARGS='$CERBERO_ARGS,vscrt=mdd' && ./ci/cerbero_setup.sh cerbero_deps_script"
-  when: 'manual'
-
-# FIXME: UWP build is disabled until build issues with latest GLib version are sorted out
-build cerbero uwp universal:
-  extends: ['build cerbero msvc x86_64']
-  variables:
-    CONFIG: 'cross-uwp-universal.cbc'
-    ARCH: 'uwp_universal'
-    CERBERO_ARGS: "${DEFAULT_CERBERO_ARGS} -v nowerror"
+    ARCH: 'mingw_x86'
+    CONFIG: 'win32.cbc'
+    CERBERO_ARGS: "${DEFAULT_CERBERO_ARGS} -v nowerror,mingw"
   script:
     - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "./ci/cerbero_setup.sh cerbero_script"
-    - C:\msys64\msys2_shell.cmd -ucrt64 -defterm -no-start -here -use-full-path -lc "CERBERO_ARGS='$CERBERO_ARGS,vscrt=mdd' && ./ci/cerbero_setup.sh cerbero_script"
   when: 'manual'

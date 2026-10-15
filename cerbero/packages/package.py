@@ -20,7 +20,7 @@ import os
 import re
 
 from cerbero.build.filesprovider import FilesProvider
-from cerbero.enums import License, Platform
+from cerbero.enums import License, Platform, Subsystem
 from cerbero.packages import PackageType
 from cerbero.utils import remove_list_duplicates, messages as m
 
@@ -116,6 +116,11 @@ class PackageBase(object):
         self.store = store
         self.package_mode = PackageType.RUNTIME
 
+    def load(self):
+        self.prepare()
+        # reload files after calling prepare
+        self.load_files()
+
     def prepare(self):
         """
         Can be overrided by subclasses to modify conditionally the package
@@ -145,6 +150,9 @@ class PackageBase(object):
 
     def files_list(self):
         raise NotImplementedError("'files_list' must be implemented by subclasses")
+
+    def debug_files_list(self):
+        raise NotImplementedError("'debug_files_list' must be implemented by " 'subclasses')
 
     def devel_files_list(self):
         raise NotImplementedError("'devel_files_list' must be implemented by " 'subclasses')
@@ -180,7 +188,10 @@ class PackageBase(object):
 
     def get_install_dir(self):
         try:
-            return self.install_dir[self.config.target_platform]
+            if Subsystem.is_apple_simulator(self.config.target_subsystem):
+                return self.install_dir_simulator[self.config.target_platform]
+            else:
+                return self.install_dir[self.config.target_platform]
         except Exception:
             return self.config.install_dir
 
@@ -198,7 +209,8 @@ class PackageBase(object):
         return []
 
     def identifier(self):
-        return '%s.%s.%s' % (self.org, self.config.target_arch, self.name)
+        platform_arch = self.config._get_toolchain_target_platform_arch()[0]
+        return '%s.%s.%s' % (self.org, platform_arch, self.name)
 
     def __str__(self):
         return self.name
@@ -214,6 +226,8 @@ class PackageBase(object):
         elif name == 'shortdesc':
             if self.package_mode == PackageType.DEVEL:
                 attr += ' (Development Files)'
+            elif self.package_mode == PackageType.DEBUG:
+                attr += ' (Debugging Files)'
         elif name == 'uuid':
             if self.package_mode == PackageType.DEVEL:
                 if attr is not None:
@@ -313,6 +327,24 @@ class Package(PackageBase):
                 rfiles = recipe.dist_files_list()
             else:
                 rfiles = recipe.files_list_by_categories(categories)
+            files.extend(rfiles)
+        return sorted(list(set(files)))
+
+    def debug_files_list(self):
+        files = []
+        for recipe, categories in self._recipes_files.items():
+            recipe = self.cookbook.get_recipe(recipe)
+            if len(categories) == 0:
+                rfiles = recipe.debug_files_list()
+            else:
+                rfiles = recipe.debug_files_list_by_categories(categories)
+            files.extend(rfiles)
+        for recipe, categories in self._recipes_files_devel.items():
+            recipe = self.cookbook.get_recipe(recipe)
+            if len(categories) == 0:
+                rfiles = recipe.debug_files_list()
+            else:
+                rfiles = recipe.debug_files_list_by_categories(categories)
             files.extend(rfiles)
         return sorted(list(set(files)))
 
@@ -423,6 +455,9 @@ class MetaPackage(PackageBase):
     def files_list(self):
         return self._list_files(Package.files_list)
 
+    def debug_files_list(self):
+        return self._list_files(Package.debug_files_list)
+
     def devel_files_list(self):
         return self._list_files(Package.devel_files_list)
 
@@ -468,7 +503,7 @@ class SDKPackage(MetaPackage):
     depending on the SDK could use them to set their environment easily and
     check wether the requirements are met in the pre-installation step.
 
-    On OS X, the installer will create the tipical bundle structure used for
+    On OS X, the installer will create the typical bundle structure used for
     OS X Frameworks, creating the 'Versions' and 'Current' directories for
     versionning as well as 'Headers' and 'Libraries' linking to the current
     version of the framework.
@@ -486,6 +521,7 @@ class SDKPackage(MetaPackage):
     # packages/gstreamer-1.0/gstreamer-1.0.package
     root_env_var = 'CERBERO_SDK_ROOT_%(arch)s'
     osx_framework_library = None
+    install_dir_simulator = None
 
     def __init__(self, config, store):
         MetaPackage.__init__(self, config, store)
@@ -571,9 +607,9 @@ class App(Package):
         return remove_list_duplicates(deps)
 
     def files_list(self):
-        # for each package, call the function that list files
-        files = Package.files_list(self)
+        files = super().files_list()
         if self.embed_deps:
+            # for each package, call the function that list files
             packages_deps = [self.store.get_package(x) for x in self.deps]
             for package in packages_deps:
                 packages_deps.extend(self.store.get_package_deps(package))
@@ -650,4 +686,4 @@ class App(Package):
                     ret.extend(platform_list)
             return ret
         else:
-            return PackageBase.__getattribute__(self, name)
+            return super().__getattribute__(name)

@@ -48,27 +48,26 @@ class PackagerBase(object):
         @param force: forces the creation of the package
         @type  force: bool
         @param keep_temp: do not delete temporary files
-        @type  force: bool
+        @type  keep_temp: bool
 
         @return: list of filenames for the packages created
         @rtype: list
         """
         self.output_dir = os.path.realpath(output_dir)
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
+        os.makedirs(self.output_dir, exist_ok=True)
         self.devel = devel
         self.force = force
         self.keep_temp = keep_temp
+        return []
 
     def files_list(self, package_type, force):
         if package_type == PackageType.DEVEL:
             files = self.package.devel_files_list()
+        elif package_type == PackageType.DEBUG:
+            files = self.package.debug_files_list()
         else:
             files = self.package.files_list()
-        real_files = []
-        for f in files:
-            if os.path.exists(os.path.join(self.config.prefix, f)):
-                real_files.append(f)
+        real_files = list(filter(lambda f: os.path.exists(os.path.join(self.config.prefix, f)), files))
         diff = list(set(files) - set(real_files))
         if len(diff) != 0:
             if force:

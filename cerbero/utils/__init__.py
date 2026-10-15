@@ -37,8 +37,8 @@ import asyncio
 from pathlib import Path, PureWindowsPath, PurePath
 from collections.abc import Iterable
 
-from cerbero.enums import Platform, Architecture, Distro, DistroVersion
-from cerbero.errors import FatalError, CommandError
+from cerbero.enums import Platform, Subsystem, Architecture, Distro, DistroVersion
+from cerbero.errors import FatalError, CommandError, ChecksumError
 from cerbero.utils import messages as m
 
 # We use shell from cerbero.utils but we can't import it directly because
@@ -73,6 +73,25 @@ class StoreBool(argparse.Action):
         setattr(namespace, self.dest, bvalue)
 
 
+@functools.lru_cache()
+def strtobool(val: str) -> bool:
+    """Convert a string representation of truth to true (1) or false (0).
+
+    True values are 'y', 'yes', 't', 'true', 'on', and '1'; false values
+    are 'n', 'no', 'f', 'false', 'off', and '0'.  Raises ValueError if
+    'val' is anything else.
+
+    (Extracted from Python 3.9's setuptools/_distutils/util)
+    """
+    val = val.lower()
+    if val in ('y', 'yes', 't', 'true', 'on', '1'):
+        return True
+    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
+        return False
+    else:
+        raise ValueError('invalid truth value %r' % (val,))
+
+
 def user_is_root():
     """Check if the user running the process is root"""
     return hasattr(os, 'getuid') and os.getuid() == 0
@@ -92,7 +111,7 @@ def determine_num_of_cpus() -> int:
 
 
 @functools.lru_cache()
-def determine_num_cargo_jobs():
+def default_cargo_build_jobs():
     """
     Returns 1 if <= 4 threads or with <= 8 GB RAM.
     """
@@ -119,9 +138,25 @@ def determine_total_ram() -> int:
         ram_size_query = subprocess.run([shutil.which('sysctl'), '-n', 'hw.memsize'], stdout=subprocess.PIPE, text=True)
         if ram_size_query.returncode == 0:
             return int(ram_size_query.stdout.strip())
-    elif platform == Platform.WINDOWS:
+    elif platform == Platform.WINDOWS and shutil.which('wmic'):
         ram_size_query = subprocess.run(
             [shutil.which('wmic'), 'computersystem', 'get', 'totalphysicalmemory'], stdout=subprocess.PIPE, text=True
+        )
+        if ram_size_query.returncode == 0:
+            return int(ram_size_query.stdout.strip().splitlines()[-1])
+    elif platform == Platform.WINDOWS and shutil.which('powershell'):
+        ram_size_query = subprocess.run(
+            [
+                shutil.which('powershell'),
+                '(Get-CimInstance',
+                '-ClassName',
+                'Win32_ComputerSystem',
+                '-Property',
+                'TotalPhysicalMemory',
+                ').TotalPhysicalMemory',
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
         )
         if ram_size_query.returncode == 0:
             return int(ram_size_query.stdout.strip().splitlines()[-1])
@@ -190,6 +225,7 @@ def system_info():
     Return a tuple with the platform type, the architecture and the
     distribution
     """
+    subsystem = None
     # Get the platform info
     platform = os.environ.get('OS', '').lower()
     if not platform:
@@ -198,6 +234,7 @@ def system_info():
         platform = Platform.WINDOWS
     elif platform.startswith('darwin'):
         platform = Platform.DARWIN
+        subsystem = Subsystem.MACOS
     elif platform.startswith('linux'):
         platform = Platform.LINUX
     else:
@@ -252,19 +289,16 @@ Terminating.""",
                 d = ('arch', 'Arch', 'Linux')
             elif os.path.exists('/etc/os-release'):
                 with open('/etc/os-release', 'r') as f:
-                    if 'ID="amzn"\n' in f.readlines():
-                        d = ('RedHat', 'amazon', '')
-                    else:
-                        f.seek(0, 0)
-                        for line in f:
-                            # skip empty lines and comment lines
-                            if line.strip() and not line.lstrip().startswith('#'):
-                                k, v = line.rstrip().split('=')
-                                if k == 'NAME':
-                                    name = v.strip('"')
-                                elif k == 'VERSION_ID':
-                                    version = v.strip('"')
-                        d = (name, version, '')
+                    f.seek(0, 0)
+                    for line in f:
+                        # skip empty lines and comment lines
+                        if line.strip() and not line.lstrip().startswith('#'):
+                            k, v = line.rstrip().split('=')
+                            if k == 'NAME':
+                                name = v.strip('"')
+                            elif k == 'VERSION_ID':
+                                version = v.strip('"')
+                    d = (name, version, '')
 
         if d[0] in ['Ubuntu', 'debian', 'Debian GNU/Linux', 'LinuxMint', 'Linux Mint']:
             distro = Distro.DEBIAN
@@ -337,69 +371,28 @@ Terminating.""",
                 distro_version = 'ubuntu_24_04_noble'
             else:
                 raise FatalError("Distribution '%s' not supported" % str(d))
-        elif d[0] in [
-            'RedHat',
-            'Fedora',
-            'Fedora Linux',
-            'CentOS',
-            'Red Hat Enterprise Linux Server',
-            'CentOS Linux',
-            'Amazon Linux',
-            'Rocky Linux',
-        ]:
+        elif d[0].startswith('Fedora'):
             distro = Distro.REDHAT
-            if d[1] == '16':
-                distro_version = DistroVersion.FEDORA_16
-            elif d[1] == '17':
-                distro_version = DistroVersion.FEDORA_17
-            elif d[1] == '18':
-                distro_version = DistroVersion.FEDORA_18
-            elif d[1] == '19':
-                distro_version = DistroVersion.FEDORA_19
-            elif d[1] == '20':
-                distro_version = DistroVersion.FEDORA_20
-            elif d[1] == '21':
-                distro_version = DistroVersion.FEDORA_21
-            elif d[1] == '22':
-                distro_version = DistroVersion.FEDORA_22
-            elif d[1] == '23':
-                distro_version = DistroVersion.FEDORA_23
-            elif d[1] == '24':
-                distro_version = DistroVersion.FEDORA_24
-            elif d[1] == '25':
-                distro_version = DistroVersion.FEDORA_25
-            elif d[1] == '26':
-                distro_version = DistroVersion.FEDORA_26
-            elif d[1] == '27':
-                distro_version = DistroVersion.FEDORA_27
-            elif d[1] == '28':
-                distro_version = DistroVersion.FEDORA_28
-            elif d[1] == '29':
-                distro_version = DistroVersion.FEDORA_29
-            elif d[1] == '30':
-                distro_version = DistroVersion.FEDORA_30
-            elif d[1] == '31':
-                distro_version = DistroVersion.FEDORA_31
-            elif d[1] == '32':
-                distro_version = DistroVersion.FEDORA_32
-            elif d[0].startswith('Fedora'):
-                # str(int()) is for ensuring that the fedora version is
-                # actually a number
-                distro_version = 'fedora_' + str(int(d[1]))
-            elif d[1] == '6' or d[1].startswith('6.'):
+            # str(int()) is for ensuring that the fedora version is
+            # actually a number
+            distro_version = 'fedora_' + str(int(d[1]))
+        elif d[0].startswith(('RedHat', 'CentOS', 'Red Hat', 'Rocky Linux', 'AlmaLinux')):
+            distro = Distro.REDHAT
+            if d[1] == '6' or d[1].startswith('6.'):
                 distro_version = DistroVersion.REDHAT_6
             elif d[1] == '7' or d[1].startswith('7.'):
                 distro_version = DistroVersion.REDHAT_7
-            elif d[1] == '8' or d[1].startswith('8.'):
-                distro_version = DistroVersion.REDHAT_8
-            elif d[1] == '9' or d[1].startswith('9.'):
-                distro_version = DistroVersion.REDHAT_9
-            elif d[0] == 'Amazon Linux' and d[1].startswith('2'):
-                distro_version = DistroVersion.AMAZON_LINUX_2
-            elif d[1] == 'amazon':
-                distro_version = DistroVersion.AMAZON_LINUX
             else:
-                # FIXME Fill this
+                distro_version = 'redhat_' + d[1]
+        elif d[0].startswith('Amazon Linux'):
+            distro = Distro.REDHAT
+            if d[0].endswith('AMI'):
+                distro_version = DistroVersion.REDHAT_6
+            elif d[1] == '2':
+                distro_version = DistroVersion.REDHAT_7
+            elif d[1] == '2023':
+                distro_version = DistroVersion.AMAZON_LINUX_2023
+            else:
                 raise FatalError("Distribution '%s' not supported" % str(d))
         elif d[0].strip() in ['openSUSE']:
             distro = Distro.SUSE
@@ -413,7 +406,7 @@ Terminating.""",
         elif d[0].strip() in ['openSUSE Tumbleweed']:
             distro = Distro.SUSE
             distro_version = DistroVersion.OPENSUSE_TUMBLEWEED
-        elif d[0].strip() in ['arch', 'Arch Linux', 'Manjaro Linux']:
+        elif d[0].strip() in ['arch', 'Arch Linux', 'Manjaro Linux', 'EndeavourOS']:
             distro = Distro.ARCH
             distro_version = DistroVersion.ARCH_ROLLING
         elif d[0].strip() in ['Gentoo Base System', 'Gentoo']:
@@ -438,6 +431,7 @@ Terminating.""",
             '10': DistroVersion.WINDOWS_10,
             '11': DistroVersion.WINDOWS_11,
             '2022Server': DistroVersion.WINDOWS_11,
+            '2025Server': DistroVersion.WINDOWS_11,
         }
         if win32_ver in dmap:
             distro_version = dmap[win32_ver]
@@ -469,7 +463,7 @@ Terminating.""",
 
     num_of_cpus = determine_num_of_cpus()
 
-    return platform, arch, distro, distro_version, num_of_cpus
+    return platform, subsystem, arch, distro, distro_version, num_of_cpus
 
 
 def validate_packager(packager):
@@ -482,8 +476,7 @@ def copy_files(origdir, destdir, files, extensions, target_platform, logfile=Non
     for f in files:
         f = f % extensions
         install_dir = os.path.dirname(os.path.join(destdir, f))
-        if not os.path.exists(install_dir):
-            os.makedirs(install_dir)
+        os.makedirs(install_dir, exist_ok=True)
         if destdir[1] == ':':
             # windows path
             relprefix = to_unixpath(destdir)[2:]
@@ -509,7 +502,7 @@ def parse_file(filename, dict):
     if '__file__' not in dict:
         dict['__file__'] = filename
     try:
-        exec(compile(open(filename).read(), filename, 'exec'), dict)
+        exec(compile(open(filename, encoding='utf-8').read(), filename, 'exec'), dict)
     except Exception as ex:
         import traceback
 
@@ -518,62 +511,68 @@ def parse_file(filename, dict):
 
 
 def escape_path(path):
-    path = path.replace('\\', '/')
-    path = path.replace('(', r'\\(').replace(')', r'\\)')
-    path = path.replace(' ', r'\\ ')
-    return path
+    return Path(path).as_posix()
 
 
+def decorator_escape_path(fn):
+    def wrapper(*args, **kwargs):
+        return escape_path(fn(*args, **kwargs))
+
+    return wrapper
+
+
+@decorator_escape_path
 def get_wix_prefix(config):
-    if 'WIX' in config.env:
-        wix_prefix = os.path.join(config.env['WIX'], 'bin')
+    from cerbero.utils import shell
+
+    if config.platform != Platform.WINDOWS:
+        err_msg = ', please run bootstrap again'
     else:
-        wix_prefix = 'C:/Program Files%s/Windows Installer XML v3.5/bin'
-        if not os.path.exists(wix_prefix):
-            wix_prefix = wix_prefix % ' (x86)'
-    if not os.path.exists(wix_prefix):
-        wix_prefix = 'C:/Program Files%s/Wix Toolset v3.11/bin'
-        if not os.path.exists(wix_prefix):
-            wix_prefix = wix_prefix % ' (x86)'
-    if not os.path.exists(wix_prefix):
-        raise FatalError("The required packaging tool 'WiX' was not found")
-    return escape_path(to_unixpath(wix_prefix))
+        err_msg = ', please update it'
+    wix_path, found, newer = shell.check_tool_version('wix', '5.0.1', env=config.env)
+    if found:
+        if newer:
+            return os.path.dirname(wix_path)
+        raise FatalError(f'Need WiX 5.0, found {found} which is too old{err_msg}')
+    if config.cross_compiling():
+        return 'C:/Program Files/WiX Toolset v5.0/bin'
+    progfiles = ('C:/Program Files/', 'C:/Program Files (x86)/')
+    if 'WIX5' in os.environ:
+        return os.environ['WIX5']
+    # The hunt for WiX 5.0
+    wixdir = 'WiX Toolset v5.0/bin'
+    for d in progfiles:
+        wix_prefix = d + wixdir
+        if os.path.exists(wix_prefix):
+            return wix_prefix
+    # If the user has WiX 3 installed, give a better error message
+    for d in progfiles:
+        for wixdir in ('Windows Installer XML v3.5/bin', 'Wix Toolset v3.11/bin'):
+            wix_prefix = d + wixdir
+            if os.path.exists(wix_prefix):
+                raise FatalError(f'Need WiX 5.0, found WiX 3 which is too old{err_msg}')
+    raise FatalError('The required packaging tool WiX 5.0 was not found')
 
 
-def add_system_libs(config, new_env, old_env=None):
-    """
-    Add /usr/lib/pkgconfig to PKG_CONFIG_PATH so the system's .pc file
-    can be found.
-    """
+def _get_lib_search_paths(config, env=None):
     arch = config.target_arch
     libdir = 'lib'
-
-    # Only use this when compiling on Linux for Linux and not cross-compiling
-    # to some other Linux
-    if config.platform != Platform.LINUX:
-        return
-    if config.target_platform != Platform.LINUX:
-        return
-    if config.cross_compiling():
-        return
 
     if arch == Architecture.X86_64:
         if config.distro == Distro.REDHAT or config.distro == Distro.SUSE:
             libdir = 'lib64'
 
-    sysroot = '/'
-    if config.sysroot:
-        sysroot = config.sysroot
+    sysroot = config.sysroot or '/'
 
-    if not old_env:
-        old_env = os.environ
+    if not env:
+        env = os.environ
 
     search_paths = []
-    if old_env.get('PKG_CONFIG_LIBDIR', None):
-        search_paths += [old_env['PKG_CONFIG_LIBDIR']]
-    if old_env.get('PKG_CONFIG_PATH', None):
-        search_paths += [old_env['PKG_CONFIG_PATH']]
-    search_paths += [os.path.join(sysroot, 'usr', libdir, 'pkgconfig'), os.path.join(sysroot, 'usr/share/pkgconfig')]
+    if env.get('PKG_CONFIG_LIBDIR', None):
+        search_paths += [env['PKG_CONFIG_LIBDIR']]
+    if env.get('PKG_CONFIG_PATH', None):
+        search_paths += [env['PKG_CONFIG_PATH']]
+    search_paths += [os.path.join(sysroot, f'usr/{libdir}/pkgconfig'), os.path.join(sysroot, 'usr/share/pkgconfig')]
 
     if config.target_distro == Distro.DEBIAN:
         host = None
@@ -588,32 +587,44 @@ def add_system_libs(config, new_env, old_env=None):
         else:
             host = '%s-linux-gnu' % arch
 
-        search_paths.append(os.path.join(sysroot, 'usr/lib/%s/pkgconfig' % host))
+        search_paths.append(os.path.join(sysroot, f'usr/lib/{host}/pkgconfig'))
 
-    new_env['PKG_CONFIG_PATH'] = ':'.join(search_paths)
+    return search_paths
 
-    search_paths = [os.environ.get('ACLOCAL_PATH', ''), os.path.join(sysroot, 'usr/share/aclocal')]
-    new_env['ACLOCAL_PATH'] = ':'.join(search_paths)
+
+def get_system_pc_path(config, lib):
+    """
+    get the exact .pc full path for a library in the system
+    """
+    for search_path in _get_lib_search_paths(config):
+        pc_path = os.path.join(search_path, f'{lib}.pc')
+        if os.path.exists(pc_path):
+            return pc_path
+
+    raise FatalError(f'{lib}.pc not found in the system and required by the recipe, please run bootstrap again')
 
 
 def split_version(s):
-    return tuple(int(e) for e in s.split('.'))
-
-
-def needs_xcode8_sdk_workaround(config):
-    """
-    Returns whether the XCode 8 clock_gettime, mkostemp, getentropy workaround
-    from https://bugzilla.gnome.org/show_bug.cgi?id=772451 is needed
-
-    These symbols are only available on macOS 10.12+ and iOS 10.0+
-    """
-    if config.target_platform == Platform.DARWIN:
-        if split_version(config.min_osx_sdk_version) < (10, 12):
-            return True
-    elif config.target_platform == Platform.IOS:
-        if split_version(config.ios_min_version) < (10, 0):
-            return True
-    return False
+    result = []
+    for e in s.split('.'):
+        if e.isnumeric():
+            result.append(int(e))
+        else:
+            # e.g. '1k' -> [1, ord('k')] = [1, 107]
+            # Each non-digit char becomes its ASCII code as a sub-version,
+            # so '1.1.1k' becomes (1, 1, 1, 107) and is always comparable.
+            num = ''
+            for c in e:
+                if c.isdigit():
+                    num += c
+                else:
+                    if num:
+                        result.append(int(num))
+                        num = ''
+                    result.append(ord(c))
+            if num:
+                result.append(int(num))
+    return tuple(result)
 
 
 def _qmake_or_pkgdir(qmake):
@@ -965,3 +976,110 @@ class EnvValuePath(EnvValue):
         if len(values) == 1 and not isinstance(values[0], list):
             values = (values[0].split(os.pathsep),)
         super().__init__(os.pathsep, *values)
+
+
+def merge_str_env(old_env, new_env, override_env=()):
+    """
+    Returns a new env dict with the `old_env` as a base, where vars are overridden
+    by vars from `new_env` dict using `EnvVar.is_*(k)` checks,
+    or without checks if var name is in `override_env` tuple.
+
+    Values are checked for being `str` type.
+    """
+    ret_env = {}
+    for k in new_env.keys():
+        new_v = new_env[k]
+        # Must not accidentally use this with EnvValue objects
+        if not isinstance(new_v, str):
+            raise AssertionError('new value {!r}: {!r}'.format(k, new_v))
+        if k not in old_env or k in override_env:
+            ret_env[k] = new_v
+            continue
+        old_v = old_env[k]
+        if not isinstance(old_v, str):
+            raise AssertionError('old value {!r}: {!r}'.format(k, new_v))
+        if not (new_v == old_v or EnvVar.is_path(k) or EnvVar.is_arg(k) or EnvVar.is_cmd(k)):
+            m.warning(f"Overriding '{k}={old_v}' with '{new_v}'")
+        ret_env[k] = new_v
+    for k in old_env.keys():
+        if k not in new_env:
+            ret_env[k] = old_env[k]
+    return ret_env
+
+
+def merge_env_value_env(old_env, new_env):
+    """
+    Returns a new env dict with the `old_env` as a base, where vars are overridden
+    by vars from `new_env` dict if they are not `EnvValuePath` or `EnvValueArg`,
+    otherwise, values are concatenated.
+
+    Changed values from `old_env` are checked for being `EnvValue` type.
+
+    Values from `new_env` are converted to `EnvValue` using `EnvValue.from_key(k, new_v)`.
+    """
+    ret_env = {}
+    # Set/merge new values
+    for k, new_v in new_env.items():
+        new_v = EnvValue.from_key(k, new_v)
+        if k not in old_env:
+            ret_env[k] = new_v
+            continue
+        old_v = old_env[k]
+        assert isinstance(old_v, EnvValue)
+        if isinstance(old_v, (EnvValueSingle, EnvValueCmd)) or (new_v == old_v):
+            ret_env[k] = new_v
+        elif isinstance(old_v, (EnvValuePath, EnvValueArg)):
+            ret_env[k] = new_v + old_v
+        else:
+            raise FatalError(
+                "Don't know how to combine the environment "
+                "variable '%s' with values '%s' and '%s'" % (k, new_v, old_v)
+            )
+    # Set remaining old values
+    for k in old_env.keys():
+        if k not in new_env:
+            ret_env[k] = old_env[k]
+    return ret_env
+
+
+### XML Hacks ###
+def xmlwrite(tree: etree.ElementTree, filepath, encoding='utf-8'):
+    import xml
+    from xml.dom import minidom
+
+    xmlstr = xml.etree.ElementTree.tostring(tree.getroot())
+    xmlstr = minidom.parseString(xmlstr).toprettyxml(indent='\t')
+    open(filepath, 'w', encoding=encoding).write(xmlstr)
+
+
+def sha256sum(fname):
+    """
+    Calculate the SHA256 checksum of the specified file
+    """
+    from hashlib import sha256
+
+    h = sha256()
+    with open(fname, 'rb') as f:
+        # Read in chunks of 512k till f.read() returns b'' instead of reading
+        # the whole file at once which will fail on systems with low memory
+        for block in iter(lambda: f.read(512 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def verify_checksum(dest, expected, url=None, fatal=True, logfile=None):
+    """
+    Verify checksum of file, move it away if verification fails
+    """
+    # No expected checksum, we don't want to verify the checksum
+    if expected is False:
+        return True
+    found = sha256sum(dest)
+    if found != expected:
+        movedto = dest + '.failed-checksum'
+        os.replace(dest, movedto)
+        m.log(f'{url or dest} failed checksum: {expected!r} != {found!r}', logfile)
+        if fatal:
+            raise ChecksumError(found, expected, movedto)
+        return False
+    return True

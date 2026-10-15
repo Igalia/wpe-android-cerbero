@@ -13,7 +13,9 @@ MANIFEST.in
 /*.msm
 /osx-framework-*.pkg
 /ios-framework-*.pkg
+/ios-simulator-framework-*.pkg
 /gstreamer*.dmg
+/gstreamer*.exe
 /gstreamer*.pkg
 /base*.pkg
 /gstreamer*.msi
@@ -21,3 +23,5 @@ MANIFEST.in
 /gstreamer*.rpm
 /gstreamer*.tar.bz2
 /gstreamer*.tar.xz
+/gstreamer*.tar.zst
+/gstreamer*.whl

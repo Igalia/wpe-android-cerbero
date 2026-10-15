@@ -1,0 +1,71 @@
+# -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+from cerbero.tools.libtool import LibtoolLibrary
+
+
+class Recipe(recipe.Recipe):
+    name = 'lcevcdec'
+    version = '4.0.4'
+    stype = SourceType.TARBALL
+    btype = BuildType.CMAKE
+    url = 'https://github.com/v-novaltd/LCEVCdec/archive/refs/tags/%(version)s.tar.gz'
+    tarball_checksum = '513f71531c66f226ec258289fd6c889844570029faf00ba2d7ebe501008c7db1'
+    tarball_dirname = 'LCEVCdec-%(version)s'
+    library_type = LibraryType.SHARED
+    cmake_generator = 'ninja'
+    can_msvc = True
+
+    licenses = [{License.BSD_3_Clause_Clear: ['COPYING']}]
+    deps = ['fmt']
+
+    configure_options = [
+        '-DVN_SDK_FFMPEG_LIBS_PACKAGE=""',
+        '-DVN_SDK_JSON_CONFIG=OFF',
+        '-DVN_SDK_EXECUTABLES=OFF',
+        '-DVN_SDK_UNIT_TESTS=OFF',
+        '-DVN_MSVC_RUNTIME_STATIC=OFF',
+    ]
+
+    files_libs = [
+        'liblcevc_dec_api', 'liblcevc_dec_pipeline_cpu',
+        'liblcevc_dec_pipeline_legacy', 'liblcevc_dec_legacy',
+    ]
+    files_devel = ['include/LCEVC', '%(libdir)s/pkgconfig/lcevc_dec.pc']
+
+    def prepare(self):
+        if self.config.target_platform == Platform.ANDROID:
+            self.remove_env('CXXFLAGS', '-fno-exceptions')
+
+        # We only want static libs on iOS and Android
+        if Platform.is_app_platform(self.config.target_platform):
+            self.library_type = LibraryType.STATIC
+            self.files_libs += ['liblcevc_dec_api_utility',
+                'liblcevc_dec_extract', 'liblcevc_dec_enhancement',
+                'liblcevc_dec_pixel_processing', 'liblcevc_dec_common',
+                'liblcevc_dec_sequencer', 'liblcevc_dec_pipeline',
+            ]
+
+
+    def post_install(self):
+        # CMake does not generate la files
+        if self.config.target_platform == Platform.ANDROID:
+            deps = ['c++', 'm', 'log']
+        elif Platform.is_apple_app_platform(self.config.target_platform):
+            deps = ['c++', 'm']
+        else:
+            deps = None
+
+        if deps:
+            deps += [
+                'lcevc_dec_pipeline_cpu', 'lcevc_dec_pipeline_legacy',
+                'lcevc_dec_legacy', 'liblcevc_dec_api_utility',
+                'liblcevc_dec_extract', 'liblcevc_dec_enhancement',
+                'liblcevc_dec_pixel_processing', 'liblcevc_dec_common',
+                'liblcevc_dec_sequencer', 'liblcevc_dec_pipeline',
+            ]
+
+
+        libtool_la = LibtoolLibrary('liblcevc_dec_api', None, None, None,
+                                    self.config.libdir, self.config.target_platform,
+                                    deps=deps)
+        libtool_la.save()
+        super().post_install()

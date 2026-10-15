@@ -16,11 +16,24 @@
 # Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 # Boston, MA 02111-1307, USA.
 
+import os
+import sys
 from cerbero.errors import FatalError
 
 
 # Safest place to define this since this file imports very few modules
-CERBERO_VERSION = '1.24.8'
+CERBERO_VERSION = '1.28.8'
+
+
+if sys.version_info >= (3, 11) and 'CI' in os.environ:
+    _pyproject = os.path.join(__file__, '..', 'pyproject.toml')
+    if os.path.exists(_pyproject):
+        import tomllib
+
+        with open(_pyproject, 'r', encoding='utf-8') as f:
+            d = tomllib.loads(f.read())
+            if d['project']['version'] != CERBERO_VERSION:
+                raise FatalError("cerbero/enums.py:CERBERO_VERSION doesn't match version in pyproject.toml")
 
 
 class Platform:
@@ -31,6 +44,18 @@ class Platform:
     DARWIN = 'darwin'
     ANDROID = 'android'
     IOS = 'ios'
+    TVOS = 'tvos'
+
+    def is_apple(platform):
+        return platform in (Platform.DARWIN, Platform.IOS, Platform.TVOS)
+
+    def is_app_platform(platform):
+        "Platform exclusively targets a sandboxed app ecosystem"
+        return platform in (Platform.ANDROID, Platform.IOS, Platform.TVOS)
+
+    def is_apple_app_platform(platform):
+        "Platform exclusively targets an Apple sandboxed app ecosystem"
+        return platform in (Platform.IOS, Platform.TVOS)
 
 
 class Architecture:
@@ -69,6 +94,7 @@ class Distro:
     ARCH = 'arch'
     OS_X = 'osx'
     IOS = 'ios'
+    TVOS = 'tvos'
     ANDROID = 'android'
     GENTOO = 'gentoo'
     NONE = 'none'
@@ -104,31 +130,13 @@ class DistroVersion:
     UBUNTU_DISCO = 'ubuntu_19_04_disco'
     UBUNTU_EOAN = 'ubuntu_19_10_eoan'
     UBUNTU_FOCAL = 'ubuntu_20_04_focal'
-    FEDORA_16 = 'fedora_16'
-    FEDORA_17 = 'fedora_17'
-    FEDORA_18 = 'fedora_18'
-    FEDORA_19 = 'fedora_19'
-    FEDORA_20 = 'fedora_20'
-    FEDORA_21 = 'fedora_21'
-    FEDORA_22 = 'fedora_22'
-    FEDORA_23 = 'fedora_23'
-    FEDORA_24 = 'fedora_24'
-    FEDORA_25 = 'fedora_25'
-    FEDORA_26 = 'fedora_26'
-    FEDORA_27 = 'fedora_27'
-    FEDORA_28 = 'fedora_28'
-    FEDORA_29 = 'fedora_29'
-    FEDORA_30 = 'fedora_30'
-    FEDORA_31 = 'fedora_31'
-    FEDORA_32 = 'fedora_32'
-    # further fedora versions are generated automatically
+    # fedora versions are generated automatically, like:
+    # FEDORA_32 = 'fedora_32'
     REDHAT_6 = 'redhat_6'
     REDHAT_7 = 'redhat_7'
-    REDHAT_8 = 'redhat_8'
-    REDHAT_9 = 'redhat_9'
-    # Amazon Linux seems to be RedHat/CentOS-based
-    AMAZON_LINUX = 'amazon_linux'
-    AMAZON_LINUX_2 = 'amazon_linux_2'
+    # further RedHat versions are generated automatically, like:
+    # REDHAT_8_1 = 'redhat_8.1'
+    AMAZON_LINUX_2023 = 'amazonlinux_2023'
     ARCH_ROLLING = 'rolling'
     GENTOO_VERSION = 'gentoo-version'
     OPENSUSE_42_2 = 'opensuse_42_2'
@@ -242,6 +250,23 @@ class DistroVersion:
         return [int(s) for s in version[4:].split('_')]
 
 
+class Subsystem:
+    """Enumeration of supported subsystem names, matching Meson:
+    https://mesonbuild.com/Reference-tables.html#subsystem-names-since-120"""
+
+    MACOS = 'macos'
+    IOS = 'ios'
+    IOS_SIMULATOR = 'ios-simulator'
+    TVOS = 'tvos'
+    TVOS_SIMULATOR = 'tvos-simulator'
+
+    def is_apple_simulator(subsystem):
+        return subsystem in (Subsystem.IOS_SIMULATOR, Subsystem.TVOS_SIMULATOR)
+
+    def no_process_spawning(subsystem):
+        return subsystem in (Subsystem.TVOS, Subsystem.TVOS_SIMULATOR)
+
+
 class LicenseDescription:
     def __init__(self, acronym, pretty_name):
         self.acronym = acronym
@@ -255,25 +280,45 @@ class LicenseDescription:
 
 
 class License:
-    """Enumeration of licensesversions"""
+    """Enumeration of licensesversions.
+    Acronyms were sourced from https://spdx.org/licenses/.
+    Matches were checked against https://packages.msys2.org and with https://formulae.brew.sh/ as fallback.
+    """
 
     Apachev2 = LicenseDescription('Apache-2.0', 'Apache License, version 2.0')
-    BSD = LicenseDescription('BSD', 'BSD License')
+    BSD_1_Clause = LicenseDescription('BSD 1-Clause License', 'BSD 1-Clause License')
+    BSD_2_Clause = LicenseDescription('BSD-2-Clause', 'BSD 2-Clause "Simplified" License')
+    BSD_2_Clause_Patent = LicenseDescription('BSD-2-Clause-Patent', 'BSD-2-Clause Plus Patent License')
+    BSD_3_Clause = LicenseDescription('BSD-3-Clause', 'BSD 3-Clause "New" or "Revised" License')
+    BSD_3_Clause_Clear = LicenseDescription('BSD-3-Clause-Clear', 'BSD 3-Clause Clear License')
+    BSD_3_Clause_FLEX = LicenseDescription('BSD-3-Clause-flex', 'BSD 3-Clause Flex variant')
     BSD_like = LicenseDescription('BSD-like', 'BSD-like License')
-    FreeType = LicenseDescription('FreeType', 'FreeType License')
-    GPLv2Plus = LicenseDescription('GPL-2+', 'GNU General Public License, version 2 or later')
-    GPLv3Plus = LicenseDescription('GPL-3+', 'GNU General Public License, version 3 or later')
-    LGPLv2Plus = LicenseDescription('LGPL-2+', 'GNU Lesser General Public License, version 2 or later')
-    LGPLv2_1Plus = LicenseDescription('LGPL-2.1+', 'GNU Lesser General Public License, version 2.1 or later')
-    LGPLv3 = LicenseDescription('LGPL-3', 'GNU Lesser General Public License, version 3')
-    LGPLv3Plus = LicenseDescription('LGPL-3+', 'GNU Lesser General Public License, version 3 or later')
-    LibPNG = LicenseDescription('LibPNG', 'LibPNG License')
+    BZIP2_1_0_6 = LicenseDescription('bzip2-1.0.6', 'bzip2 and libbzip2 License v1.0.6')
+    FreeType = LicenseDescription('FTL', 'FreeType License')
+    GPLv2Plus = LicenseDescription('GPL-2.0-or-later', 'GNU General Public License, version 2 or later')
+    GPLv3Plus = LicenseDescription('GPL-3.0-or-later', 'GNU General Public License, version 3 or later')
+    ISC = LicenseDescription('ISC', 'ISC License')
+    LGPLv2Plus = LicenseDescription('LGPL-2.0-or-later', 'GNU Lesser General Public License, version 2 or later')
+    LGPLv2_1Plus = LicenseDescription('LGPL-2.1-or-later', 'GNU Lesser General Public License, version 2.1 or later')
+    LGPLv3 = LicenseDescription('LGPL-3.0-only', 'GNU Lesser General Public License, version 3')
+    LGPLv3Plus = LicenseDescription('LGPL-3.0-or-later', 'GNU Lesser General Public License, version 3 or later')
+    Libjpeg = LicenseDescription(
+        'IJG AND Zlib AND BSD-3-Clause',
+        'Independent JPEG Group License and zlib License and BSD 3-Clause "New" or "Revised" License',
+    )
+    LibPNG = LicenseDescription('Libpng', 'LibPNG License')
+    Libtiff = LicenseDescription('libtiff', 'libtiff License')
     MPLv1_1 = LicenseDescription('MPL-1.1', 'Mozilla Public License Version 1.1')
-    MPLv2 = LicenseDescription('MPL-2', 'Mozilla Public License Version 2.0')
+    MPLv2 = LicenseDescription('MPL-2.0', 'Mozilla Public License Version 2.0')
     MIT = LicenseDescription('MIT', 'MIT License')
+    # winpthreads
+    MIT_AND_BSD_Clause_Clear = LicenseDescription('MIT AND BSD-3-Clause-Clear', 'MIT and BSD 3-Clause Clear License')
     OPENSSL = LicenseDescription('OpenSSL', 'OpenSSL License')
-    Proprietary = LicenseDescription('Proprietary', 'Proprietary License')
-    PublicDomain = LicenseDescription('PublicDomain', 'Public Domain')
+    CURL = LicenseDescription('curl', 'cURL License')
+    Proprietary = LicenseDescription('LicenseRef-Proprietary', 'Proprietary License')
+    Sqlite = LicenseDescription('blessing', 'SQLite Blessing')
+    Zlib = LicenseDescription('Zlib', 'zlib License')
+    ZPL_2_1 = LicenseDescription('ZPL-2.1', 'Zope Public License 2.1')
     Misc = LicenseDescription('Misc', 'Miscellaneous license information')
 
 
@@ -282,3 +327,8 @@ class LibraryType:
     STATIC = 'static'
     SHARED = 'shared'
     BOTH = 'both'
+
+
+class Symbolication:
+    SKIP = 'skip'
+    MANUAL = 'manual'

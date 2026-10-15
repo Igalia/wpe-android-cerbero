@@ -29,7 +29,7 @@ import time
 from cerbero import config, commands
 from cerbero.enums import Platform
 from cerbero.errors import UsageError, FatalError, BuildStepError, ConfigurationError, CerberoException, AbortedError
-from cerbero.utils import _, N_, user_is_root, git, run_until_complete
+from cerbero.utils import _, N_, user_is_root, git, run_until_complete, strtobool
 from cerbero.utils import messages as m
 from cerbero.utils.manifest import Manifest
 
@@ -99,6 +99,12 @@ class Main(object):
             action='store_true',
             default=False,
             help=_('Print absolute clock times with every message printed'),
+        )
+        self.parser.add_argument(
+            '--non-interactive',
+            action='store_true',
+            default=False,
+            help=_('Non-interactive execution, no prompting for input'),
         )
         self.parser.add_argument(
             '--list-variants', action='store_true', default=False, help=_('List available variants')
@@ -183,10 +189,44 @@ class Main(object):
                         sys.exit(1)
             if self.args.manifest:
                 self.config.manifest = self.args.manifest
+            if self.args.non_interactive:
+                self.config.interactive = False
         except ConfigurationError as exc:
             self.log_error(exc, False)
 
     def run_command(self):
+        background_build = strtobool(os.environ.get('CERBERO_BACKGROUND_BUILD', '0'))
+        if background_build:
+            if sys.platform == 'win32':
+                from ctypes import c_void_p, windll
+
+                current_process = c_void_p(windll.kernel32.GetCurrentProcess())
+                windll.kernel32.SetPriorityClass(current_process, 0x00000040)
+            elif sys.platform == 'darwin':
+                # Using PRIO_DARWIN_BG means the jobs will never be assigned to
+                # the performance/super cores, which we don't want
+                if sys.version_info >= (3, 12):
+                    PRIO_DARWIN_PROCESS = os.PRIO_DARWIN_PROCESS
+                else:
+                    PRIO_DARWIN_PROCESS = 4
+                os.setpriority(PRIO_DARWIN_PROCESS, 0, 20)
+            else:
+                from ctypes import CDLL
+
+                # #include <sys/syscall.h>
+                # #include <linux/ioprio.h>
+                # #include <unistd.h>
+                # std::cout << SYS_ioprio_set << " " << IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0) << std::endl;
+                libc = CDLL(None)
+                SYS_ioprio_set = 251
+                IOPRIO_WHO_PGRP = 2
+                IOPRIO_CLASS_IDLE = 24576
+
+                # This covers CPU priority
+                os.setpriority(os.PRIO_PROCESS, 0, 19)
+                # This covers I/O priority (very useful if using GCC or rustc)
+                libc.syscall(SYS_ioprio_set, IOPRIO_WHO_PGRP, 0, IOPRIO_CLASS_IDLE)
+
         command = self.args.command
         try:
             res = commands.run(command, self.config, self.args)

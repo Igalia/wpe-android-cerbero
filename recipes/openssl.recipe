@@ -1,4 +1,7 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+from pathlib import Path
+import shutil
+
 from cerbero.build.build import modify_environment
 from cerbero.tools.libtool import LibtoolLibrary
 from cerbero.utils import shell, messages
@@ -8,41 +11,32 @@ class Recipe(recipe.Recipe):
     # Note: openssl helpfully moves tarballs somewhere else (old/x.y.z/)
     # whenever a new release comes out, so make sure to mirror to fdo when
     # bumping the release!
-    version = '1.1.1s'
-    licenses = [{License.OPENSSL: ['LICENSE']}]
+    version = '3.5.0'
+    licenses = [License.Apachev2]
     stype = SourceType.TARBALL
-    url = 'https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1s/{0}-{1}.tar.gz'.format(name, version)
-    tarball_checksum = 'c5ac01e760ee6ff0dab61d6b2bbd30146724d063eb322180c6f18a6f74e4b6aa'
+    url = 'https://github.com/openssl/openssl/releases/download/openssl-%(version)s/openssl-%(version)s.tar.gz'
+    tarball_checksum = '344d0a79f1a9b08029b0744e2cc401a43f9c90acd1044d09a530b4885a8e9fc0'
     deps = ['ca-certificates', 'zlib']
-    # Parallel make fails randomly due to undefined macros, probably races
-    allow_parallel_build = False
     # Configure script is perl, not shell
     config_sh_needs_shell = False
-    # Can build for MSVC and UWP
+    # Can build for MSVC
     can_msvc = True
 
     patches = [
         # Portable prefix with SSL certs
         'openssl/0001-Load-ca-certificate.crt-from-PREFIX-etc-ssl-on-macOS.patch',
         # MSVC and UWP support
-        'openssl/0001-windows-makefile.tmpl-Generate-and-install-pkgconfig.patch',
-        'openssl/0002-windows-makefile.tmpl-Fix-ONECORE-build.patch',
-        'openssl/0003-windows-makefile.tmpl-Do-not-prefix-import-libraries.patch',
-        # https://github.com/openssl/openssl/pull/12400
-        'openssl/0001-crypto-win-Don-t-use-disallowed-APIs-on-UWP.patch',
-        'openssl/0002-win-onecore-Build-with-APPCONTAINER-for-UWP-compat.patch',
-        # Android support
-        'openssl/0003-openssl-Support-loading-ca-certificates-on-Android.patch',
+        'openssl/0002-windows-makefile.tmpl-Generate-and-install-pkgconfig.patch',
     ]
 
-    files_bins = ['openssl']
+    files_bins = []
     files_libs = ['libcrypto', 'libssl']
     files_devel = ['include/openssl', '%(libdir)s/pkgconfig/openssl.pc',
                    '%(libdir)s/pkgconfig/libssl.pc', '%(libdir)s/pkgconfig/libcrypto.pc']
 
     def _get_openssl_platform(self):
         # map platforms
-        if self.config.target_platform == Platform.IOS:
+        if Platform.is_apple_app_platform(self.config.target_platform):
             if self.config.target_arch == Architecture.ARMv7:
                 return 'BSD-generic32'
             if self.config.target_arch == Architecture.ARMv7S:
@@ -53,7 +47,7 @@ class Recipe(recipe.Recipe):
                 return 'BSD-generic64'
             if self.config.target_arch == Architecture.ARM64:
                 return 'BSD-generic64'
-            raise InvalidRecipeError(self, "Unknown iOS platform")
+            raise InvalidRecipeError(self, f"Unknown Apple mobile arch: {self.config.target_arch}")
         if self.config.target_platform == Platform.ANDROID:
             self.make += ['CROSS_SYSROOT=' + self.config.sysroot]
             if self.config.target_arch == Architecture.ARM:
@@ -88,22 +82,13 @@ class Recipe(recipe.Recipe):
                 return 'linux-aarch64'
             raise InvalidRecipeError(self, "Unknown Linux platform")
         if self.config.target_platform == Platform.WINDOWS:
-            if self.using_uwp():
-                if self.config.target_arch == Architecture.X86:
-                    return 'VC-WIN32-ONECORE'
-                if self.config.target_arch == Architecture.X86_64:
-                    return 'VC-WIN64A-ONECORE'
-                if self.config.target_arch == Architecture.ARM:
-                    return 'VC-WIN32-ARM'
-                if self.config.target_arch == Architecture.ARMv7:
-                    return 'VC-WIN32-ARM'
-                if self.config.target_arch == Architecture.ARM64:
-                    return 'VC-WIN64-ARM'
-            elif self.using_msvc():
+            if self.using_msvc():
                 if self.config.target_arch == Architecture.X86:
                     return 'VC-WIN32'
                 if self.config.target_arch == Architecture.X86_64:
                     return 'VC-WIN64A'
+                if self.config.target_arch == Architecture.ARM64:
+                    return 'VC-WIN64-ARM'
             else:
                 if self.config.target_arch == Architecture.X86:
                     return 'mingw'
@@ -117,11 +102,11 @@ class Recipe(recipe.Recipe):
         self.openssl_platform = self._get_openssl_platform()
         # Need this include first, otherwise on compilation openssl will prefer
         # the headers in the prefix over those in its sources dir
-        srcdir_include = f'-I{self.config_src_dir}/include '
+        srcdir_include = f'-I{self.src_dir}/include '
         cflags = srcdir_include + self.get_env('CFLAGS')
         ldflags = self.get_env('LDFLAGS')
 
-        if self.using_msvc():
+        if self.config.target_platform == Platform.WINDOWS and self.config.variants.visualstudio:
             # Gets converted to C:/MinGW/msys/1.0/utf-8 by MSYS somehow, so
             # just remove it. We only need this for gstreamer sources anyway.
             cflags = cflags.replace('/utf-8', '')
@@ -135,26 +120,21 @@ class Recipe(recipe.Recipe):
             self.make_install = ['nmake', 'install_sw']
         else:
             cflags += '-fPIC -DOPENSSL_PIC'
+            if Subsystem.no_process_spawning(self.config.target_subsystem):
+                cflags += ' -DHAVE_FORK=0'
             ldflags += '-fPIC'
             ranlib = self.get_env('RANLIB')
             ar = self.get_env('AR')
-            # Need to add CFLAGS to CC because CFLAG is not used everywhere in the
-            # build, and we can't pass arguments via Configure because on Darwin,
-            # Configure reads the `-arch x86_64` as meaning that you want to use
-            # `x86_64` as the platform, and errors out about a redefined platform.
-            cc = self.get_env('CC') + ' ' + srcdir_include + self.get_env('CFLAGS')
-            ld = self.get_env('LD') + ' ' + self.get_env('LDFLAGS')
-            # NOTE: CFLAG and LDFLAG are not typos!
-            self.make += ['AR=' + ar, 'RANLIB=' + ranlib, 'CC=' + cc, 'LD=' + ld,
-                          'CFLAG=' + cflags, 'LDFLAG=' + ldflags]
+            cc = self.get_env('CC') + ' ' + cflags
+            ld = self.get_env('LD') + ' ' + ldflags
+            self.make += ['AR=' + ar, 'RANLIB=' + ranlib, 'CC=' + cc, 'LD=' + ld]
             self.make_install = ['make', 'install_sw', 'RANLIB=' + ranlib]
 
         # We probably don't need and can't use the tools on these platforms
-        if self.config.target_platform in (Platform.IOS, Platform.ANDROID):
+        if Platform.is_app_platform(self.config.target_platform):
             self.make += ['build_libs', 'openssl.pc', 'libssl.pc', 'libcrypto.pc']
             self.make_install = ['make', 'install_dev', 'RANLIB=' + ranlib]
 
-       
         if self.config.platform == Platform.WINDOWS:
             # Ensure that our Perl's File/Spec.pm uses backward slashes when
             # building for MSVC and forward-slashes when building for MinGW.
@@ -181,11 +161,11 @@ class Recipe(recipe.Recipe):
             else:
                 self.set_env('TERM', 'cygwin')
 
-        if self.config.target_platform == Platform.IOS:
+        if Platform.is_apple_app_platform(self.config.target_platform):
             self.library_type = LibraryType.STATIC
         if self.config.target_platform == Platform.ANDROID:
             self.prepend_env('PATH', self.get_env('ANDROID_NDK_TOOLCHAIN_BIN'), sep=os.pathsep)
-
+            self.set_env('ANDROID_NDK_ROOT', self.get_env('ANDROID_NDK_HOME'))
 
     @modify_environment
     async def configure(self):
@@ -199,16 +179,21 @@ class Recipe(recipe.Recipe):
                                  ''.format(perl, found, m))
         # OpenSSL guesses the libdir incorrectly on x86_64
         config_sh = 'perl ./Configure --prefix=' + self.config.prefix + \
-            ' --libdir=lib' + self.config.lib_suffix + '  no-makedepend no-unit-test '
-        if self.config.target_platform == Platform.IOS:
+            ' --libdir=lib' + self.config.lib_suffix + '  no-makedepend no-unit-test no-tests no-fuzz-afl no-fuzz-libfuzzer no-h3demo'
+        if Platform.is_apple_app_platform(self.config.target_platform):
             # Note: disable 'no-devcryptoeng' when we finally target the
             # *real* ios configuration targets
+            self.library_type = LibraryType.STATIC
             config_sh += ' no-shared no-dso no-async no-devcryptoeng '
             # Undefined symbols in aesni_* in libcrypto.a only on x86_64
             if self.config.target_arch == Architecture.X86_64:
                 config_sh += ' no-asm '
         else:
             config_sh += ' shared '
+            # native Windows build doesn't support building static libraries
+            # and DLLs at the same time -- Configurations/README.md
+            if self.config.target_platform == Platform.WINDOWS:
+                self.library_type = LibraryType.SHARED
 
         # ssl3 is needed by sphinx which is used by gst-validate, which tries
         # to use this libssl and fails with undefined symbols. md2 is needed by
@@ -224,17 +209,22 @@ class Recipe(recipe.Recipe):
             else:
                 raise AssertionError
 
-        if self.config.target_platform == Platform.ANDROID:
-            config_sh += ' --openssldir=/system/etc/security '
+        if self.config.platform == Platform.WINDOWS:
+            config_sh += ' no-tests '
+
+        if not Platform.is_app_platform(self.config.target_platform):
+            self.files_bins.append('openssl')
 
         await shell.async_call(config_sh + self.openssl_platform, self.build_dir,
                                logfile=self.logfile, env=self.env)
 
     def post_install(self):
+        if self.using_msvc():
+            shell.replace(f'{self.config.libdir}/cmake/OpenSSL/OpenSSLConfig.cmake', {'libssl.lib': 'ssl.lib', 'libcrypto.lib': 'crypto.lib'})
         # XXX: Don't forget to update this when the soname is bumped!
         # We don't build shared libraries on iOS as the build system
         # of openssl is broken and iOS does not support them anyway.
-        if self.config.target_platform != Platform.IOS:
+        if not Platform.is_apple_app_platform(self.config.target_platform):
             libtool_la = LibtoolLibrary('ssl', 1, 1, 0, self.config.libdir,
                                         self.config.target_platform,
                                         deps=['crypto'])
@@ -245,4 +235,12 @@ class Recipe(recipe.Recipe):
         if self.using_msvc():
             shell.replace(os.path.join(self.config.libdir, 'pkgconfig', 'openssl.pc'), {'\\': '/'})
             shell.replace(os.path.join(self.config.libdir, 'pkgconfig', 'libcrypto.pc'), {'\\': '/'})
+        # Rename to ssl.lib and crypto.lib, that's what everyone expects
+        if self.using_msvc():
+            prefix = Path(self.config.libdir)
+            for f in ['libssl.lib', 'libcrypto.lib']:
+                src = prefix / f
+                dst = src.with_stem(src.stem.replace('lib', ''))
+                dst.unlink(missing_ok=True)
+                shutil.copyfile(src, dst)
         super().post_install()
