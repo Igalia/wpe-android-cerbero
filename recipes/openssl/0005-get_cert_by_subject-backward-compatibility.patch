@@ -1,32 +1,40 @@
-From aadeb66867fbd4a6ef6f6b6dda6eb53ba08eb419 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Bruno de Lacheisserie <bruno.de.lacheisserie@gmail.com>
 Date: Fri, 29 Mar 2024 01:21:42 +0100
-Subject: [PATCH 1/6] get_cert_by_subject : backward compatibility
+Subject: [PATCH] get_cert_by_subject : backward compatibility
 
 Fallback to MD5 name hash if no certificate found using SHA1 hash
 
 fixes #13565 #15154
----
- crypto/x509/by_dir.c | 296 ++++++++++++++++++++++---------------------
- 1 file changed, 154 insertions(+), 142 deletions(-)
 
 Upstream: https://github.com/openssl/openssl/pull/24002
 
+This squashes the six commits of that pull request and rebases them onto
+OpenSSL 3.5.9, whose by_dir.c was reformatted with clang-format and now
+skips broken symlinks and certificates that fail to load. The lookup loop
+from 3.5.9 is kept as is and wrapped in the loop over both name hashes.
+---
+ crypto/x509/by_dir.c                  | 295 ++++++++++++++------------
+ test/recipes/60-test_x509_store_old.t |  53 +++++
+ 2 files changed, 208 insertions(+), 140 deletions(-)
+ create mode 100644 test/recipes/60-test_x509_store_old.t
+
 diff --git a/crypto/x509/by_dir.c b/crypto/x509/by_dir.c
-index 1d401d0420884..b81c7b637a649 100644
+index df92e1d..e1d1b25 100644
 --- a/crypto/x509/by_dir.c
 +++ b/crypto/x509/by_dir.c
-@@ -229,7 +229,8 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
+@@ -229,7 +229,9 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
          X509_CRL crl;
      } data;
-     int ok = 0;
+     int res, ok = 0;
 -    int i, j, k;
 +    int i, j, k, l;
 +    unsigned long hash[2];
++    int valid_hash[2]; /* '0' for invalid value in `hash` array */
      unsigned long h;
      BUF_MEM *b = NULL;
      X509_OBJECT stmp, *tmp;
-@@ -257,165 +258,176 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
+@@ -257,175 +259,188 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
      }
  
      ctx = (BY_DIR *)xl->method_data;
@@ -43,21 +51,24 @@ index 1d401d0420884..b81c7b637a649 100644
 -        if (!BUF_MEM_grow(b, j)) {
 -            ERR_raise(ERR_LIB_X509, ERR_R_BUF_LIB);
 -            goto finish;
-+
-+    hash[0] = X509_NAME_hash_ex(name, libctx, propq, &l); /* SHA1 name hash */
-+    if (l == 0) {
-+        hash[0] = 0;
-+    }
-+    hash[1] = X509_NAME_hash_old(name); /* MD5 name hash */
-+
-+    for (l = 0; l < 2; ++l) {
-+        h = hash[l];
-+        if (h == 0) {
-+            continue; /* skip invalid hash */
-         }
+-        }
 -        if (type == X509_LU_CRL && ent->hashes) {
 -            htmp.hash = h;
 -            if (!CRYPTO_THREAD_read_lock(ctx->lock))
++
++    hash[0] = X509_NAME_hash_ex(name, libctx, propq, &l); /* SHA1 name hash */
++    valid_hash[0] = (l != 0);
++#ifndef OPENSSL_NO_MD5
++    hash[1] = X509_NAME_hash_old(name); /* MD5 name hash */
++    valid_hash[1] = 1;
++#else
++    valid_hash[1] = 0;
++#endif
++
++    for (l = 0; l < 2; ++l) {
++        h = hash[l];
++        if (valid_hash[l] == 0)
++            continue; /* skip invalid hash */
 +
 +        for (i = 0; i < sk_BY_DIR_ENTRY_num(ctx->dirs); i++) {
 +            BY_DIR_ENTRY *ent;
@@ -73,28 +84,7 @@ index 1d401d0420884..b81c7b637a649 100644
 -            if (idx >= 0) {
 -                hent = sk_BY_DIR_HASH_value(ent->hashes, idx);
 -                k = hent->suffix;
--            } else {
--                hent = NULL;
--                k = 0;
-             }
--            CRYPTO_THREAD_unlock(ctx->lock);
--        } else {
--            k = 0;
--            hent = NULL;
--        }
--        for (;;) {
--            char c = '/';
--
--#ifdef OPENSSL_SYS_VMS
--            c = ent->dir[strlen(ent->dir) - 1];
--            if (c != ':' && c != '>' && c != ']') {
--                /*
--                 * If no separator is present, we assume the directory
--                 * specifier is a logical name, and add a colon.  We really
--                 * should use better VMS routines for merging things like
--                 * this, but this will do for now... -- Richard Levitte
--                 */
--                c = ':';
++            }
 +            if (type == X509_LU_CRL && ent->hashes) {
 +                htmp.hash = h;
 +                if (!CRYPTO_THREAD_read_lock(ctx->lock))
@@ -109,22 +99,41 @@ index 1d401d0420884..b81c7b637a649 100644
 +                }
 +                CRYPTO_THREAD_unlock(ctx->lock);
              } else {
--                c = '\0';
-+                k = 0;
+-                hent = NULL;
+                 k = 0;
 +                hent = NULL;
              }
+-            CRYPTO_THREAD_unlock(ctx->lock);
+-        } else {
+-            k = 0;
+-            hent = NULL;
+-        }
+-        for (;;) {
+-            char c = '/';
 +            for (;;) {
 +                char c = '/';
-+
-+    #ifdef OPENSSL_SYS_VMS
+ 
+ #ifdef OPENSSL_SYS_VMS
+-            c = ent->dir[strlen(ent->dir) - 1];
+-            if (c != ':' && c != '>' && c != ']') {
+-                /*
+-                 * If no separator is present, we assume the directory
+-                 * specifier is a logical name, and add a colon.  We really
+-                 * should use better VMS routines for merging things like
+-                 * this, but this will do for now... -- Richard Levitte
+-                 */
+-                c = ':';
+-            } else {
+-                c = '\0';
+-            }
 +                c = ent->dir[strlen(ent->dir) - 1];
 +                if (c != ':' && c != '>' && c != ']') {
 +                    /*
-+                    * If no separator is present, we assume the directory
-+                    * specifier is a logical name, and add a colon.  We really
-+                    * should use better VMS routines for merging things like
-+                    * this, but this will do for now... -- Richard Levitte
-+                    */
++                     * If no separator is present, we assume the directory
++                     * specifier is a logical name, and add a colon.  We really
++                     * should use better VMS routines for merging things like
++                     * this, but this will do for now... -- Richard Levitte
++                     */
 +                    c = ':';
 +                } else {
 +                    c = '\0';
@@ -136,69 +145,81 @@ index 1d401d0420884..b81c7b637a649 100644
 -                 * should be added.
 -                 */
 -                BIO_snprintf(b->data, b->max,
--                             "%s%08lx.%s%d", ent->dir, h, postfix, k);
+-                    "%s%08lx.%s%d", ent->dir, h, postfix, k);
 -            } else
--#endif
--            {
--                BIO_snprintf(b->data, b->max,
--                             "%s%c%08lx.%s%d", ent->dir, c, h, postfix, k);
--            }
--#ifndef OPENSSL_NO_POSIX_IO
--# ifdef _WIN32
--#  define stat _stat
--# endif
--            {
--                struct stat st;
--                if (stat(b->data, &st) < 0)
--                    break;
--            }
--#endif
--            /* found one. */
--            if (type == X509_LU_X509) {
--                if ((X509_load_cert_file_ex(xl, b->data, ent->dir_type, libctx,
--                                            propq)) == 0)
--                    break;
--            } else if (type == X509_LU_CRL) {
--                if ((X509_load_crl_file(xl, b->data, ent->dir_type)) == 0)
--                    break;
 +                if (c == '\0') {
 +                    /*
-+                    * This is special.  When c == '\0', no directory separator
-+                    * should be added.
-+                    */
++                     * This is special.  When c == '\0', no directory separator
++                     * should be added.
++                     */
 +                    BIO_snprintf(b->data, b->max,
-+                                "%s%08lx.%s%d", ent->dir, h, postfix, k);
++                        "%s%08lx.%s%d", ent->dir, h, postfix, k);
 +                } else
-+    #endif
+ #endif
+-            {
+-                BIO_snprintf(b->data, b->max,
+-                    "%s%c%08lx.%s%d", ent->dir, c, h, postfix, k);
+-            }
 +                {
 +                    BIO_snprintf(b->data, b->max,
-+                                "%s%c%08lx.%s%d", ent->dir, c, h, postfix, k);
++                        "%s%c%08lx.%s%d", ent->dir, c, h, postfix, k);
 +                }
-+    #ifndef OPENSSL_NO_POSIX_IO
-+    # ifdef _WIN32
-+    #  define stat _stat
-+    # endif
+ #ifndef OPENSSL_NO_POSIX_IO
+ #ifdef _WIN32
+ #define lstat _stat
+ #define stat _stat
+ #endif
+-            {
+-                struct stat st;
+-                if (lstat(b->data, &st) < 0)
+-                    break; /* file does not exist, not even a symlink */
 +                {
 +                    struct stat st;
-+                    if (stat(b->data, &st) < 0)
-+                        break;
++                    if (lstat(b->data, &st) < 0)
++                        break; /* file does not exist, not even a symlink */
+ #ifndef _WIN32
+-                if (stat(b->data, &st) < 0) {
+-                    k++;
+-                    continue; /* symlink is broken: following it went wrong */
+-                }
++                    if (stat(b->data, &st) < 0) {
++                        k++;
++                        continue; /* symlink is broken: following it went wrong */
++                    }
+ #endif
+-            }
 +                }
-+    #endif
-+                /* found one. */
-+                if (type == X509_LU_X509) {
-+                    if ((X509_load_cert_file_ex(xl, b->data, ent->dir_type, libctx,
-+                                                propq)) == 0)
-+                        break;
-+                } else if (type == X509_LU_CRL) {
-+                    if ((X509_load_crl_file(xl, b->data, ent->dir_type)) == 0)
-+                        break;
-+                }
-+                /* else case will caught higher up */
-+                k++;
-             }
+ #endif
+-            res = 0;
+-            ERR_set_mark();
+-            if (type == X509_LU_X509)
+-                res = X509_load_cert_file_ex(xl, b->data, ent->dir_type, libctx, propq);
+-            else if (type == X509_LU_CRL)
+-                res = X509_load_crl_file(xl, b->data, ent->dir_type);
 -            /* else case will caught higher up */
+-            ERR_pop_to_mark();
+-            /* unless OPENSSL_NO_POSIX_IO, gracefully skip found file if cert/CRL fails to load. */
++                res = 0;
++                ERR_set_mark();
++                if (type == X509_LU_X509)
++                    res = X509_load_cert_file_ex(xl, b->data, ent->dir_type, libctx, propq);
++                else if (type == X509_LU_CRL)
++                    res = X509_load_crl_file(xl, b->data, ent->dir_type);
++                /* else case will caught higher up */
++                ERR_pop_to_mark();
++                /* unless OPENSSL_NO_POSIX_IO, gracefully skip found file if cert/CRL fails to load. */
+ #ifndef OPENSSL_NO_POSIX_IO
+-            res = 1;
++                res = 1;
+ #endif
+-            if (res == 0)
+-                break;
 -            k++;
 -        }
++                if (res == 0)
++                    break;
++                k++;
++            }
  
 -        /*
 -         * we have added it to the cache so now pull it out again
@@ -227,16 +248,15 @@ index 1d401d0420884..b81c7b637a649 100644
              /*
 -             * Look for entry again in case another thread added an entry
 -             * first.
--             */
++             * we have added it to the cache so now pull it out again
++             *
++             * Note: quadratic time find here since the objects won't generally be
++             *       sorted and sorting the would result in O(n^2 log n) complexity.
+              */
 -            if (hent == NULL) {
 -                htmp.hash = h;
 -                idx = sk_BY_DIR_HASH_find(ent->hashes, &htmp);
 -                hent = sk_BY_DIR_HASH_value(ent->hashes, idx);
-+            * we have added it to the cache so now pull it out again
-+            *
-+            * Note: quadratic time find here since the objects won't generally be
-+            *       sorted and sorting the would result in O(n^2 log n) complexity.
-+            */
 +            if (k > 0) {
 +                if (!X509_STORE_lock(xl->store_ctx))
 +                    goto finish;
@@ -252,18 +272,18 @@ index 1d401d0420884..b81c7b637a649 100644
 -                    CRYPTO_THREAD_unlock(ctx->lock);
 -                    ok = 0;
 +            /*
-+            * If a CRL, update the last file suffix added for this.
-+            * We don't need to add an entry if k is 0 as this is the initial value.
-+            * This avoids the need for a write lock and sort operation in the
-+            * simple case where no CRL is present for a hash.
-+            */
++             * If a CRL, update the last file suffix added for this.
++             * We don't need to add an entry if k is 0 as this is the initial value.
++             * This avoids the need for a write lock and sort operation in the
++             * simple case where no CRL is present for a hash.
++             */
 +            if (type == X509_LU_CRL && k > 0) {
 +                if (!CRYPTO_THREAD_write_lock(ctx->lock))
                      goto finish;
 +                /*
-+                * Look for entry again in case another thread added an entry
-+                * first.
-+                */
++                 * Look for entry again in case another thread added an entry
++                 * first.
++                 */
 +                if (hent == NULL) {
 +                    htmp.hash = h;
 +                    idx = sk_BY_DIR_HASH_find(ent->hashes, &htmp);
@@ -295,9 +315,9 @@ index 1d401d0420884..b81c7b637a649 100644
 +                    }
 +
 +                    /*
-+                    * Ensure stack is sorted so that subsequent sk_BY_DIR_HASH_find
-+                    * will not mutate the stack and therefore require a write lock.
-+                    */
++                     * Ensure stack is sorted so that subsequent sk_BY_DIR_HASH_find
++                     * will not mutate the stack and therefore require a write lock.
++                     */
 +                    sk_BY_DIR_HASH_sort(ent->hashes);
 +                } else if (hent->suffix < k) {
 +                    hent->suffix = k;
@@ -310,14 +330,12 @@ index 1d401d0420884..b81c7b637a649 100644
 -                sk_BY_DIR_HASH_sort(ent->hashes);
 -            } else if (hent->suffix < k) {
 -                hent->suffix = k;
--            }
--
--            CRYPTO_THREAD_unlock(ctx->lock);
 +                CRYPTO_THREAD_unlock(ctx->lock);
+             }
  
+-            CRYPTO_THREAD_unlock(ctx->lock);
 -        }
-+            }
- 
+-
 -        if (tmp != NULL) {
 -            ok = 1;
 -            ret->type = tmp->type;
@@ -333,9 +351,9 @@ index 1d401d0420884..b81c7b637a649 100644
 -             */
 -            ERR_clear_error();
 +                /*
-+                * Clear any errors that might have been raised processing empty
-+                * or malformed files.
-+                */
++                 * Clear any errors that might have been raised processing empty
++                 * or malformed files.
++                 */
 +                ERR_clear_error();
  
 -            goto finish;
@@ -343,54 +361,15 @@ index 1d401d0420884..b81c7b637a649 100644
 +            }
          }
      }
-  finish:
-
-From 498b51d9322320bce430184c473573158cf0c4f8 Mon Sep 17 00:00:00 2001
-From: Bruno de Lacheisserie <bruno.de.lacheisserie@gmail.com>
-Date: Tue, 16 Apr 2024 14:26:30 +0200
-Subject: [PATCH 2/6] do not use `X509_NAME_hash_old(...)` if `OPENSSL_NO_MD5`
- is defined
-
----
- crypto/x509/by_dir.c | 4 ++++
- 1 file changed, 4 insertions(+)
-
-diff --git a/crypto/x509/by_dir.c b/crypto/x509/by_dir.c
-index b81c7b637a649..e9ff1951ca6da 100644
---- a/crypto/x509/by_dir.c
-+++ b/crypto/x509/by_dir.c
-@@ -263,7 +263,11 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
-     if (l == 0) {
-         hash[0] = 0;
-     }
-+#ifndef OPENSSL_NO_MD5    
-     hash[1] = X509_NAME_hash_old(name); /* MD5 name hash */
-+#else
-+    hash[1] = 0;
-+#endif
- 
-     for (l = 0; l < 2; ++l) {
-         h = hash[l];
-
-From b742beac8a9cd8e30ffeab72dd3525159c6eef3e Mon Sep 17 00:00:00 2001
-From: Bruno de Lacheisserie <bruno.de.lacheisserie@gmail.com>
-Date: Sun, 2 Jun 2024 14:36:17 +0200
-Subject: [PATCH 3/6] Add a test of the X509_STORE / X509_LOOKUP API for MD5
- hash
-
----
- test/recipes/60-test_x509_store_old.t | 53 +++++++++++++++++++++++++++
- 1 file changed, 53 insertions(+)
- create mode 100644 test/recipes/60-test_x509_store_old.t
-
+ finish:
 diff --git a/test/recipes/60-test_x509_store_old.t b/test/recipes/60-test_x509_store_old.t
 new file mode 100644
-index 0000000000000..6a00c9a448333
+index 0000000..face5c7
 --- /dev/null
 +++ b/test/recipes/60-test_x509_store_old.t
 @@ -0,0 +1,53 @@
 +#! /usr/bin/env perl
-+# Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
++# Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.
 +#
 +# Licensed under the Apache License 2.0 (the "License").  You may not use
 +# this file except in compliance with the License.  You can obtain a copy
@@ -442,195 +421,6 @@ index 0000000000000..6a00c9a448333
 +    # Failure because root cert not present in CApath
 +    ok(!verify("ca-root2", "any", curdir(), [], "-show_chain"));
 +}, create => 1, cleanup => 1;
+-- 
+2.53.0
 
-From ef74616d2ea2cafcfe6c9cb04e00b69b0f6e8c6c Mon Sep 17 00:00:00 2001
-From: Bruno de Lacheisserie <bruno.de.lacheisserie@gmail.com>
-Date: Mon, 3 Jun 2024 12:32:56 +0200
-Subject: [PATCH 4/6] fix comment indentation
-
----
- crypto/x509/by_dir.c | 55 ++++++++++++++++++++++----------------------
- 1 file changed, 28 insertions(+), 27 deletions(-)
-
-diff --git a/crypto/x509/by_dir.c b/crypto/x509/by_dir.c
-index e9ff1951ca6da..53debd2dabfbb 100644
---- a/crypto/x509/by_dir.c
-+++ b/crypto/x509/by_dir.c
-@@ -310,11 +310,11 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
-                 c = ent->dir[strlen(ent->dir) - 1];
-                 if (c != ':' && c != '>' && c != ']') {
-                     /*
--                    * If no separator is present, we assume the directory
--                    * specifier is a logical name, and add a colon.  We really
--                    * should use better VMS routines for merging things like
--                    * this, but this will do for now... -- Richard Levitte
--                    */
-+                     * If no separator is present, we assume the directory
-+                     * specifier is a logical name, and add a colon.  We really
-+                     * should use better VMS routines for merging things like
-+                     * this, but this will do for now... -- Richard Levitte
-+                     */
-                     c = ':';
-                 } else {
-                     c = '\0';
-@@ -322,9 +322,9 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
- 
-                 if (c == '\0') {
-                     /*
--                    * This is special.  When c == '\0', no directory separator
--                    * should be added.
--                    */
-+                     * This is special.  When c == '\0', no directory separator
-+                     * should be added.
-+                     */
-                     BIO_snprintf(b->data, b->max,
-                                 "%s%08lx.%s%d", ent->dir, h, postfix, k);
-                 } else
-@@ -339,6 +339,7 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
-     # endif
-                 {
-                     struct stat st;
-+
-                     if (stat(b->data, &st) < 0)
-                         break;
-                 }
-@@ -357,11 +358,11 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
-             }
- 
-             /*
--            * we have added it to the cache so now pull it out again
--            *
--            * Note: quadratic time find here since the objects won't generally be
--            *       sorted and sorting the would result in O(n^2 log n) complexity.
--            */
-+             * we have added it to the cache so now pull it out again
-+             *
-+             * Note: quadratic time find here since the objects won't generally be
-+             *       sorted and sorting the would result in O(n^2 log n) complexity.
-+             */
-             if (k > 0) {
-                 if (!X509_STORE_lock(xl->store_ctx))
-                     goto finish;
-@@ -372,18 +373,18 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
-                 tmp = NULL;
-             }
-             /*
--            * If a CRL, update the last file suffix added for this.
--            * We don't need to add an entry if k is 0 as this is the initial value.
--            * This avoids the need for a write lock and sort operation in the
--            * simple case where no CRL is present for a hash.
--            */
-+             * If a CRL, update the last file suffix added for this.
-+             * We don't need to add an entry if k is 0 as this is the initial value.
-+             * This avoids the need for a write lock and sort operation in the
-+             * simple case where no CRL is present for a hash.
-+             */
-             if (type == X509_LU_CRL && k > 0) {
-                 if (!CRYPTO_THREAD_write_lock(ctx->lock))
-                     goto finish;
-                 /*
--                * Look for entry again in case another thread added an entry
--                * first.
--                */
-+                 * Look for entry again in case another thread added an entry
-+                 * first.
-+                 */
-                 if (hent == NULL) {
-                     htmp.hash = h;
-                     idx = sk_BY_DIR_HASH_find(ent->hashes, &htmp);
-@@ -407,9 +408,9 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
-                     }
- 
-                     /*
--                    * Ensure stack is sorted so that subsequent sk_BY_DIR_HASH_find
--                    * will not mutate the stack and therefore require a write lock.
--                    */
-+                     * Ensure stack is sorted so that subsequent sk_BY_DIR_HASH_find
-+                     * will not mutate the stack and therefore require a write lock.
-+                     */
-                     sk_BY_DIR_HASH_sort(ent->hashes);
-                 } else if (hent->suffix < k) {
-                     hent->suffix = k;
-@@ -425,9 +426,9 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
-                 memcpy(&ret->data, &tmp->data, sizeof(ret->data));
- 
-                 /*
--                * Clear any errors that might have been raised processing empty
--                * or malformed files.
--                */
-+                 * Clear any errors that might have been raised processing empty
-+                 * or malformed files.
-+                 */
-                 ERR_clear_error();
- 
-                 goto finish;
-
-From 1301c593f88d5ea4d7087e72b42bd78bbfc2e344 Mon Sep 17 00:00:00 2001
-From: Bruno de Lacheisserie <bruno.de.lacheisserie@gmail.com>
-Date: Mon, 3 Jun 2024 12:34:29 +0200
-Subject: [PATCH 5/6] test/recipes/60-test_x509_store_old.t : fix Copyright
- year
-
----
- test/recipes/60-test_x509_store_old.t | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
-
-diff --git a/test/recipes/60-test_x509_store_old.t b/test/recipes/60-test_x509_store_old.t
-index 6a00c9a448333..face5c7c0748c 100644
---- a/test/recipes/60-test_x509_store_old.t
-+++ b/test/recipes/60-test_x509_store_old.t
-@@ -1,5 +1,5 @@
- #! /usr/bin/env perl
--# Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
-+# Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.
- #
- # Licensed under the Apache License 2.0 (the "License").  You may not use
- # this file except in compliance with the License.  You can obtain a copy
-
-From 4612aaf293430102137904d73096f496e642fe43 Mon Sep 17 00:00:00 2001
-From: Bruno de Lacheisserie <bruno.de.lacheisserie@gmail.com>
-Date: Mon, 3 Jun 2024 12:58:01 +0200
-Subject: [PATCH 6/6] get_cert_by_subject_ex : don't use 0 hash value to
- indicate invalid hash
-
----
- crypto/x509/by_dir.c | 11 +++++------
- 1 file changed, 5 insertions(+), 6 deletions(-)
-
-diff --git a/crypto/x509/by_dir.c b/crypto/x509/by_dir.c
-index 53debd2dabfbb..3ffe7e7b074de 100644
---- a/crypto/x509/by_dir.c
-+++ b/crypto/x509/by_dir.c
-@@ -231,6 +231,7 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
-     int ok = 0;
-     int i, j, k, l;
-     unsigned long hash[2];
-+    int valid_hash[2]; /* '0' for invalid value in `hash` array */
-     unsigned long h;
-     BUF_MEM *b = NULL;
-     X509_OBJECT stmp, *tmp;
-@@ -260,20 +261,18 @@ static int get_cert_by_subject_ex(X509_LOOKUP *xl, X509_LOOKUP_TYPE type,
-     ctx = (BY_DIR *)xl->method_data;
- 
-     hash[0] = X509_NAME_hash_ex(name, libctx, propq, &l); /* SHA1 name hash */
--    if (l == 0) {
--        hash[0] = 0;
--    }
-+    valid_hash[0] = (l != 0);
- #ifndef OPENSSL_NO_MD5    
-     hash[1] = X509_NAME_hash_old(name); /* MD5 name hash */
-+    valid_hash[1] = 1;
- #else
--    hash[1] = 0;
-+    valid_hash[1] = 0;
- #endif
- 
-     for (l = 0; l < 2; ++l) {
-         h = hash[l];
--        if (h == 0) {
-+        if (valid_hash[l] == 0)
-             continue; /* skip invalid hash */
--        }
- 
-         for (i = 0; i < sk_BY_DIR_ENTRY_num(ctx->dirs); i++) {
-             BY_DIR_ENTRY *ent;
