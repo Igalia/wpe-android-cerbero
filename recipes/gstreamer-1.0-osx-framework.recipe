@@ -9,9 +9,15 @@ class Recipe(recipe.Recipe):
     version = '0.1'
     stype = SourceType.CUSTOM
     btype = BuildType.CUSTOM
-    deps = ['pkg-config', 'gstreamer-1.0', 'gst-plugins-base-1.0', 'gst-plugins-bad-1.0', 'gst-rtsp-server-1.0']
+    deps = ['pkg-config', 'gstreamer-1.0', 'gst-plugins-base-1.0', 'gst-plugins-bad-1.0', 'gst-rtsp-server-1.0', 'gst-editing-services-1.0']
 
     files_library = ['lib/GStreamer']
+
+    files_share = ['share/gstreamer/uninstaller.py']
+
+    def prepare(self):
+        # Just reexports symbols
+        self.skip_steps = [BuildSteps.DSYMUTIL]
 
     async def _get_installed_gst_libs(self):
         args = [self.env['PKG_CONFIG'], '--list-all']
@@ -27,6 +33,9 @@ class Recipe(recipe.Recipe):
             # Not a gstreamer library pkgconfig file
             if 'gstreamer-plugins-' in gstlib:
                 continue
+            # Do not inject the melded gst-plugins-rs library
+            if 'rsworkspace' in gstlib:
+                continue
             gstlibs.append(gstlib)
         return gstlibs
 
@@ -38,3 +47,14 @@ class Recipe(recipe.Recipe):
             raise FatalError('No gstreamer libraries were found in the prefix!')
         fwlib = DynamicFrameworkLibrary(self.config.min_osx_sdk_version, self.config.target_distro, libname, install_name, libs, self.config.target_arch, env=self.env)
         fwlib.create()
+
+        dest_dir = os.path.join(self.config.prefix, 'share', 'gstreamer')
+        if not os.path.exists(dest_dir):
+            os.makedirs(dest_dir)
+        shutil.copy(
+            os.path.join(self.config.data_dir, 'macos', 'uninstaller.py'),
+            dest_dir
+        )
+
+    def have_symbol_files(self):
+        return False

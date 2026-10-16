@@ -1,0 +1,53 @@
+# -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+from cerbero.tools.libtool import LibtoolLibrary
+
+class Recipe(recipe.Recipe):
+
+    name = 'libproxy'
+    version = '0.5.4'
+    licenses = [License.LGPLv2Plus]
+    stype = SourceType.TARBALL
+    btype = BuildType.MESON
+    url = f'https://github.com/libproxy/libproxy/archive/refs/tags/{version}.tar.gz'
+    tarball_checksum = 'a6e2220349b2025de9b6d9d7f8bb347bf0c728f02a921761ad5f9f66c7436de9'
+
+    # libproxy only builds a dynamic library
+    library_type = LibraryType.SHARED
+
+    deps = ['glib']
+
+    meson_options = {
+        'docs': 'false',
+        'tests': 'false',
+        'vapi': 'false',
+        'introspection': 'false',
+        'config-gnome': 'false',
+        'config-osx': 'true',
+         # the following are needed if PAC is enabled
+        'pacrunner-duktape': 'false',
+        'curl': 'false',
+    }
+
+    patches = [
+        f'{name}/0001-Don-t-use-g_autoptr-for-code-that-will-build-on-wind.patch',
+        f'{name}/0002-Add-VS-definition-files-for-MSVC-support.patch',
+    ]
+
+    files_libs = ['libproxy']
+    files_backend = ['%(libdir)s/libproxy/libpxbackend-1.0%(srext)s']
+    files_devel = ['include/libproxy', '%(libdir)s/pkgconfig/libproxy-1.0.pc']
+
+    def prepare(self):
+        if Platform.is_apple_app_platform(self.config.target_platform):
+            # https://github.com/libproxy/libproxy/pull/284
+            self.meson_options['config-osx'] = 'false'
+        if self.config.target_platform != Platform.LINUX:
+            self.meson_options['config-gnome'] = 'false'
+            self.meson_options['config-kde'] = 'false'
+            self.meson_options['config-sysconfig'] = 'false'
+
+    def post_install(self):
+        LibtoolLibrary('libproxy', None, None, None, self.config.libdir,
+                self.config.target_platform).save()
+        super().post_install()
+

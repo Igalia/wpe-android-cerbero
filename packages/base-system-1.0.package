@@ -12,8 +12,8 @@ class Package(custom.GStreamer, package.Package):
     files = ['cairo:libs', 'expat:libs', 'fontconfig:libs:etc', 'libffi:libs',
              'freetype:libs', 'glib:libs:lang:bins:schemas', 'orc:libs',
              'pango:libs:modules', 'libpng:libs', 'libjpeg-turbo:libs',
-             'tiff:libs', 'gdk-pixbuf:bins:libs:modules:lang', 'libcroco:libs',
-             'librsvg:libs', 'libxml2:libs', 'pixman:libs', 'fribidi:libs',
+             'tiff:libs', 'gdk-pixbuf:bins:libs:modules:lang',
+             'libxml2:libs', 'pixman:libs', 'fribidi:libs', 'graphene:libs',
              'zlib:libs', 'bzip2:libs', 'harfbuzz:libs', 'json-glib:bins:libs',
              'pcre2:libs']
 
@@ -21,20 +21,22 @@ class Package(custom.GStreamer, package.Package):
         Platform.WINDOWS: ['proxy-libintl:libs:lang', 'mingw-runtime'],
         Platform.DARWIN: ['proxy-libintl:libs:lang'],
         Platform.LINUX: [],
-        Platform.ANDROID: ['proxy-libintl:libs:lang', 'libiconv:libs:lang'],
-        Platform.IOS: ['proxy-libintl:libs:lang']
-        }
+        Platform.ANDROID: ['proxy-libintl:libs:lang'],
+        Platform.IOS: ['proxy-libintl:libs:lang'],
+        Platform.TVOS: ['proxy-libintl:libs:lang'],
+    }
 
     def prepare(self):
+        # Bionic provides iconv since API 28; GNU libiconv is only needed below that.
+        if self.config.target_platform == Platform.ANDROID and \
+                DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
+            self.platform_files[Platform.ANDROID] = self.platform_files[Platform.ANDROID] + ['libiconv:libs:lang']
         if self.config.variants.gi:
-            self.files.append('gobject-introspection:libs:typelibs')
+            self.files.append('gobject-introspection:libs')
 
-        if self.config.variants.uwp:
-            self.platform_files[Platform.WINDOWS] = ['proxy-libintl:libs:lang']
-            self.files = [
-                'libffi:libs', 'zlib:libs', 'pcre2:libs',
-                'glib:libs:lang:schemas', 'orc:libs', 'bzip2:libs',
-                'json-glib:libs',
-            ]
-        elif self.config.target_platform == Platform.ANDROID:
-            self.files.remove('librsvg:libs')
+        if self.config.variants.rust:
+            self.files += ['dav1d:libs']
+            # librsvg is only needed by the gst-plugins-bad rsvg element, which WebKit
+            # does not use (it has its own SVG support); it is not built on Android.
+            if self.config.target_platform != Platform.ANDROID:
+                self.files += ['librsvg:libs']

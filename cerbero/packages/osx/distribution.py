@@ -46,9 +46,7 @@ class DistributionXML(object):
 
     PROP_ENABLE_ANYWHERE = 'false'
 
-    def __init__(
-        self, package, store, out_dir, packages_paths, emptypkgs, package_type, target_arch, home_folder=False
-    ):
+    def __init__(self, package, store, out_dir, packages_paths, emptypkgs, package_type, target_arch, home_folder=True):
         self.package = package
         self.store = store
         self.out_dir = out_dir
@@ -57,8 +55,9 @@ class DistributionXML(object):
         self.package_type = package_type
         self.packagerefs = []
         self.target_arch = target_arch
+        # Always enable global installs; enable home install on demand
         self.enable_user_home = self._boolstr(home_folder)
-        self.enable_local_system = self._boolstr(not home_folder)
+        self.enable_local_system = self._boolstr(True)
         if os.path.exists(package.resources_distribution):
             self.template = open(package.resources_distribution).read()
         else:
@@ -98,7 +97,7 @@ class DistributionXML(object):
             parsed_choices.append(p)
             package = self.store.get_package(p)
             package.set_mode(self.package_type)
-            if package in self.emptypkgs:
+            if package in self.emptypkgs or not self.packages_paths[package]:
                 continue
             self.choices += '<line choice="%s"/>\n' % package.identifier()
             self._add_choice(package, not required, selected)
@@ -112,7 +111,7 @@ class DistributionXML(object):
 
         packages = [package] + self.store.get_package_deps(package)
         for package in packages:
-            if package in self.emptypkgs:
+            if package in self.emptypkgs or not self.packages_paths[package]:
                 continue
             package.set_mode(self.package_type)
             self.choices_desc += '<pkg-ref id="%s"/>\n' % package.identifier()

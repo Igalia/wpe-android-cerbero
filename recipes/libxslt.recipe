@@ -6,7 +6,7 @@ class Recipe(recipe.Recipe):
     stype = SourceType.TARBALL
     url = f'https://download.gnome.org/sources/libxslt/1.1/libxslt-{version}.tar.xz'
     tarball_checksum = '85ca62cac0d41fc77d3f6033da9df6fd73d20ea2fc18b0a3609ffb4110e1baeb'
-    configure_options = '--without-python --without-crypto'
+    configure_options = ['--without-python', '--without-crypto']
     deps = ['libxml2']
 
     files_libs = ['libxslt', 'libexslt']

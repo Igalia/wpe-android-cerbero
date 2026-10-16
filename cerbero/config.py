@@ -25,20 +25,20 @@ from pathlib import PurePath, Path
 
 # FIXME: these unused imports are here for backwards compatibility with modules
 # that import them cerbero.config instead of cerbero.enums
-from cerbero.enums import Architecture, Platform, Distro, DistroVersion, License, LibraryType  # noqa: F401
+from cerbero.enums import Architecture, Subsystem, Platform, Distro, DistroVersion, License, LibraryType  # noqa: F401
 from cerbero.errors import FatalError, ConfigurationError
 from cerbero.utils import _, system_info, validate_packager, shell
 from cerbero.utils import to_unixpath, to_winepath, parse_file, detect_qt5, detect_qt6
-from cerbero.utils import EnvVar, EnvValue
+from cerbero.utils import merge_str_env, merge_env_value_env
 from cerbero.utils import messages as m
 from cerbero.ide.pkgconfig import PkgConfig
 from cerbero.ide.vs.env import get_vs_year_version
 
 
 CONFIG_EXT = 'cbc'
-USER_CONFIG_DIR = os.path.expanduser('~/.cerbero')
+USER_CONFIG_DIR = Path('~/.cerbero').expanduser()
 USER_CONFIG_FILENAME = 'cerbero.%s' % CONFIG_EXT
-USER_CONFIG_FILE = os.path.join(USER_CONFIG_DIR, USER_CONFIG_FILENAME)
+USER_CONFIG_FILE = (USER_CONFIG_DIR / USER_CONFIG_FILENAME).as_posix()
 DEFAULT_GIT_ROOT = 'https://gitlab.freedesktop.org/gstreamer'
 DEFAULT_ALLOW_PARALLEL_BUILD = True
 DEFAULT_PACKAGER = 'Default <default@change.me>'
@@ -52,11 +52,16 @@ RUST_TRIPLE_MAPPING = {
     (Platform.LINUX, Architecture.ARM): 'arm-unknown-linux-gnueabi',
     (Platform.LINUX, Architecture.ARMv7): 'armv7-unknown-linux-gnueabihf',
     (Platform.LINUX, Architecture.ARM64): 'aarch64-unknown-linux-gnu',
+    (Platform.LINUX, Architecture.X86): 'x86-unknown-linux-gnu',
     (Platform.LINUX, Architecture.X86_64): 'x86_64-unknown-linux-gnu',
     (Platform.DARWIN, Architecture.ARM64): 'aarch64-apple-darwin',
     (Platform.DARWIN, Architecture.X86_64): 'x86_64-apple-darwin',
-    (Platform.IOS, Architecture.ARM64): 'aarch64-apple-ios',
-    (Platform.IOS, Architecture.X86_64): 'x86_64-apple-ios',
+    (Platform.IOS, Architecture.ARM64, Subsystem.IOS): 'aarch64-apple-ios',
+    (Platform.IOS, Architecture.ARM64, Subsystem.IOS_SIMULATOR): 'aarch64-apple-ios-sim',
+    (Platform.IOS, Architecture.X86_64, Subsystem.IOS_SIMULATOR): 'x86_64-apple-ios',
+    (Platform.TVOS, Architecture.ARM64, Subsystem.TVOS): 'aarch64-apple-tvos',
+    (Platform.TVOS, Architecture.ARM64, Subsystem.TVOS_SIMULATOR): 'aarch64-apple-tvos-sim',
+    (Platform.TVOS, Architecture.X86_64, Subsystem.TVOS_SIMULATOR): 'x86_64-apple-tvos',
     (Platform.WINDOWS, Architecture.X86_64, 'gnu'): 'x86_64-pc-windows-gnu',
     (Platform.WINDOWS, Architecture.X86_64, 'msvc'): 'x86_64-pc-windows-msvc',
     (Platform.WINDOWS, Architecture.ARM64, 'msvc'): 'aarch64-pc-windows-msvc',
@@ -97,16 +102,16 @@ class Variants(object):
         'rpi',
         'visualstudio',
         'mingw',
-        'uwp',
         'qt5',
         'intelmsdk',
         'python',
         'werror',
-        'vaapi',
+        'va',
         'rust',
         'qt6',
+        'gtk',
     ]
-    __enabled_variants = ['debug', 'optimization', 'testspackage']
+    __enabled_variants = ['debug', 'optimization', 'testspackage', 'assert', 'checks']
     __bool_variants = __enabled_variants + __disabled_variants
     # Variants that are `key: (values)`, with the first value in the tuple
     # being the default
@@ -117,29 +122,44 @@ class Variants(object):
     }
 
     def __init__(self, variants):
+        # Keeps a list of variants overriden by the user after initialization
+        self.__overridden_variants = set()
         # Set default values
+        self.reset()
+        self.override(variants)
+
+    def reset(self):
         for v in self.__enabled_variants:
             setattr(self, v, True)
         for v in self.__disabled_variants:
             setattr(self, v, False)
         for v, choices in self.__mapping_variants.items():
             setattr(self, v, choices[0])
-        self.override(variants)
+        # reset after all inits
+        self.__overridden_variants.clear()
 
     def set_bool(self, key):
+        val = True
         if key.startswith('no'):
             key = key[2:]
-            if key not in self.__bool_variants:
-                m.warning('Variant {!r} is unknown or obsolete'.format(key))
-            setattr(self, key, False)
-        else:
-            if key not in self.__bool_variants:
-                m.warning('Variant {!r} is unknown or obsolete'.format(key))
-            setattr(self, key, True)
+            val = False
+        if key not in self.__bool_variants:
+            m.warning('Variant {!r} is unknown or obsolete'.format(key))
+        setattr(self, key, val)
 
-    def override(self, variants):
+    def override(self, variants, force=True):
+        """
+        Override existing variants using value (str) or values (list) from `variants`.
+
+        If `force` is `False`, do not override those variants that are already overridden
+        after the object initialization.
+        """
+
         if not isinstance(variants, list):
             variants = [variants]
+        if not force:
+            variants = [v for v in variants if not self._is_overridden(v)]
+
         # Set the configured values
         for v in variants:
             if '=' in v:
@@ -164,10 +184,10 @@ class Variants(object):
         if '-' in attr:
             raise AssertionError("Variant name {!r} must not contain '-'".format(attr))
         super().__setattr__(attr, value)
-        # UWP implies Visual Studio
-        if attr == 'uwp' and value:
-            self.visualstudio = True
-            self.mingw = False
+        if attr in ['_Variants__overridden_variants']:
+            return
+
+        self.__overridden_variants.add(attr)
 
     def __getattr__(self, name):
         if name.startswith('no') and name[2:] in self.bools():
@@ -184,6 +204,17 @@ class Variants(object):
 
     def mappings(self):
         return sorted(self.__mapping_variants)
+
+    def _is_overridden(self, variant):
+        if not isinstance(variant, str):
+            return False
+        if variant.startswith('no'):
+            real_name = variant[2:]
+            if real_name not in self.bools():
+                return False
+        else:
+            real_name = variant
+        return real_name in self.__overridden_variants
 
 
 class Config(object):
@@ -205,6 +236,8 @@ class Config(object):
     _properties = [
         'platform',
         'target_platform',
+        'subsystem',
+        'target_subsystem',
         'arch',
         'target_arch',
         'prefix',
@@ -218,13 +251,15 @@ class Config(object):
         'git_root',
         'distro',
         'target_distro',
-        'environ_dir',
+        'config_dir',
         'cache_file',
         'toolchain_prefix',
         'toolchain_version',
         'distro_version',
         'target_distro_version',
-        'allow_system_libs',
+        'system_recipes_dir',
+        'allow_system_recipes',
+        'system_recipes_priority',
         'packages_dir',
         'py_prefix',
         'logs',
@@ -232,6 +267,7 @@ class Config(object):
         'allow_parallel_build',
         'allow_universal_parallel_build',
         'num_of_cpus',
+        'cargo_build_jobs',
         'use_configure_cache',
         'packages_prefix',
         'packager',
@@ -242,8 +278,8 @@ class Config(object):
         'use_ccache',
         'force_git_commit',
         'universal_archs',
+        'universal_prefix',
         'osx_target_sdk_version',
-        'variants',
         'build_tools_prefix',
         'build_tools_sources',
         'build_tools_logs',
@@ -252,7 +288,9 @@ class Config(object):
         'recipes_commits',
         'recipes_remotes',
         'ios_platform',
+        'tvos_platform',
         'extra_build_tools',
+        'override_build_tools',
         'distro_packages_install',
         'interactive',
         'bash_completions',
@@ -263,8 +301,10 @@ class Config(object):
         'cached_sources',
         'tools_prefix',
         'ios_min_version',
+        'tvos_min_version',
         'toolchain_path',
         'mingw_perl_prefix',
+        'msvc_gl_prefix',
         'msvc_env_for_toolchain',
         'mingw_env_for_toolchain',
         'msvc_env_for_build_system',
@@ -279,6 +319,7 @@ class Config(object):
         'package_tarball_compression',
         'extra_mirrors',
         'extra_bootstrap_packages',
+        'override_bootstrap_packages',
         'moltenvk_prefix',
         'vs_install_path',
         'vs_install_version',
@@ -289,6 +330,10 @@ class Config(object):
         'tomllib_path',
         'qt6_qmake_path',
         'system_build_tools',
+    ]
+
+    _deprecated_properties = [
+        ('environ_dir', 'config_dir'),
     ]
 
     cookbook = None
@@ -314,6 +359,21 @@ class Config(object):
         # Store raw os.environ data
         self._pre_environ = os.environ.copy()
         self.config_env = os.environ.copy()
+        # Initialize variants
+        self.variants = Variants([])
+
+    def _warn_deprecated_properties(self, config_dict):
+        """
+        Warn about deprecated properties and map them to new properties.
+
+        Args:
+            config_dict: Dict from parsed config file to check for deprecated properties.
+        """
+        for old_prop, new_prop in self._deprecated_properties:
+            if old_prop in config_dict:
+                m.deprecation(f'{old_prop} is deprecated, use {new_prop} instead')
+                # Map the old property value to the new property in the config dict
+                config_dict[new_prop] = config_dict[old_prop]
 
     def _copy(self, arch):
         c = copy.deepcopy(self)
@@ -329,18 +389,16 @@ class Config(object):
         if variants_override is None:
             variants_override = []
 
-        # Initialize variants
-        self.variants = Variants(variants_override)
+        # Reset variants
+        self.variants.reset()
+        self.variants.override(variants_override)
 
         # First load the default configuration
         self.load_defaults()
 
         # Use Visual Studio by default when building on Windows
-        if not self.variants.mingw and not self.variants.visualstudio:
-            if self.platform == Platform.WINDOWS:
-                self.variants.override(['visualstudio'])
-            else:
-                self.variants.override(['mingw'])
+        if not self.variants.mingw and not self.variants.visualstudio and self.platform == Platform.WINDOWS:
+            self.variants.override(['visualstudio'])
 
         # Next parse the user configuration file USER_CONFIG_FILE
         # which overrides the defaults
@@ -349,6 +407,10 @@ class Config(object):
         # Next, if a config file is provided use it to override the settings
         # again (set the target, f.ex.)
         self._load_cmd_config(filename)
+
+        # When not cross-compiling on macOS, we need to set target_subsystem
+        if self.platform == Platform.DARWIN and self.target_subsystem is None:
+            self.target_subsystem = Subsystem.MACOS
 
         # Create a copy of the config for each architecture in case we are
         # building Universal binaries
@@ -373,7 +435,7 @@ class Config(object):
                         for f in filename:
                             if 'universal' in f:
                                 d = os.path.dirname(f)
-                        arch_config[arch]._load_cmd_config([os.path.join(d, config_file)])
+                        arch_config[arch]._load_cmd_config([Path(d, config_file).as_posix()])
             else:
                 raise ConfigurationError('universal_archs must be a list or a dict')
 
@@ -382,7 +444,7 @@ class Config(object):
         # Fill the defaults in the config which depend on the configuration we
         # loaded above
         self._load_last_defaults()
-        # Load the platform-specific (linux|windows|android|darwin).config
+        # Load the platform-specific (linux|windows|android|darwin|ios|tvos).config
         self._load_platform_config()
         # And validate properties
         self._validate_properties()
@@ -395,8 +457,11 @@ class Config(object):
 
         for config in list(self.arch_config.values()):
             if self.target_arch == Architecture.UNIVERSAL:
-                config.sources = os.path.join(self.sources, config.target_arch)
-                config.prefix = os.path.join(self.prefix)
+                config.sources = Path(self.sources, config.target_arch).as_posix()
+                config.prefix = Path(self.prefix, config.target_arch).as_posix()
+                # A universal prefix is only available if arch-prefixes are merged during build
+                if 'merged' in self.cross_universal_type():
+                    config.universal_prefix = self.prefix
             # qmake_path is different for each arch in android-universal, but
             # not in ios-universal.
             qtpkgdir, qmake5 = detect_qt5(
@@ -417,8 +482,8 @@ class Config(object):
 
         # Ensure that variants continue to override all other configuration
         self.variants.override(variants_override)
-        if not self.prefix_is_executable() and self.variants.gi:
-            m.warning(_('gobject introspection requires an executable ' "prefix, 'gi' variant will be removed"))
+        if self.variants.gi and not self.gi_supported():
+            m.warning(_("gobject introspection requires an executable target, 'gi' variant will be removed"))
             self.variants.gi = False
 
         for c in list(self.arch_config.values()):
@@ -461,11 +526,15 @@ class Config(object):
         if arches:
             m.message('Building the following arches: ' + ' '.join(arches))
 
+        if self.allow_system_recipes and self.target_platform != Platform.LINUX:
+            m.message('Force not allow system-recipes because target_platform is not Linux')
+            self.allow_system_recipes = False
+
     def do_setup_env(self):
         self._create_paths()
 
         self.rel_libdir = 'lib%s' % self.lib_suffix
-        libdir = os.path.join(self.prefix, self.rel_libdir)
+        libdir = Path(self.prefix, self.rel_libdir).as_posix()
         self.libdir = libdir
 
         self.env = self.get_env(self.prefix, libdir)
@@ -485,55 +554,31 @@ class Config(object):
             'GST_PLUGIN_PATH_1_0',
             'GST_REGISTRY',
             'GST_REGISTRY_1_0',
+            'MONO_PATH',
+            'MONO_GAC_PREFIX',
         )
         for each in runtime_env:
             env[each] = to_winepath(env[each])
-        env['WIX'] = os.path.join(self.build_tools_prefix, 'lib', 'wix')
         # NOTE: Ensure that whatever directory this goes into is ignored by the
         # .cerbero deps CI job otherwise we will tar up ~1GB of generated data.
-        env['WINEPREFIX'] = os.path.join(self.build_tools_prefix, 'var', 'tmp', 'wine')
-        env['WINEPATH'] = to_winepath(os.path.join(prefix, 'bin'))
+        env['WINEPREFIX'] = Path(self.build_tools_prefix, 'var', 'tmp', 'wine').as_posix()
+        env['WINEPATH'] = to_winepath(Path(prefix, 'bin').as_posix())
         env['WINEDEBUG'] = 'fixme-all'
         return env
-
-    def _merge_env(self, old_env, new_env, override_env=()):
-        ret_env = {}
-        for k in new_env.keys():
-            new_v = new_env[k]
-            # Must not accidentally use this with EnvValue objects
-            if isinstance(new_v, EnvValue):
-                raise AssertionError('{!r}: {!r}'.format(k, new_v))
-            if k not in old_env or k in override_env:
-                ret_env[k] = new_v
-                continue
-            old_v = old_env[k]
-            if new_v == old_v:
-                ret_env[k] = new_v
-            elif EnvVar.is_path(k) or EnvVar.is_arg(k) or EnvVar.is_cmd(k):
-                ret_env[k] = new_v
-            else:
-                raise FatalError(
-                    "Don't know how to combine the environment "
-                    "variable '%s' with values '%s' and '%s'" % (k, new_v, old_v)
-                )
-        for k in old_env.keys():
-            if k not in new_env:
-                ret_env[k] = old_env[k]
-        return ret_env
 
     @lru_cache(maxsize=None)
     def get_env(self, prefix, libdir):
         # Get paths for environment variables
-        includedir = os.path.join(prefix, 'include')
-        bindir = os.path.join(prefix, 'bin')
-        manpathdir = os.path.join(prefix, 'share', 'man')
-        infopathdir = os.path.join(prefix, 'share', 'info')
-        typelibpath = os.path.join(libdir, 'girepository-1.0')
-        xdgdatadir = os.path.join(prefix, 'share')
-        xdgconfigdir = os.path.join(prefix, 'etc', 'xdg')
-        xcursordir = os.path.join(prefix, 'share', 'icons')
+        includedir = Path(prefix, 'include').as_posix()
+        bindir = Path(prefix, 'bin').as_posix()
+        manpathdir = Path(prefix, 'share', 'man').as_posix()
+        infopathdir = Path(prefix, 'share', 'info').as_posix()
+        typelibpath = Path(libdir, 'girepository-1.0').as_posix()
+        xdgdatadir = Path(prefix, 'share').as_posix()
+        xdgconfigdir = Path(prefix, 'etc', 'xdg').as_posix()
+        xcursordir = Path(prefix, 'share', 'icons').as_posix()
         aclocalflags = '-I{} -I{}'.format(
-            os.path.join(prefix, 'share', 'aclocal'), os.path.join(self.build_tools_prefix, 'share', 'aclocal')
+            Path(prefix, 'share', 'aclocal').as_posix(), Path(self.build_tools_prefix, 'share', 'aclocal').as_posix()
         )
 
         perlversionpath = os.path.join(libdir, 'perl5', 'site_perl', self._perl_version())
@@ -542,20 +587,17 @@ class Config(object):
             # installed in 5.8
             perlversionpath = perlversionpath.rsplit('.', 1)[0]
 
-        perl5lib = ':'.join([to_unixpath(os.path.join(libdir, 'perl5')), to_unixpath(perlversionpath)])
-        gstpluginpath = os.path.join(libdir, 'gstreamer-0.10')
-        gstpluginpath10 = os.path.join(libdir, 'gstreamer-1.0')
-        gstregistry = os.path.join('~', '.gstreamer-0.10', 'cerbero-registry-%s' % self.target_arch)
-        gstregistry10 = os.path.join('~', '.cache', 'gstreamer-1.0', 'cerbero-registry-%s' % self.target_arch)
-        gstregistry = os.path.expanduser(gstregistry)
-        gstregistry10 = os.path.expanduser(gstregistry10)
+        perl5lib = ':'.join([to_unixpath(Path(libdir, 'perl5').as_posix()), to_unixpath(perlversionpath)])
+        gstpluginpath10 = Path(libdir, 'gstreamer-1.0').as_posix()
+        gstregistry10 = f'~/.cache/gstreamer-1.0/cerbero-registry-{self.target_arch}'
+        gstregistry10 = Path(gstregistry10).expanduser().as_posix()
 
         pythonpath = []
         for p in (self.prefix, self.build_tools_prefix):
             for pypath in self.py_prefixes:
                 # Starting with Python 3.7.1 on Windows, each PYTHONPATH must use the
                 # native path separator and must end in a path separator.
-                pythonpath += [os.path.join(p, pypath) + os.sep]
+                pythonpath += [Path(p, pypath).as_posix() + os.sep]
         pythonpath = os.pathsep.join(pythonpath)
 
         if self.platform == Platform.LINUX:
@@ -568,23 +610,26 @@ class Config(object):
 
         path = self.config_env.get('PATH', None)
         if not self._is_build_tools_config:
-            path = self._join_path(os.path.join(self.build_tools_config.prefix, 'bin'), path)
+            path = self._join_path(Path(self.build_tools_config.prefix, 'bin').as_posix(), path)
         if self.variants.rust:
-            path = self._join_path(os.path.join(self.cargo_home, 'bin'), path)
+            path = self._join_path(Path(self.cargo_home, 'bin').as_posix(), path)
         # Add the prefix bindir after the build-tools bindir so that on Windows
         # binaries are run with the same libraries that they are linked with.
         if bindir not in path and self.prefix_is_executable():
             path = self._join_path(bindir, path)
         ld_library_path = ''
         if not self._is_build_tools_config:
-            ld_library_path = os.path.join(self.build_tools_config.libdir)
+            ld_library_path = Path(self.build_tools_config.libdir).as_posix()
         if self.prefix_is_executable():
             ld_library_path = self._join_path(libdir, ld_library_path)
         if self.extra_lib_path is not None:
             ld_library_path = self._join_path(ld_library_path, self.extra_lib_path)
         if self.toolchain_prefix is not None:
-            ld_library_path = self._join_path(ld_library_path, os.path.join(self.toolchain_prefix, 'lib'))
-            includedir = self._join_path(includedir, os.path.join(self.toolchain_prefix, 'include'))
+            ld_library_path = self._join_path(ld_library_path, Path(self.toolchain_prefix, 'lib').as_posix())
+            includedir = self._join_path(includedir, Path(self.toolchain_prefix, 'include').as_posix())
+        if self.lib_suffix and self.variants.python:
+            # if there is a lib_suffix and a Python build is present it would sit "next" to the lib_suffix dir rather than in it
+            ld_library_path = self._join_path(Path(self.prefix, 'lib').as_posix(), ld_library_path)
         # Most of these variables are extracted from jhbuild
         env = {
             'LD_LIBRARY_PATH': ld_library_path,
@@ -599,12 +644,12 @@ class Config(object):
             'ACLOCAL_FLAGS': aclocalflags,
             'ACLOCAL': 'aclocal',
             'PERL5LIB': perl5lib,
-            'GST_PLUGIN_PATH': gstpluginpath,
+            'GST_PLUGIN_PATH': gstpluginpath10,
             'GST_PLUGIN_PATH_1_0': gstpluginpath10,
-            'GST_REGISTRY': gstregistry,
+            'GST_REGISTRY': gstregistry10,
             'GST_REGISTRY_1_0': gstregistry10,
             'PYTHONPATH': pythonpath,
-            'MONO_PATH': os.path.join(libdir, 'mono', '4.5'),
+            'MONO_PATH': Path(libdir, 'mono', '4.5').as_posix(),
             'MONO_GAC_PREFIX': prefix,
             'GSTREAMER_ROOT': prefix,
             'CERBERO_PREFIX': self.prefix,
@@ -614,8 +659,9 @@ class Config(object):
         }
 
         PkgConfig.set_executable(env, self)
-        PkgConfig.set_default_search_dir(os.path.join(prefix, 'share', 'pkgconfig'), env, self)
-        PkgConfig.add_search_dir(os.path.join(libdir, 'pkgconfig'), env, self)
+        PkgConfig.set_default_search_dir(Path(prefix, 'share', 'pkgconfig').as_posix(), env, self)
+        PkgConfig.add_search_dir(Path(libdir, 'pkgconfig').as_posix(), env, self)
+        PkgConfig.add_search_dir(self.get_custom_pkg_config_path(), env, self)
 
         # Some autotools recipes will call the native (non-cross) compiler to
         # build generators, and we don't want it to use these. We will set the
@@ -626,7 +672,7 @@ class Config(object):
 
         # merge the config env with this new env
         # LDFLAGS and PATH were already merged above
-        new_env = self._merge_env(self.config_env, env, override_env=('LDFLAGS', 'PATH'))
+        new_env = merge_str_env(self.config_env, env, override_env=('LDFLAGS', 'PATH'))
 
         if self.target_platform == Platform.WINDOWS and self.platform != Platform.WINDOWS:
             new_env = self.get_wine_runtime_env(prefix, new_env)
@@ -639,20 +685,21 @@ class Config(object):
         self.set_property('prefix', None)
         self.set_property('sources', None)
         self.set_property('local_sources', None)
-        self.set_property('cached_sources', self._relative_path('sources'))
         self.set_property('git_root', DEFAULT_GIT_ROOT)
         self.set_property('allow_parallel_build', DEFAULT_ALLOW_PARALLEL_BUILD)
         self.set_property('allow_universal_parallel_build', DEFAULT_ALLOW_PARALLEL_BUILD)
         self.set_property('host', None)
         self.set_property('build', None)
         self.set_property('target', None)
-        platform, arch, distro, distro_version, num_of_cpus = system_info()
+        platform, subsystem, arch, distro, distro_version, num_of_cpus = system_info()
         target_distro = distro
         # In Windows we do not differenciate between MSYS and MSYS2 for the target_distro
         if platform == Platform.WINDOWS:
             target_distro = Distro.WINDOWS
         self.set_property('platform', platform)
+        self.set_property('subsystem', subsystem)
         self.set_property('num_of_cpus', num_of_cpus)
+        self.set_property('cargo_build_jobs', None)
         self.set_property('target_platform', platform)
         self.set_property('arch', arch)
         self.set_property('target_arch', arch)
@@ -669,15 +716,17 @@ class Config(object):
         self.set_property('lib_suffix', '')
         self.set_property('exe_suffix', self._get_exe_suffix())
         self.set_property('data_dir', self._find_data_dir())
-        self.set_property('environ_dir', self._relative_path('config'))
+        self.set_property('cached_sources', self._relative_path('sources'))
+        self.set_property('config_dir', self._relative_path('config'))
         self.set_property('recipes_dir', self._relative_path('recipes'))
+        self.set_property('system_recipes_dir', self._relative_path('system-recipes'))
+        self.set_property('allow_system_recipes', platform == Platform.LINUX)
+        self.set_property('system_recipes_priority', 1)
         self.set_property('packages_dir', self._relative_path('packages'))
-        self.set_property('allow_system_libs', True)
         self.set_property('use_configure_cache', False)
         self.set_property('external_recipes', {})
         self.set_property('external_packages', {})
         self.set_property('universal_archs', None)
-        self.set_property('variants', None)
         self.set_property('build_tools_prefix', None)
         self.set_property('build_tools_sources', None)
         self.set_property('build_tools_cache', None)
@@ -686,6 +735,7 @@ class Config(object):
         self.set_property('recipes_commits', {})
         self.set_property('recipes_remotes', {})
         self.set_property('extra_build_tools', [])
+        self.set_property('override_build_tools', [])
         self.set_property('distro_packages_install', True)
         self.set_property('interactive', m.console_is_interactive())
         self.set_property('meson_properties', {})
@@ -693,6 +743,7 @@ class Config(object):
         self.set_property('extra_properties', {})
         self.set_property('extra_mirrors', [])
         self.set_property('extra_bootstrap_packages', {})
+        self.set_property('override_bootstrap_packages', {})
         self.set_property('bash_completions', set())
         # Increase open-files limits
         set_nofile_ulimit()
@@ -704,16 +755,20 @@ class Config(object):
             setattr(self, name, value)
 
     def get_recipes_repos(self):
-        recipes_dir = {'default': (self.recipes_dir, 0)}
+        recipes_dir = {}
+        if self.allow_system_recipes:
+            # Setting first system recipes to be loaded first if same priority
+            recipes_dir['system'] = (self.system_recipes_dir, self.system_recipes_priority)
+        recipes_dir['default'] = (self.recipes_dir, 0)
         for name, (path, priority) in self.external_recipes.items():
-            path = os.path.abspath(os.path.expanduser(path))
+            path = Path(os.path.abspath(os.path.expanduser(path))).as_posix()
             recipes_dir[name] = (path, priority)
         return recipes_dir
 
     def get_packages_repos(self):
         packages_dir = {'default': (self.packages_dir, 0)}
         for name, (path, priority) in self.external_packages.items():
-            path = os.path.abspath(os.path.expanduser(path))
+            path = Path(os.path.abspath(os.path.expanduser(path))).as_posix()
             packages_dir[name] = (path, priority)
         return packages_dir
 
@@ -726,10 +781,6 @@ class Config(object):
 
     def cross_compiling(self):
         "Are we building for the host platform or not?"
-        # Building for UWP is always cross-compilation since we can't run the
-        # binaries that we output
-        if self.variants.uwp:
-            return True
         # On Windows, building 32-bit on 64-bit is not cross-compilation since
         # 32-bit Windows binaries run on 64-bit Windows via WOW64.
         if self.platform == Platform.WINDOWS:
@@ -744,25 +795,68 @@ class Config(object):
     def cross_universal_type(self):
         if not self.cross_compiling():
             return None
-        # cross-ios-universal, each arch prefix is merged and flattened into one prefix
-        if isinstance(self.universal_archs, list):
-            return 'flat'
-        # cross-android-universal, each arch prefix is separate
-        if isinstance(self.universal_archs, dict):
-            return 'normal'
-        return None
+        if self.target_arch != Architecture.UNIVERSAL and not self.universal_archs:
+            return None
+        # cross-macos-universal, cross-ios-universal, cross-ios-sim-universal:
+        # each arch prefix is merged and flattened into one prefix
+        if Platform.is_apple(self.target_platform):
+
+            def subsystem_kind(cf):
+                # XXX: Ideally we should look at target_subsystem defined in
+                # the file, but that is only known to the parent universal
+                # config, not the sub-arch inside. So we use the filename.
+                return 'simulator' if '-sim-' in cf else 'device'
+
+            # Detect whether the universal prefix is heterogenous. At the time
+            # of writing, only cross-ios-universal met this description: it
+            # ships iOS ARM64 and iOS Simulator x86_64.
+            subsystem = None
+            for arch, config_file in self.universal_archs.items():
+                if subsystem is None:
+                    subsystem = subsystem_kind(config_file)
+                    continue
+                if subsystem != subsystem_kind(config_file):
+                    return 'merged-hetero'
+            return 'merged-homo'
+        return 'split'
+
+    def is_automatically_symbolicable(self):
+        """
+        Can symbols be generated just by strip+objcopy?
+        """
+        if Platform.is_apple(self.target_platform):
+            return False
+        if self.variants.visualstudio:
+            return False
+        return True
 
     def prefix_is_executable(self):
         """Can the binaries from the target platform can be executed in the
         build env?"""
         if self.target_platform != self.platform:
             return False
-        # Executables built for UWP cannot be run as-is
-        if self.variants.uwp:
-            return False
         if self.target_arch != self.arch:
             if self.target_arch == Architecture.X86 and self.arch == Architecture.X86_64:
                 return True
+            if self.target_platform == Platform.DARWIN and self.target_arch == Architecture.X86_64:
+                return True
+            if self.target_arch == Architecture.UNIVERSAL and 'merged' in self.cross_universal_type():
+                return True
+            return False
+        return True
+
+    def gi_supported(self):
+        if not self.prefix_is_executable():
+            return False
+        # When building cross-macos-universal, the merged prefix is executable
+        # on both arm64 and x86_64, but introspection runs executables before
+        # merging, so we only support it when running on arm64, where we have
+        # Rosetta available.
+        if (
+            self.target_platform == Platform.DARWIN
+            and self.target_arch == Architecture.UNIVERSAL
+            and self.arch != Architecture.ARM64
+        ):
             return False
         return True
 
@@ -781,10 +875,10 @@ class Config(object):
         self._create_path(self.logs)
         # dict universal arches do not have an active prefix
         if not isinstance(self.universal_archs, dict):
-            self._create_path(os.path.join(self.prefix, 'share', 'aclocal'))
+            self._create_path(Path(self.prefix, 'share', 'aclocal').as_posix())
 
         if self._is_build_tools_config:
-            self._create_path(os.path.join(self.prefix, 'var', 'tmp'))
+            self._create_path(Path(self.prefix, 'var', 'tmp').as_posix())
 
     def _create_build_tools_config(self):
         # Use a common prefix for the build tools for all the configurations
@@ -808,10 +902,14 @@ class Config(object):
         self.build_tools_config.build_tools_cache = self.build_tools_cache
         self.build_tools_config.system_build_tools = self.system_build_tools
         self.build_tools_config.external_recipes = self.external_recipes
+        self.build_tools_config.recipes_remotes = self.recipes_remotes
+        self.build_tools_config.recipes_commits = self.recipes_commits
         self.build_tools_config.extra_mirrors = self.extra_mirrors
         self.build_tools_config.cached_sources = self.cached_sources
         self.build_tools_config.vs_install_path = self.vs_install_path
         self.build_tools_config.vs_install_version = self.vs_install_version
+        self.build_tools_config.cargo_build_jobs = self.cargo_build_jobs
+        self.build_tools_config.num_of_cpus = self.num_of_cpus
 
         self.build_tools_config.do_setup_env()
 
@@ -829,26 +927,39 @@ class Config(object):
         # Make sure we also include the default non-versioned path on
         # Windows in addition to the posix path.
         self.py_win_prefix = sysconfig.get_path('purelib', 'nt', vars=pyvars)
+        # And the system prefix for Xcode Python
+        # (making it relative as it's appended to the Cerbero root folder)
+        self.py_macos_prefix = os.path.splitdrive(sysconfig.get_path('purelib'))[1].lstrip('/')
 
         self.py_prefixes = [self.py_prefix, self.py_plat_prefix]
         if self.platform == Platform.WINDOWS:
             self.py_prefixes.append(self.py_win_prefix)
         self.py_prefixes = list(set(self.py_prefixes))
 
+        if self.platform == Platform.WINDOWS:
+            # pythonpaths start with 'Lib' on Windows, which is extremely
+            # undesirable since our libdir is 'lib'. Windows APIs are
+            # case-preserving case-insensitive.
+            # Running this fix first is necessary because otherwise the WiX
+            # logic will enumerate lib/ first, and then Lib/ for the Python
+            # package, thus double defining the same artifact folder.
+            self.py_prefixes = [path.lower() for path in self.py_prefixes]
+
         # Ensure python paths exists because setup.py won't create them
         for path in self.py_prefixes:
-            path = os.path.join(self.prefix, path)
-            if self.platform == Platform.WINDOWS:
-                # pythonpaths start with 'Lib' on Windows, which is extremely
-                # undesirable since our libdir is 'lib'. Windows APIs are
-                # case-preserving case-insensitive.
-                path = path.lower()
+            path = Path(self.prefix, path).as_posix()
             # dict universal arches do not have an active prefix
             if not isinstance(self.universal_archs, dict):
                 self._create_path(path)
 
     def _parse(self, filename, reset=True):
-        config = {'os': os, '__file__': filename, 'env': self.config_env, 'cross': self.cross_compiling()}
+        config = {
+            'os': os,
+            '__file__': filename,
+            'env': self.config_env,
+            'cross': self.cross_compiling(),
+            'variants': self.variants,
+        }
         if not reset:
             for prop in self._properties:
                 if hasattr(self, prop):
@@ -858,6 +969,10 @@ class Config(object):
             parse_file(filename, config)
         except Exception:
             raise ConfigurationError(_('Could not include config file (%s)') % filename)
+
+        # Handle deprecated properties from config file first
+        self._warn_deprecated_properties(config)
+
         for key in self._properties:
             if key in config:
                 self.set_property(key, config[key], True)
@@ -901,63 +1016,78 @@ class Config(object):
         if filenames is not None:
             for f in filenames:
                 # Check if the config specified is a complete path, else search
-                # in the user config directory
-                if not os.path.exists(f):
-                    f = os.path.join(USER_CONFIG_DIR, f + '.' + CONFIG_EXT)
-
-                if os.path.exists(f):
-                    self._parse(f, reset=False)
+                # in the user config directory and then in the config_dir (cerbero_share/config/)
+                uf = (USER_CONFIG_DIR / (f + '.' + CONFIG_EXT)).as_posix()
+                ef = Path(self.config_dir, f if f.endswith('.' + CONFIG_EXT) else f + '.' + CONFIG_EXT).as_posix()
+                for config_file in [f, uf, ef]:
+                    if os.path.exists(config_file):
+                        self._parse(config_file, reset=False)
+                        break
                 else:
-                    raise ConfigurationError(_("Configuration file %s doesn't " 'exist') % f)
+                    raise ConfigurationError(_('Configuration file %s or fallbacks %s, %s not found') % (f, uf, ef))
 
     def _load_platform_config(self):
-        platform_config = os.path.join(self.environ_dir, '%s.config' % self.target_platform)
-        arch_config = os.path.join(self.environ_dir, '%s_%s.config' % (self.target_platform, self.target_arch))
+        platform_config = Path(self.config_dir, f'{self.target_platform}.config').as_posix()
+        arch_config = Path(self.config_dir, f'{self.target_platform}_{self.target_arch}.config').as_posix()
 
         for config_path in [platform_config, arch_config]:
             if os.path.exists(config_path):
                 self._parse(config_path, reset=False)
 
-    def _get_toolchain_target_platform_arch(self):
-        if self.target_platform != Platform.WINDOWS or self._is_build_tools_config:
-            return (self.target_platform, self.target_arch)
-        if not self.variants.visualstudio:
-            return ('mingw', self.target_arch)
+    def _get_toolchain_target_platform_arch(self, readable=False):
+        mingw = 'MinGW' if readable else 'mingw'
+        msvc = 'MSVC' if readable else 'msvc'
+        debug = ' Debug' if readable else '-debug'
+
+        target_platform = self.target_platform
+        # When targeting Apple mobile platform with a subsystem
+        if Platform.is_apple_app_platform(self.target_platform):
+            target_platform = self.target_subsystem
         # When building with Visual Studio, we can target (MSVC, UWP) x (debug, release)
-        if self.variants.uwp:
-            target_platform = 'uwp'
-        else:
-            target_platform = 'msvc'
-        # Debug CRT needs a separate prefix
-        if self.variants.vscrt == 'mdd':
-            target_platform += '-debug'
-        # Check for invalid configuration of a custom Visual Studio path
-        if self.vs_install_path and not self.vs_install_version:
-            raise ConfigurationError('vs_install_path was set, but vs_install_version was not')
+        elif self.target_platform == Platform.WINDOWS:
+            if self.variants.visualstudio:
+                # Check for invalid configuration of a custom Visual Studio path
+                if self.vs_install_path and not self.vs_install_version:
+                    raise ConfigurationError('vs_install_path was set, but vs_install_version was not')
+                target_platform = msvc
+
+                # Debug CRT needs a separate prefix
+                if self.variants.vscrt == 'mdd':
+                    target_platform += debug
+            else:
+                target_platform = mingw
+
         return (target_platform, self.target_arch)
 
     def _load_last_defaults(self):
         # Set build tools defaults
-        self.set_property('build_tools_prefix', os.path.join(self.home_dir, 'build-tools'))
-        self.set_property('build_tools_sources', os.path.join(self.home_dir, 'sources', 'build-tools'))
-        self.set_property('build_tools_logs', os.path.join(self.home_dir, 'logs', 'build-tools'))
+        self.set_property('build_tools_prefix', Path(self.home_dir, 'build-tools').as_posix())
+        self.set_property('build_tools_sources', Path(self.home_dir, 'sources', 'build-tools').as_posix())
+        self.set_property('build_tools_logs', Path(self.home_dir, 'logs', 'build-tools').as_posix())
         self.set_property('build_tools_cache', 'build-tools.cache')
         # Set target platform defaults
         platform_arch = '_'.join(self._get_toolchain_target_platform_arch())
-        self.set_property('prefix', os.path.join(self.home_dir, 'dist', platform_arch))
-        self.set_property('sources', os.path.join(self.home_dir, 'sources', platform_arch))
-        self.set_property('logs', os.path.join(self.home_dir, 'logs', platform_arch))
+        self.set_property('prefix', Path(self.home_dir, 'dist', platform_arch).as_posix())
+        self.set_property('sources', Path(self.home_dir, 'sources', platform_arch).as_posix())
+        self.set_property('logs', Path(self.home_dir, 'logs', platform_arch).as_posix())
         self.set_property('cache_file', platform_arch + '.cache')
         self.set_property('install_dir', self.prefix)
         self.set_property('local_sources', self._default_local_sources_dir())
-        self.set_property('rust_prefix', os.path.join(self.home_dir, 'rust'))
-        self.set_property('rustup_home', os.path.join(self.rust_prefix, 'rustup'))
-        self.set_property('cargo_home', os.path.join(self.rust_prefix, 'cargo'))
-        self.set_property('tomllib_path', os.path.join(self.rust_prefix, 'tomllib'))
+        self.set_property('rust_prefix', Path(self.home_dir, 'rust').as_posix())
+        self.set_property('rustup_home', Path(self.rust_prefix, 'rustup').as_posix())
+        self.set_property('cargo_home', Path(self.rust_prefix, 'cargo').as_posix())
+        self.set_property('tomllib_path', Path(self.rust_prefix, 'tomllib').as_posix())
         if sys.version_info >= (3, 11, 0):
             self.python_exe = Path(self.build_tools_prefix, 'bin', 'python').as_posix()
         else:
             self.python_exe = Path(sys.executable).as_posix()
+        if (
+            self.platform == Platform.DARWIN
+            and self.arch == Architecture.ARM64
+            and self.target_arch == Architecture.X86_64
+        ):
+            # Created by the build-tools bootstrapper
+            self.python_exe = Path(self.build_tools_prefix, 'bin', 'python3-x86_64').as_posix()
 
     def _get_exe_suffix(self):
         if self.platform != Platform.WINDOWS:
@@ -965,39 +1095,59 @@ class Config(object):
         return '.exe'
 
     def _find_data_dir(self):
+        """
+        Find the directory containing cerbero's data files (recipes, packages, config, data).
+
+        Handles two installation scenarios:
+        1. Uninstalled (running from git checkout): data/ is sibling to cerbero/ package
+        2. Pip install: data files are in site-packages/cerbero_share/data/
+        """
         if self.uninstalled:
+            # Running from git checkout - data is ../data relative to this file
             self.data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-            self.data_dir = os.path.abspath(self.data_dir)
+            self.data_dir = Path(os.path.abspath(self.data_dir)).as_posix()
             return
+
         curdir = os.path.dirname(__file__)
-        while not os.path.exists(os.path.join(curdir, 'share', 'cerbero', 'config')):
-            curdir = os.path.abspath(os.path.join(curdir, '..'))
-            if curdir == '/' or curdir[1:] == ':/':
-                # We reached the root without finding the data dir, which
-                # shouldn't happen
-                raise FatalError('Data dir not found')
-        self.data_dir = os.path.join(curdir, 'share', 'cerbero')
+        # Check if data files are in cerbero_share package (pip install)
+        # In this case, recipes/, packages/, config/, data/ are inside cerbero_share/
+        parent_dir = Path(os.path.abspath(os.path.join(curdir, '..'))).as_posix()
+        cerbero_share_dir = Path(parent_dir, 'cerbero_share').as_posix()
+        if (
+            os.path.exists(Path(cerbero_share_dir, 'config').as_posix())
+            and os.path.exists(Path(cerbero_share_dir, 'recipes').as_posix())
+            and os.path.exists(Path(cerbero_share_dir, 'data').as_posix())
+        ):
+            # Data directory points to cerbero_share/data/ for pip installs
+            self.data_dir = Path(cerbero_share_dir, 'data').as_posix()
+            return
+
+        # If we get here, something is wrong
+        raise FatalError('Data dir not found. Cerbero must be run from git checkout or installed via pip.')
 
     def _relative_path(self, path):
         if not self.uninstalled:
-            p = os.path.join(self.data_dir, path)
+            # For pip installs, use cerbero_share as base (parent of data_dir)
+            # data_dir is cerbero_share/data, so we go up one level to get cerbero_share
+            cerbero_share = os.path.dirname(self.data_dir)
+            p = os.path.join(cerbero_share, path)
         else:
             p = os.path.join(os.path.dirname(__file__), '..', path)
-        return os.path.abspath(p)
+        return Path(os.path.abspath(p)).as_posix()
 
     def _default_home_dir(self):
         if self.uninstalled:
             p = os.path.join(os.path.dirname(__file__), '..', 'build')
         else:
             p = os.path.expanduser('~/cerbero')
-        return os.path.abspath(p)
+        return Path(os.path.abspath(p)).as_posix()
 
     def _default_local_sources_dir(self):
         # For backwards-compatibility, keep the old value for setups that
         # define their own home_dir inside which all cerbero work must be
         # contained; f.ex. ci.gstreamer.net
         if self.home_dir != self._default_home_dir():
-            return os.path.join(self.home_dir, 'sources', 'local')
+            return Path(self.home_dir, 'sources', 'local').as_posix()
         # Default value should be in a user-specific location so that it can
         # be shared across all cerbero directories and invocations
         if self.platform == Platform.WINDOWS and 'USERPROFILE' in os.environ:
@@ -1023,31 +1173,36 @@ class Config(object):
         return '.'.join([mayor, minor, revision])
 
     @staticmethod
-    def rust_triple(arch, platform, vs):
-        if platform != Platform.WINDOWS:
-            key = (platform, arch)
-        elif vs:
-            key = (Platform.WINDOWS, arch, 'msvc')
+    def rust_triple(arch, platform, subsystem, vs):
+        if platform == Platform.WINDOWS:
+            if vs:
+                key = (Platform.WINDOWS, arch, 'msvc')
+            else:
+                key = (Platform.WINDOWS, arch, 'gnu')
+        elif Platform.is_apple_app_platform(platform):
+            key = (platform, arch, subsystem)
         else:
-            key = (Platform.WINDOWS, arch, 'gnu')
+            key = (platform, arch)
         if key in RUST_TRIPLE_MAPPING:
             return RUST_TRIPLE_MAPPING[key]
         else:
-            raise FatalError(f'Unsupported build platform/arch combination: {platform}/{arch}')
+            raise FatalError(
+                f'Unsupported build platform/arch combination: {platform}/{arch}, subsystem: {subsystem}, vs: {vs}'
+            )
 
     @property
     def rust_build_triple(self):
-        return self.rust_triple(self.arch, self.platform, self.variants.visualstudio)
+        return self.rust_triple(self.arch, self.platform, None, self.variants.visualstudio)
 
     @property
     def rust_target_triples(self):
         if self.target_arch != Architecture.UNIVERSAL:
-            targets = (self.target_arch,)
+            targets = {self.target_arch: self}
         else:
-            targets = self.arch_config.keys()
+            targets = self.arch_config
         triples = []
-        for target_arch in targets:
-            triple = self.rust_triple(target_arch, self.target_platform, self.variants.visualstudio)
+        for target_arch, c in targets.items():
+            triple = self.rust_triple(target_arch, c.target_platform, c.target_subsystem, c.variants.visualstudio)
             triples.append(triple)
         return triples
 
@@ -1062,7 +1217,87 @@ class Config(object):
             except ModuleNotFoundError:
                 continue
         if not system_only and os.path.exists(self.tomllib_path):
-            tomli_dir = os.path.join(self.tomllib_path, 'src')
+            tomli_dir = Path(self.tomllib_path, 'src').as_posix()
             sys.path.insert(0, os.path.abspath(tomli_dir))
             return importlib.import_module('tomli')
         return None
+
+    def get_build_env(self, in_env=None, using_msvc=False):
+        """
+        Override/merge toolchain env with `in_env` and return a new dict
+        with values as EnvValue objects
+        if `in_env` is empty, `self.env` is used.
+        """
+
+        # Extract toolchain config for the build system from the appropriate
+        # config env dict. Start with `in_env`, since it contains toolchain
+        # config set by the recipe and when building for target platforms other
+        # than Windows, it also contains build tools and the env for the
+        # toolchain set by config/*.config.
+        #
+        # On Windows, the toolchain config is `msvc_env_for_build_system`
+        # or `mingw_env_for_build_system` depending on which toolchain
+        # this recipe will use.
+        if self.target_platform == Platform.WINDOWS:
+            if using_msvc:
+                build_env = dict(self.msvc_env_for_build_system)
+            else:
+                build_env = dict(self.mingw_env_for_build_system)
+        else:
+            build_env = {}
+
+        return merge_env_value_env(build_env, in_env or self.env)
+
+    # config helpers for recipes with Python dependencies:
+
+    def get_python_ext_suffix(self):
+        vars = sysconfig.get_config_vars()
+        # For Windows and other platforms where a full version is used, we need
+        # to replace it with a wildcard.
+        # https://github.com/python/cpython/blob/e757c06a61ac6d73d9d0c3c08955d86f176573a1/Include/internal/pycore_importdl.h#L157
+        soabi_pyd = vars.get('EXT_SUFFIX', vars.get('SO', '%(pext)s'))
+        version_nodot = vars['py_version_nodot']
+        if version_nodot in soabi_pyd:
+            soabi_pyd = soabi_pyd.replace(version_nodot, '*')
+        return soabi_pyd
+
+    def get_python_framework(self):
+        """
+        Get framework prefix for RPATH
+        """
+        return sysconfig.get_config_vars().get('PYTHONFRAMEWORKPREFIX', None)
+
+    def get_python_version(self):
+        return self.extra_properties.get('python_version', sysconfig.get_python_version())
+
+    def get_python_name(self):
+        return f'python{self.get_python_version()}'
+
+    def get_build_python_exe(self):
+        py_name = self.get_python_name()
+        path = self._get_build_python_path('scripts', py_name)
+        if path:
+            return path.joinpath(py_name)
+        return self.python_exe
+
+    def get_python_prefix(self):
+        if self.target_platform == Platform.WINDOWS:
+            return Path(self.py_win_prefix)
+        else:
+            return Path(self.py_plat_prefix)
+
+    def _get_build_python_path(self, path_name, testfile):
+        py_version = self.get_python_version()
+        py_name = f'python{py_version}'
+        if path_name == 'scripts':
+            glue = 'bin'
+        elif path_name in ['include', 'platinclude']:
+            glue = Path('include', py_name)
+        else:
+            glue = Path('lib', py_name)
+        if Path(self.prefix, glue, testfile).exists():
+            return Path(self.prefix, glue)
+        return None
+
+    def get_custom_pkg_config_path(self):
+        return Path(self.libdir, 'system_pkgconfig').as_posix()

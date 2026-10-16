@@ -15,7 +15,8 @@ class Recipe(recipe.Recipe):
     ]
 
     async def install(self):
-        target_triple = self.config.rust_triple(self.config.target_arch, self.config.target_platform, self.using_msvc())
+        target_triple = self.config.rust_triple(self.config.target_arch, self.config.target_platform,
+                                                self.config.target_subsystem, self.using_msvc())
         libc_path_src = os.path.join(self.config.sysroot, 'usr', 'lib', target_triple, 'libc++_shared.so')
         libc_path_dest = os.path.join(self.config.prefix, 'lib', 'libc++_shared.so')
         shutil.copy(libc_path_src, libc_path_dest)

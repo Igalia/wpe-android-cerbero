@@ -20,3 +20,12 @@ class Recipe(recipe.Recipe):
                 self.append_env('LDFLAGS', '-lc')
             else:
                 self.deps.append('libiconv')
+
+    # Cerbero 1.28 configures autotools projects from the top of the source tree, but
+    # gettext's top level has its own configure/Makefiles that clash with the
+    # gettext-runtime ones. Build in-tree inside gettext-runtime instead.
+    def get_configure_dir(self):
+        return self.config_src_dir
+
+    def get_make_dir(self):
+        return self.config_src_dir

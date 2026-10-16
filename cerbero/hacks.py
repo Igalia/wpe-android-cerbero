@@ -20,60 +20,15 @@
 
 import os
 import sys
-import pathlib
-
-
-### XML Hacks ###
-
-import re
-import io
-from xml.dom import minidom
-
-try:
-    import xml.etree.cElementTree as etree
-except ImportError:
-    from lxml import etree
-
-oldwrite = etree.ElementTree.write
-
-
-def pretify(string, pretty_print=True):
-    parsed = minidom.parseString(string)
-    # See:http://www.hoboes.com/Mimsy/hacks/geektool-taskpaper-and-xml/
-    fix = re.compile(r'((?<=>)(\n[\t]*)(?=[^<\t]))|(?<=[^>\t])(\n[\t]*)(?=<)')
-    return re.sub(fix, '', parsed.toprettyxml())
-
-
-def write(self, file_or_filename, encoding=None, pretty_print=False):
-    if not pretty_print:
-        return oldwrite(self, file_or_filename, encoding)
-    tmpfile = io.BytesIO()
-    oldwrite(self, tmpfile, encoding)
-    tmpfile.seek(0)
-    if hasattr(file_or_filename, 'write'):
-        out_file = file_or_filename
-    else:
-        out_file = open(file_or_filename, 'wb')
-    out_file.write(pretify(tmpfile.read()).encode())
-    if not hasattr(file_or_filename, 'write'):
-        out_file.close()
-
-
-etree.ElementTree.write = write
 
 
 ### Windows Hacks ###
 
 # we don't want backlashes in paths as it breaks shell commands
-oldjoin = os.path.join
 oldexpanduser = os.path.expanduser
 oldabspath = os.path.abspath
 oldrealpath = os.path.realpath
 oldrelpath = os.path.relpath
-
-
-def join(*args):
-    return pathlib.PurePath(oldjoin(*args)).as_posix()
 
 
 def expanduser(path):
@@ -84,8 +39,8 @@ def abspath(path):
     return oldabspath(path).replace('\\', '/')
 
 
-def realpath(path):
-    return oldrealpath(path).replace('\\', '/')
+def realpath(path, **kwargs):
+    return oldrealpath(path, **kwargs).replace('\\', '/')
 
 
 def relpath(path, start=None):
@@ -96,9 +51,6 @@ def relpath(path, start=None):
 
 
 if sys.platform.startswith('win'):
-    # FIXME: replace all usage of os.path.join with pathlib.PurePath.as_posix()
-    # instead of doing this brittle monkey-patching.
-    os.path.join = join
     os.path.expanduser = expanduser
     os.path.abspath = abspath
     os.path.realpath = realpath
@@ -188,8 +140,8 @@ class ZipFile(zipfile_ZipFile):
 
         # Create all upper directories if necessary.
         upperdirs = os.path.dirname(targetpath)
-        if upperdirs and not os.path.exists(upperdirs):
-            os.makedirs(upperdirs)
+        if upperdirs:
+            os.makedirs(upperdirs, exist_ok=True)
 
         # Unlink before extracting, this ensures that if there is a symbolic
         # link in place it will not be followed to the (possibly non existing)

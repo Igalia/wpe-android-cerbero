@@ -1,0 +1,66 @@
+# -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+
+class Recipe(recipe.Recipe):
+    name = 'pygobject'
+    version = '3.50.2'
+    stype = SourceType.TARBALL
+    btype = BuildType.MESON
+    url = 'gnome://pygobject/%(maj_ver)s/pygobject-%(version)s.tar.gz'
+    licenses = [{License.LGPLv2_1Plus: ['COPYING']}]
+
+    deps = ['pycairo', 'gobject-introspection', 'libffi']
+    tarball_checksum = 'ece6b860aab77cb649fdfc6e88d8a83765e7a62f7ffd39a628d6e2a0d397a7ff'
+    meson_options = {
+        'tests': False,
+    }
+
+    files_python = [
+        f'%(pydir)s/PyGObject-{version}.dist-info',
+        '%(pydir)s/gi/__init__.py',
+        '%(pydir)s/gi/_constants.py',
+        '%(pydir)s/gi/_error.py',
+        '%(pydir)s/gi/_gi%(pext)s',
+        '%(pydir)s/gi/_gi_cairo%(pext)s',
+        '%(pydir)s/gi/_gtktemplate.py',
+        '%(pydir)s/gi/_option.py',
+        '%(pydir)s/gi/_ossighelper.py',
+        '%(pydir)s/gi/_propertyhelper.py',
+        '%(pydir)s/gi/_signalhelper.py',
+        '%(pydir)s/gi/docstring.py',
+        '%(pydir)s/gi/events.py',
+        '%(pydir)s/gi/importer.py',
+        '%(pydir)s/gi/module.py',
+        '%(pydir)s/gi/pygtkcompat.py',
+        '%(pydir)s/gi/types.py',
+        '%(pydir)s/gi/repository/__init__.py',
+        '%(pydir)s/gi/overrides/GIMarshallingTests.py',
+        '%(pydir)s/gi/overrides/GLib.py',
+        '%(pydir)s/gi/overrides/GObject.py',
+        '%(pydir)s/gi/overrides/Gdk.py',
+        '%(pydir)s/gi/overrides/GdkPixbuf.py',
+        '%(pydir)s/gi/overrides/Gio.py',
+        '%(pydir)s/gi/overrides/Gtk.py',
+        '%(pydir)s/gi/overrides/Pango.py',
+        '%(pydir)s/gi/overrides/__init__.py',
+        '%(pydir)s/gi/overrides/keysyms.py',
+        '%(pydir)s/pygtkcompat/__init__.py',
+        '%(pydir)s/pygtkcompat/generictreemodel.py',
+        '%(pydir)s/pygtkcompat/pygtkcompat.py',
+    ]
+    files_devel = [
+        'include/pygobject-3.0/pygobject.h',
+        '%(libdir)s/pkgconfig/pygobject-3.0.pc',
+    ]
+
+    patches = [
+        # https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/415
+        'pygobject/0001-gi-Call-os.add_dll_directory-on-Windows-when-possibl.patch',
+        # https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/463
+        'pygobject/0002-Fix-syntax-error-for-missing.patch',
+        # Not applicable to upstream main branch, code has been completely reworked
+        'pygobject/0001-Fix-enum-flags-richcompare-overflow-on-Windows.patch',
+        'pygobject/0002-Fix-pyg_flags_from_gtype-returning-non-NULL-with-a-p.patch',
+    ]
+
+    def prepare(self):
+        self.meson_options['python'] = self.config.get_build_python_exe()

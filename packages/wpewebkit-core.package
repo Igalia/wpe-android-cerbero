@@ -2,7 +2,7 @@
 
 class Package(package.Package):
     name = 'wpewebkit-core'
-    version = '2.55.0.4'
+    version = '2.55.0.5'
     shortdesc = 'Web Platform for Embedded'
     longdesc = 'WPE WebKit allows embedders to create simple and performant \
         systems based on Web platform technologies. It is a WebKit port designed \
@@ -33,14 +33,15 @@ class Package(package.Package):
         'fontconfig:libs',
         'freetype:libs',
         'glib:libs',
-        'glib-networking:misc',
+        # glib-networking >= 2.80 ships its GIO modules as plugins; WPE-Android only
+        # uses the OpenSSL one (see tools/scripts/bootstrap.py)
+        'glib-networking:plugins',
         'harfbuzz:libs',
         'icu:libs',
         'libepoxy:libs',
         'libgcrypt:libs',
         'libffi:libs',
         'libgpg-error:libs',
-        'libiconv:libs',
         'libjpeg-turbo:libs',
         'libpng:libs',
         'libsoup:libs',
@@ -62,6 +63,12 @@ class Package(package.Package):
     ]
 
     files_devel = ['glib']
+
+    def prepare(self):
+        # Bionic provides iconv since API 28; GNU libiconv is only needed below that.
+        if self.config.target_platform != Platform.ANDROID or \
+                DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
+            self.files.append('libiconv:libs')
 
     platform_files = {
         Platform.ANDROID: [

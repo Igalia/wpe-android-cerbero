@@ -3,17 +3,17 @@
 
 class Recipe(recipe.Recipe):
     name = 'cmake'
-    version = '3.22.2'
-    licenses = [{License.BSD_like: ['Copyright.txt']}]
+    version = '3.31.9'
+    licenses = [{License.BSD_3_Clause: ['Copyright.txt']}]
     btype = BuildType.MAKEFILE
     stype = SourceType.TARBALL
     url = 'https://github.com/Kitware/CMake/releases/download/v%(version)s/cmake-%(version)s.tar.gz'
-    tarball_checksum = '3c1c478b9650b107d452c5bd545c72e2fad4e37c09b89a1984b9a2f46df6aced'
+    tarball_checksum = '5d4fdec04247ca8a8e8f63692f0d0f1e9d6d082a2bdd008dff8ab3ba7215aa83'
     deps = ['autoconf']
 
     add_host_build_target = False
     config_sh = './bootstrap'
-    configure_tpl = "%(config-sh)s --prefix=%(prefix)s"
+    configure_tpl = ['%(config-sh)s', '--prefix=%(prefix)s']
     can_use_configure_cache = False
 
     files_bins = ['cmake', 'cpack', 'ctest']
@@ -26,7 +26,7 @@ class Recipe(recipe.Recipe):
             if self.config.target_arch == Architecture.X86_64:
                 # Setting SYSTEM_NAME sets CMAKE_CROSSCOMPILING and the
                 # binutils such as ar and ranlib are prefixed correctly
-                self.configure_tpl += ' -- -DCMAKE_SYSTEM_NAME="Windows"'
+                self.configure_tpl.append('--DCMAKE_SYSTEM_NAME="Windows"')
 
     async def configure(self):
         if self.config.target_platform == Platform.WINDOWS:

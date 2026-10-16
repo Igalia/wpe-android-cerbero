@@ -2,16 +2,20 @@
 
 class Recipe(recipe.Recipe):
     name = 'glib-tools'
-    version = '2.62.5'
+    version = '2.82.4'
     stype = SourceType.TARBALL
     url = 'gnome://glib/%(maj_ver)s/glib-%(version)s.tar.xz'
     tarball_dirname = 'glib-%(version)s'
-    tarball_checksum = 'b8d1cdafa46658b63d7512efbe2cd21bd36cd7be83140e44930c47b79f82452e'
+    tarball_checksum = '37dd0877fe964cd15e9a2710b044a1830fb1bd93652a6d0cb6b8b2dff187c709'
     licenses = [License.LGPLv2Plus]
     btype = BuildType.MESON
-    meson_options = {'internal_pcre': 'true', 'libmount': 'false',
-                     'dtrace': 'false', 'iconv': 'auto', 'selinux' : 'disabled'}
-    deps = ['libffi', 'zlib', 'pkg-config']
+    meson_options = {'libmount': 'disabled', 'dtrace': 'false', 'selinux' : 'disabled', 'introspection': 'disabled', 'tests': 'false'}
+    deps = ['libffi', 'zlib', 'pkg-config', 'pcre2']
+
+    patches = [
+        # TODO upstreaming -- https://gitlab.gnome.org/GNOME/glib/-/issues/3858
+        'glib-tools/0007-glib-compile-resources-Fix-MSVC-heap-exhaustion-when.patch',
+    ]
 
     # Without these, the relocator won't take effect on macOS
     files_bins = [
@@ -37,16 +41,17 @@ class Recipe(recipe.Recipe):
     ]
 
     def prepare(self):
+        # Glib doesn't support static libraries on Windows yet
+        if self.config.target_platform == Platform.WINDOWS:
+            self.library_type = LibraryType.SHARED
+
         # On Linux we must use the system gettext
         if self.config.platform != Platform.LINUX:
             self.deps.append('proxy-libintl')
 
-        if self.config.target_platform == Platform.ANDROID:
-            # Android only provides libiconv with API level >=28 (Pie and newer)
-            if DistroVersion.get_android_api_version(self.config.target_distro_version) >= 28:
-                self.meson_options.update({'iconv': 'libc'})
-            else:
-                self.deps.append('libiconv')
+        # Android only provides libiconv with API level >=28 (Pie and newer)
+        if self.config.target_platform == Platform.ANDROID and DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
+            self.deps.append('libiconv')
 
         if self.config.target_platform == Platform.WINDOWS:
             # Want secure versions of stdlib functions. Glib already defines
@@ -56,7 +61,7 @@ class Recipe(recipe.Recipe):
         if self.config.platform == Platform.DARWIN:
             self.append_env('CFLAGS', '-Wno-error=int-conversion')
 
-        if self.config.platform in [Platform.DARWIN, Platform.IOS]:
+        if Platform.is_apple(self.config.target_platform):
             # Meson doesn't yet introduce rpaths properly.
             # https://github.com/mesonbuild/meson/issues/2121#issuecomment-347535874
             self.append_env('LDFLAGS', f'-Wl,-rpath,{self.config.libdir}')

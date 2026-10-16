@@ -2,11 +2,11 @@
 
 import glob
 import shutil
-from pathlib import PurePath
+from pathlib import PurePath, Path
 
 class Recipe(recipe.Recipe):
     name = 'meson'
-    version = '1.3.1'
+    version = '1.9.0'
     licenses = [License.Apachev2]
     btype = BuildType.CUSTOM
 
@@ -18,33 +18,40 @@ class Recipe(recipe.Recipe):
     else:
         stype = SourceType.TARBALL
         url = 'https://github.com/mesonbuild/meson/releases/download/%(version)s/meson-%(version)s.tar.gz'
-        tarball_checksum = '6020568bdede1643d4fb41e28215be38eff5d52da28ac7d125457c59e0032ad7'
+        tarball_checksum = 'cd27277649b5ed50d19875031de516e270b22e890d9db65ed9af57d18ebc498d'
+        patches = []
 
-    files_bin = ['bin/meson']
+    files_bins = ['meson']
     files_python = []
 
-    patches = [
-        f'{name}/0001-nasm-Add-mms-bitfields-to-the-list-of-ignored-flags.patch'
-    ]
+    def prepare(self):
+        # Meson is just a ZIP + PE shim
+        self.skip_steps = [BuildSteps.DSYMUTIL]
 
     async def install(self):
+        python_exe = os.path.join(self.config.build_tools_prefix, 'bin', 'python')
         # setup.py barfs if using posix paths on Windows
         if self.config.platform == Platform.WINDOWS:
+            python_env = None
             prefix = str(PurePath(self.config.prefix))
         else:
+            python_env = self.env
             prefix = self.config.prefix
-        python_exe = os.path.join(self.config.build_tools_prefix, 'bin', 'python')
         await shell.async_call([python_exe, '-m', 'pip', 'install', '--prefix', prefix, '.'],
-                               cmd_dir=self.build_dir, env=self.env, logfile=self.logfile)
+                               cmd_dir=self.build_dir, env=python_env, logfile=self.logfile)
         if self.config.platform == Platform.WINDOWS:
             # Python insists on using Scripts instead of bin on Windows for
             # scripts. Insist back, and use bin again.
             scriptsdir = os.path.join(prefix, 'Scripts')
             bindir = os.path.join(prefix, 'bin')
             os.makedirs(bindir, exist_ok=True)
-            for f in glob.glob('*', root_dir=scriptsdir):
-                tof = os.path.join(bindir, f)
+            for f in Path(scriptsdir).glob('*'):
+                tof = os.path.join(bindir, f.name)
                 if os.path.isfile(tof):
                     os.remove(tof)
-                shutil.move(os.path.join(scriptsdir, f), tof)
-            os.rmdir(scriptsdir)
+                shutil.move(f, tof)
+            if os.path.isdir(scriptsdir):
+                os.rmdir(scriptsdir)
+
+    def have_symbol_files(self):
+        return False

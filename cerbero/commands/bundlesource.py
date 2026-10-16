@@ -16,6 +16,9 @@
 # Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 # Boston, MA 02111-1307, USA.
 
+import sys
+import shutil
+import subprocess
 
 from cerbero.commands import Command, register_command
 from cerbero.build.cookbook import CookBook
@@ -24,14 +27,14 @@ from cerbero.packages.packagesstore import PackagesStore
 from cerbero.bootstrap.build_tools import BuildTools
 from cerbero.utils import _, N_, ArgparseArgument, remove_list_duplicates
 from cerbero.utils import messages as m
-from setuptools.sandbox import run_setup
+from cerbero.enums import CERBERO_VERSION
 
 
 class BundleSource(Command):
     doc = N_('Bundle Source code of recipes and Cerbero')
     name = 'bundle-source'
 
-    def __init__(self, args=[]):
+    def __init__(self, args=None):
         args = [
             ArgparseArgument('bundlepackages', nargs='+', help=_('packages to bundle')),
             ArgparseArgument('--add-recipe', action='append', default=[], help=_('additional recipes to bundle')),
@@ -104,7 +107,13 @@ class BundleSource(Command):
         setup_args.append('--source-dirs=' + ','.join(bundle_dirs))
 
         command = str(config._relative_path('setup.py'))
-        run_setup(command, setup_args)
+
+        if shutil.which('xz'):
+            subprocess.check_call([sys.executable, command, *setup_args, '--formats', 'tar'])
+            outf = str(config._relative_path(f'dist/cerbero-{CERBERO_VERSION}.tar'))
+            subprocess.check_call(['xz', '-f', '-7', '-T0', outf])
+        else:
+            subprocess.check_call([sys.executable, command, *setup_args, '--formats', 'xztar'])
 
 
 register_command(BundleSource)

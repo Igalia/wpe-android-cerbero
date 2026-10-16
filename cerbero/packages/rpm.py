@@ -254,7 +254,7 @@ class RPMPackager(LinuxPackager):
         if not self.config.distro == Distro.REDHAT:
             return False
 
-        if 'fedora' in self.config.distro_version and self.config.distro_version > DistroVersion.FEDORA_26:
+        if 'fedora' in self.config.distro_version and self.config.distro_version > 'fedora_26':
             return True
 
         if 'redhat' in self.config.distro_version and self.config.distro_version > DistroVersion.REDHAT_7:
@@ -306,6 +306,8 @@ class RPMPackager(LinuxPackager):
 
 
 class Packager(object):
+    ARTIFACT_TYPE = 'rpm'
+
     def __new__(klass, config, package, store):
         return RPMPackager(config, package, store)
 

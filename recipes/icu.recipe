@@ -38,16 +38,17 @@ class Recipe(recipe.Recipe):
     stype = SourceType.TARBALL
     tarball_dirname = 'icu'
     srcdir = 'source'
-    configure_options = '\
-        --disable-debug \
-        --disable-extras \
-        --disable-layout \
-        --disable-renaming \
-        --disable-samples \
-        --disable-tests \
-        --disable-tools \
-        --enable-shared \
-        --enable-static '
+    configure_options = [
+        '--disable-debug',
+        '--disable-extras',
+        '--disable-layout',
+        '--disable-renaming',
+        '--disable-samples',
+        '--disable-tests',
+        '--disable-tools',
+        '--enable-shared',
+        '--enable-static',
+    ]
 
     files_devel = ['bin/icu-config', 'lib/pkgconfig/icu-i18n.pc',
                    'lib/pkgconfig/icu-io.pc', 'lib/pkgconfig/icu-uc.pc',
@@ -58,11 +59,12 @@ class Recipe(recipe.Recipe):
     def prepare(self):
         self.autoreconf_sh = f'cd {self.srcdir} && {self.autoreconf_sh}'
         if self.config.cross_compiling:
+            # Cerbero 1.28 builds autotools projects out of tree: icu-tools' build
+            # directory (with config/icucross.mk) is the top of its source checkout.
             build_tools_dir = f'{self.build_dir}/../..'
             if 'universal' in self.build_dir:
                 build_tools_dir += '/..'
-            self.configure_options += \
-                f'--with-cross-build={build_tools_dir}/build-tools/icu-tools-{self.version}/source '
+            self.configure_options += (f'--with-cross-build={build_tools_dir}/build-tools/icu-tools-{self.version} ').split()
             self.append_env('CXXFLAGS', '-frtti')
         if self.config.target_platform == Platform.ANDROID:
             self.append_env('LDFLAGS', '-lc++_shared')
@@ -71,8 +73,10 @@ class Recipe(recipe.Recipe):
     async def configure(self):
         await super().configure()
         # Prepend the contents of uconfig.h.prepend to uconfig.h and replace the header in-place.
-        uconfigh = Path(self.build_dir, self.srcdir, 'common', 'unicode', 'uconfig.h')
-        contents = Path(self.build_dir, self.srcdir, 'uconfig.h.prepend').read_bytes() + uconfigh.read_bytes()
+        # configure writes uconfig.h.prepend to the (out-of-tree) build directory, while
+        # uconfig.h lives in the source tree.
+        uconfigh = Path(self.config_src_dir, 'common', 'unicode', 'uconfig.h')
+        contents = Path(self.build_dir, 'uconfig.h.prepend').read_bytes() + uconfigh.read_bytes()
         uconfigh.write_bytes(contents)
 
     def post_install(self):

@@ -10,24 +10,15 @@ class Package(custom.GStreamer, package.Package):
     uuid = '0a4e77e8-3c8c-4e7d-890b-1538d36f1816'
     deps = ['gstreamer-1.0-core']
 
-    files = ['a52dec:libs', 'opencore-amr:libs',
-             'libdca:libs', 'vo-aacenc:libs', 'x264:libs',
+    files = ['vo-aacenc:libs', 'vvdec:libs',
              'gst-plugins-ugly-1.0:plugins_codecs_restricted',
              'gst-plugins-bad-1.0:plugins_codecs_restricted']
     files_devel = ['gst-plugins-ugly-1.0:plugins_codecs_restricted_devel',
                    'gst-plugins-bad-1.0:plugins_codecs_restricted_devel']
 
     def prepare(self):
-        # Recipes that need autoreconf hang on the Windows CI
-        if self.config.platform == Platform.WINDOWS:
-            self.files.remove('a52dec:libs')
-
-        if self.config.variants.rust:
+        if self.config.variants.rust and \
+           (self.config.target_platform != Platform.WINDOWS or \
+            self.config.target_arch != Architecture.ARM64):
             self.files.append('gst-plugins-rs:plugins_codecs_restricted')
-            self.files_devel.append('gst-plugins-rs:plugins_restricted_devel')
-
-        if self.config.variants.uwp:
-            self.files = [
-                'gst-plugins-ugly-1.0:plugins_codecs_restricted',
-                'gst-plugins-bad-1.0:plugins_codecs_restricted',
-            ]
+            self.files_devel.append('gst-plugins-rs:plugins_codecs_restricted_devel')

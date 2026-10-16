@@ -26,6 +26,17 @@ from cerbero.utils import shell
 INT_CMD = 'install_name_tool'
 OTOOL_CMD = 'otool'
 
+PYTHON_FRAMEWORK = '/Library/Frameworks/Python.framework/Versions/'
+
+
+def is_absolute_python_framework(dylib):
+    """
+    e.g. Python.org's, Homebrew's, which both build a framework and
+    link against it with an absolute dylib ID.
+    These need relocation AND a rpath entry.
+    """
+    return dylib.startswith('/') and 'Python.framework/Versions' in dylib and dylib.endswith('/Python')
+
 
 class OSXRelocator(object):
     """
@@ -37,9 +48,9 @@ class OSXRelocator(object):
     ID if the file is a shared library.
     """
 
-    def __init__(self, root, lib_prefix, recursive, logfile=None):
+    def __init__(self, root, install_prefix, recursive, logfile=None):
         self.root = root
-        self.lib_prefix = self._fix_path(lib_prefix)
+        self.install_prefix = self._fix_path(install_prefix)
         self.recursive = recursive
         self.use_relative_paths = True
         self.logfile = None
@@ -59,7 +70,7 @@ class OSXRelocator(object):
         @object_file: Path to the object file
         @id: New ID; if None, it'll be `@rpath/<basename>`
         """
-        id = id or object_file.replace(self.lib_prefix, '@rpath')
+        id = id or object_file.replace(self.install_prefix, '@rpath')
         if not self._is_mach_o_file(object_file):
             return
         cmd = [INT_CMD, '-id', id, object_file]
@@ -89,14 +100,14 @@ class OSXRelocator(object):
         # assert that it's already rpath'd
         dylib_id = self.get_dylib_id(object_file)
         is_dylib = dylib_id is not None
-        is_framework = is_dylib and not object_file.endswith('.dylib')
+        is_framework = is_dylib and not any([object_file.endswith(i) for i in ('.dylib', '.so')])
         if not is_framework:
             self.change_id(object_file, id='@rpath/{}'.format(os.path.basename(original_file)))
         elif '@rpath' not in dylib_id:
             raise FatalError(f'Cannot relocate a fixed location framework: {dylib_id}')
         # With that out of the way, we need to sort out how many parents
         # need to be navigated to reach the root of the GStreamer prefix
-        depth = len(original_file.split('/')) - len(self.lib_prefix.split('/'))
+        depth = len(os.path.dirname(original_file).split('/')) - len(self.install_prefix.split('/'))
         p_depth = '/..' * depth
         # These paths assume that the file being relocated resides within
         # <GStreamer root>/lib
@@ -125,31 +136,35 @@ class OSXRelocator(object):
         rpaths = list(set(rpaths))
         # Remove absolute RPATHs, we don't want or need these
         existing_rpaths = list(set(self.list_rpaths(object_file)))
-        for p in filter(lambda p: p.startswith('/'), self.list_rpaths(object_file)):
+        for p in filter(
+            lambda p: p.startswith('/') and not p.startswith('/Applications/Xcode.app'), self.list_rpaths(object_file)
+        ):
             cmd = [INT_CMD, '-delete_rpath', p, object_file]
-            shell.new_call(cmd, fail=False)
+            shell.new_call(cmd, fail=False, logfile=self.logfile)
         # Add relative RPATHs
         for p in filter(lambda p: p not in existing_rpaths, rpaths):
             cmd = [INT_CMD, '-add_rpath', p, object_file]
-            shell.new_call(cmd, fail=False)
+            shell.new_call(cmd, fail=False, logfile=self.logfile)
         # Change dependencies' paths from absolute to @rpath/
         for lib in self.list_shared_libraries(object_file):
-            if self.lib_prefix in lib:
-                new_lib = lib.replace(self.lib_prefix, '@rpath')
-            elif '@rpath/lib/' in lib:
-                # These are leftovers from meson thinking RPATH == prefix
-                new_lib = lib.replace('@rpath/lib/', '@rpath/')
+            # Is it an absolute Python path that requires recasting?
+            if is_absolute_python_framework(lib):
+                # -change <lib> @rpath/libpythonX.YY.dylib
+                _, path = lib.split('/Versions/')
+                new_lib = f'@rpath/libpython{path}'.replace('/Python', '.dylib')
             else:
+                new_lib = lib.replace(self.install_prefix, '@rpath').replace('@rpath/lib/', '@rpath/')
+            # These are leftovers from meson thinking RPATH == prefix
+            if new_lib == lib:
                 continue
+            # needs splitting into <framework prefix>/Python
+            # -add-rpath <framework prefix>/lib (below)
+            if is_absolute_python_framework(lib):
+                p = f"{lib.removesuffix('/Python')}/lib"
+                cmd = [INT_CMD, '-add_rpath', p, object_file]
+                shell.new_call(cmd, fail=False, logfile=self.logfile)
             cmd = [INT_CMD, '-change', lib, new_lib, object_file]
             shell.new_call(cmd, fail=False, logfile=self.logfile)
-
-    def change_lib_path(self, object_file, old_path, new_path):
-        for lib in self.list_shared_libraries(object_file):
-            if old_path in lib:
-                new_path = lib.replace(old_path, new_path)
-                cmd = [INT_CMD, '-change', lib, new_path, object_file]
-                shell.new_call(cmd, fail=True, logfile=self.logfile)
 
     def parse_dir(self, dir_path, filters=None):
         for dirpath, dirnames, filenames in os.walk(dir_path):
@@ -208,7 +223,7 @@ class OSXRelocator(object):
         if fileext == '.a' and 'ar archive' in filedesc:
             return False
 
-        return filedesc.startswith('Mach-O')
+        return filedesc.startswith('Mach-O') and 'companion' not in filedesc
 
 
 class Main(object):

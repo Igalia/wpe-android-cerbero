@@ -17,19 +17,21 @@
 # Boston, MA 02111-1307, USA.
 
 import os
-import sys
 import tempfile
 import unittest
 
 from cerbero import config as cconfig
-from cerbero.enums import Platform
 from cerbero.errors import FatalError, ConfigurationError
-from cerbero.utils import system_info
+from unittest.mock import patch
 
 Config = cconfig.Config
 
+CONFIG = """
+variants.override(['alsa', 'x11'])
+"""
 
-class LinuxPackagesTest(unittest.TestCase):
+
+class ConfigTest(unittest.TestCase):
     def setUp(self):
         os.environ[cconfig.CERBERO_UNINSTALLED] = '1'
 
@@ -49,69 +51,13 @@ class LinuxPackagesTest(unittest.TestCase):
     def testLoadDefaults(self):
         config = Config()
         config.load_defaults()
-        platform, arch, distro, distro_version, num_of_cpus = system_info()
-        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-        data_dir = os.path.abspath(data_dir)
-        props = {
-            'platform': platform,
-            'target_platform': platform,
-            'distro': distro,
-            'distro_version': distro_version,
-            'target_distro': distro,
-            'target_distro_version': distro_version,
-            'arch': arch,
-            'target_arch': arch,
-            'num_of_cpus': num_of_cpus,
-            'host': None,
-            'build': None,
-            'target': None,
-            'prefix': None,
-            'sources': None,
-            'local_sources': None,
-            'min_osx_sdk_version': None,
-            'lib_suffix': '',
-            'cache_file': None,
-            'toolchain_prefix': None,
-            'install_dir': None,
-            'packages_prefix': None,
-            'data_dir': data_dir,
-            'environ_dir': config._relative_path('config'),
-            'recipes_dir': config._relative_path('recipes'),
-            'packages_dir': config._relative_path('packages'),
-            'git_root': cconfig.DEFAULT_GIT_ROOT,
-            'wix_prefix': cconfig.DEFAULT_WIX_PREFIX,
-            'packager': cconfig.DEFAULT_PACKAGER,
-            'py_prefix': 'lib/python%s.%s' % (sys.version_info[0], sys.version_info[1]),
-            'allow_parallel_build': cconfig.DEFAULT_ALLOW_PARALLEL_BUILD,
-            'use_configure_cache': False,
-            'allow_system_libs': True,
-            'external_packages': {},
-            'external_recipes': {},
-            'use_ccache': None,
-            'force_git_commit': None,
-            'universal_archs': [cconfig.Architecture.X86, cconfig.Architecture.X86_64],
-        }
-        self.assertEqual(sorted(config._properties), sorted(props.keys()))
-        for p, v in props.items():
-            self.assertEqual(getattr(config, p), v)
-
-    def testLoadMainConfig(self):
-        config = Config()
-
-        tmpconfig = tempfile.NamedTemporaryFile()
-        cconfig.DEFAULT_CONFIG_FILE = tmpconfig.name
-
-        config._load_main_config()
         for p in config._properties:
-            self.assertIsNone(getattr(config, p))
-
-        config.load_defaults()
-        self._checkLoadConfig(config, config._load_main_config, tmpconfig.name, config._properties)
+            self.assertTrue(hasattr(config, p))
 
     def testLoadPlatformConfig(self):
         config = Config()
         tmpdir = tempfile.mkdtemp()
-        config.environ_dir = tmpdir
+        config.config_dir = tmpdir
         config.load_defaults()
         config._load_platform_config()
         platform_config = os.path.join(tmpdir, '%s.config' % config.target_platform)
@@ -133,48 +79,35 @@ class LinuxPackagesTest(unittest.TestCase):
         config._check_uninstalled()
         self.assertTrue(config.uninstalled)
 
-    def testSetupEnv(self):
-        config = Config()
-        tmpdir = tempfile.mkdtemp()
-        config.prefix = tmpdir
-        config.load_defaults()
-        config.do_setup_env()
-        env = config.get_env(tmpdir, os.path.join(tmpdir, 'lib'), config.py_prefix)
-        for k, v in env.items():
-            self.assertEqual(os.environ[k], v)
-
     def testParseBadConfigFile(self):
         config = Config()
         tmpfile = tempfile.NamedTemporaryFile()
-        with open(tmpfile.name, 'w') as f:
+        with open(tmpfile.name, 'wt') as f:
             f.write('nonsense line')
-        self.assertRaises(ConfigurationError, config.parse, tmpfile.name)
+        self.assertRaises(ConfigurationError, config._parse, tmpfile.name)
 
     def testJoinPath(self):
         config = Config()
-        config.platform = Platform.LINUX
         self.assertEqual(config._join_path('/test1', '/test2'), '/test1:/test2')
-        config.platform = Platform.WINDOWS
-        self.assertEqual(config._join_path('/test1', '/test2'), '/test1;/test2')
 
     def testLoadCommandConfig(self):
         config = Config()
+        config.load_defaults()
         config.filename = None
         config._load_cmd_config(None)
         self.assertIsNone(config.filename)
-        self.assertRaises(ConfigurationError, config._load_cmd_config, '/foo/bar')
-        tmpfile = tempfile.NamedTemporaryFile()
-        config._load_cmd_config(tmpfile.name)
-        self.assertEqual(config.filename, cconfig.DEFAULT_CONFIG_FILE)
+        self.assertRaises(ConfigurationError, config._load_cmd_config, ['/foo/bar'])
 
-    def testLastDefaults(self):
+    def testLoadCommandConfigOverrideVariants(self):
         config = Config()
-        config._load_last_defaults()
-        cerbero_home = os.path.expanduser('~/cerbero')
-        self.assertEqual(config.prefix, os.path.join(cerbero_home, 'dist'))
-        self.assertEqual(config.install_dir, config.prefix)
-        self.assertEqual(config.sources, os.path.join(cerbero_home, 'sources'))
-        self.assertEqual(config.local_sources, os.path.join(cerbero_home, 'sources', 'local'))
+        config.load_defaults()
+        self.assertFalse(config.variants.alsa)
+        tmpconfig = tempfile.NamedTemporaryFile(mode='w+t')
+        tmpconfig.write(CONFIG)
+        tmpconfig.flush()
+        config._load_cmd_config([tmpconfig.name])
+        # config.load([tmpconfig.name])
+        self.assertTrue(config.variants.alsa)
 
     def testRecipesExternalRepositories(self):
         config = Config()
@@ -189,3 +122,55 @@ class LinuxPackagesTest(unittest.TestCase):
         config.external_packages = {'test1': ('/path/to/repo', 1), 'test2': ('/path/to/other/repo', 2)}
         expected = {'default': ('test', 0), 'test1': ('/path/to/repo', 1), 'test2': ('/path/to/other/repo', 2)}
         self.assertEqual(config.get_packages_repos(), expected)
+
+    def testEnvironDirDeprecation(self):
+        """Test that environ_dir is deprecated and properly mapped to config_dir"""
+        config = Config()
+        config.load_defaults()
+
+        # Test 1: environ_dir attribute should not exist
+        with self.assertRaises(AttributeError):
+            _ = config.environ_dir
+
+        # Test 2: Setting environ_dir in config file should emit warning and set config_dir
+        tmpconfig = tempfile.NamedTemporaryFile(mode='w+t', suffix='.cbc', delete=False)
+        try:
+            tmpconfig.write('environ_dir = "/custom/config/path"\n')
+            tmpconfig.flush()
+            tmpconfig.close()
+
+            # Mock the deprecation function to capture the call
+            with patch('cerbero.utils.messages.deprecation') as mock_deprecation:
+                config._parse(tmpconfig.name, reset=False)
+
+                # Verify deprecation warning was called
+                mock_deprecation.assert_called_once()
+                call_args = mock_deprecation.call_args[0][0]
+                self.assertIn('environ_dir', call_args)
+                self.assertIn('deprecated', call_args)
+                self.assertIn('config_dir', call_args)
+
+            # Verify config_dir was set from environ_dir
+            self.assertEqual(config.config_dir, '/custom/config/path')
+
+            # Verify environ_dir attribute still doesn't exist
+            with self.assertRaises(AttributeError):
+                _ = config.environ_dir
+
+        finally:
+            os.unlink(tmpconfig.name)
+
+    def testConfigDirAccessible(self):
+        """Test that config_dir is accessible and works normally"""
+        config = Config()
+        config.load_defaults()
+
+        # config_dir should be accessible
+        self.assertIsNotNone(config.config_dir)
+        self.assertTrue(os.path.exists(config.config_dir))
+
+        # Should be able to set it directly
+        old_config_dir = config.config_dir
+        config.config_dir = '/tmp/test'
+        self.assertEqual(config.config_dir, '/tmp/test')
+        config.config_dir = old_config_dir

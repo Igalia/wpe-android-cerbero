@@ -21,18 +21,21 @@ minimum base to bootstrap on top of.
 
 ### Linux Setup
 
-On Linux, you will only need a distribution with python >= 3.7. Cerbero will
+On Linux, you will only need a distribution with python >= 3.9. Cerbero will
 use your package manager to install all other required packages during
 [bootstrap](#Bootstrap).
 
 ### macOS Setup
 
-On macOS you will need to have install the following software:
-
-* XCode
-* Python 3.7+ https://www.python.org/downloads/
+On macOS we use the Python 3 that ships with Xcode, so you only need to install
+Xcode Command Line Tool.
 
 Cerbero will build all other required packages during [bootstrap](#Bootstrap).
+You do **not** need anything from Homebrew or MacPorts, and in fact having too
+many packages installed in either of those can cause problems.
+
+Note that introspection and python support will only be enabled when building
+on ARM64 (Apple Silicon).
 
 ### Windows Setup
 
@@ -45,7 +48,7 @@ installs the necessary tools with [Chocolatey](https://chocolatey.org/):
 * MSYS2
 * Git
 * Python 3
-* WiX
+* WiX 5.0.1 or higher
 
 Start an admin PowerShell and run:
 
@@ -55,6 +58,15 @@ $ Set-ExecutionPolicy -ExecutionPolicy Unrestricted
 
 # Run the bootstrap script
 $ .\tools\bootstrap-windows.ps1
+```
+
+You may specify the Visual Studio version to install by passing the `-VSVersion`
+parameter with either `2019` or `2022`. If not specified, you will be prompted to
+choose one during the bootstrap process.
+
+```powershell
+# Run the bootstrap script specifying Visual Studio 2022
+$ .\tools\bootstrap-windows.ps1 -VSVersion '2022'
 ```
 
 **IMPORTANT:** Using cerbero on Windows with the [GCC/MinGW toolchain](docs/toolchains.md#Windows)
@@ -142,29 +154,38 @@ Android x86_64    | `cross-android-x86-64.cbc`
 
 Target                         | Config file
 :------------------------------|:-----------
-macOS Universal (relocatable)  | `cross-macos-universal.cbc`
-macOS x86_64 (relocatable)     | `cross-macos-x86-64.cbc`
-macOS ARM64 (relocatable)      | `cross-macos-arm64.cbc`
+macOS Universal                | `cross-macos-universal.cbc`
+macOS x86_64                   | `cross-macos-x86-64.cbc`
+macOS ARM64                    | `cross-macos-arm64.cbc`
 macOS x86_64 (not-relocatable) | `osx-x86-64.cbc`
-iOS Universal                  | `cross-ios-universal.cbc`
+iOS Universal (deprecated)     | `cross-ios-universal.cbc`
 iOS ARM64                      | `cross-ios-arm64.cbc`
-iOS x86_64                     | `cross-ios-x86-64.cbc`
+iOS Simulator Universal        | `cross-ios-sim-universal.cbc`
+
+The iOS ARM64 and Simulator Universal artifacts can be combined into one with
+the `xcframework` command like so:
+
+```sh
+./cerbero-uninstalled -c config/cross-ios-arm64.cbc package gstreamer-1.0 --artifact=xcframework
+./cerbero-uninstalled -c config/cross-ios-sim-universal.cbc package gstreamer-1.0 --artifact=xcframework
+./cerbero-uninstalled xcframework gstreamer-1.0 --source gstreamer-1.0-1.2*-ios-simulator-universal.xcframework.tar.xz --source gstreamer-1.0-1.2*-ios-arm64.xcframework.tar.xz
+```
+
+This will output `gstreamer-1.2?.?-xcframework.tar.xz` containing iOS ARM64,
+iOS Simulator ARM64, and iOS Simulator x86_64.
 
 #### Windows Targets
 
 On Windows, config files are used to select the architecture and variants are
-used to select the toolchain (MinGW, MSVC, UWP):
+used to select the toolchain (MinGW, MSVC):
 
 Target          | Config file               | Variant
 :---------------|:--------------------------|:-------
 MSVC x86        | `win32.cbc`               |
 MSVC x86_64     | `win64.cbc`               |
+MSVC arm64      | `cross-win-arm64.cbc`     |
 MinGW x86       | `win32.cbc`               | mingw
 MinGW x86_64    | `win64.cbc`               | mingw
-UWP x86         | `win32.cbc`               | uwp
-UWP x86_64      | `win64.cbc`               | uwp
-UWP ARM64       | `cross-win-arm64.cbc`     | uwp
-UWP Universal   | `cross-uwp-universal.cbc` | (implicitly uwp)
 
 Example usage:
 
@@ -175,17 +196,35 @@ $ ./cerbero-uninstalled -c config/win64.cbc package gstreamer-1.0
 # Target MinGW 32-bit
 $ ./cerbero-uninstalled -c config/win32.cbc -v mingw package gstreamer-1.0
 
-# Target UWP, x86_64
-$ ./cerbero-uninstalled -c config/win64.cbc -v uwp package gstreamer-1.0
-
-# Target UWP, Cross ARM64
-$ ./cerbero-uninstalled -c config/cross-win-arm64.cbc -v uwp package gstreamer-1.0
-
-# Target UWP, All Supported Arches
-$ ./cerbero-uninstalled -c config/cross-uwp-universal.cbc package gstreamer-1.0
+# Target MSVC Cross ARM64
+$ ./cerbero-uninstalled -c config/cross-win-arm64.cbc package gstreamer-1.0
 ```
 
-# Enabling Optional Features with Variants
+# Artifact Types
+
+Starting with the 1.28 release, Cerbero supports outputting various kinds of
+artifact types:
+
+* Tarballs
+  - Default for Android and Linux, available for all targets
+  - Prior to 1.28, this could be selected with the `-t/--tarball` option
+* Windows Installer Packages
+  - Default for, and only available for Windows and cross-Windows targets
+* macOS Installer Packages
+  - Default for, and only available for macOS and iOS targets
+  - Deprecated on iOS, in favor of xcframework
+* iOS xcframework
+  - Only available for iOS
+  - Use `package --artifact=xcframework` + `xcframework --source ... --source ...`
+* Python 3 Wheels
+  - Available for macOS and Windows
+  - The minimum supported Python version for the wheel will be whatever Python
+    version you build the wheel with. The oldest supported by Cerbero is 3.9.
+
+The artifact to output can be controlled with the `--artifact` option. Valid
+choices are: `tarball` `msi` `pkg` `wheel`.
+
+# Enabling and Disabling Optional Features with Variants
 
 Cerbero controls optional and platform-specific features with `variants`. You
 can see a full list of available variants by running:
@@ -214,7 +253,8 @@ $ ./cerbero-uninstalled -v variantname1,variantname2 [-c ...] package gstreamer-
 $ ./cerbero-uninstalled -v variantname1 -v variantname2 [-c ...] package gstreamer-1.0
 ```
 
-To explicitly disable a variant, use `novariantname` instead.
+To explicitly **disable** a variant, use `novariantname` instead,
+e.g. `-v norust` to disable Rust support and building of the Rust plugins.
 
 In the case of multiple enabling/disable of the same variant, then the last
 condition on the command line will take effect.  e.g. if novariantname is last
@@ -254,7 +294,7 @@ done for Qt6.
 **NOTE:** The package outputted will not contain a copy of the Qt libraries in
 it. You must link to them while building your app yourself.
 
-## Enabling Rust / Cargo Support
+## Enabling or Disabling Rust / Cargo Support
 
 Starting with version 1.22, Cerbero supports bootstrapping Rust toolchains, and
 can build Rust gstreamer plugins.
@@ -269,6 +309,9 @@ by invoking cerbero as follows:
 ```
 $ ./cerbero-uninstalled -v rust <command>
 ```
+
+To explicitly **disable** Rust support and building of the Rust plugins,
+pass `-v norust`.
 
 ## Enabling Hardware Codec Support
 
@@ -291,14 +334,7 @@ if you need to set this, you must set it to point to the directory that
 contains the mediasdk `include` and `lib64` dirs.
 
 For VA-API, the [variant to enable](#enabling-optional-features-with-variants)
-is `vaapi` which will build the gstreamer-vaapi plugins with all
-options enabled if possible.
-
-### Nvidia Hardware Codecs
-
-Since 1.17.1, the `nvcodec` plugin does not need access to the Nvidia Video SDK
-or the CUDA SDK. It now loads everything at runtime. Hence, it is now enabled
-by default on all platforms.
+is `vaapi` which will build the va plugins from gst-plugins-bad.
 
 ## Building without Visual Studio
 

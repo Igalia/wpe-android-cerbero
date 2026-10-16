@@ -1,12 +1,13 @@
 # -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
-from cerbero.utils import shell
+from cerbero.enums import Symbolication
 from cerbero.tools.libtool import LibtoolLibrary
+
 
 class Recipe(custom.GStreamer):
     name = 'gst-devtools-1.0'
     btype = BuildType.MESON
     meson_options = {'debug_viewer': 'disabled'}
-    tarball_checksum = 'b7eabc58a17771a162a74aba721f2469a2b044d1674d3e416e3c62f2a2b0d26a'
+    tarball_checksum = 'a85275f91e421ae55c8ec08779459a3f93f620d2acc25b6e6723ef43573c6ba5'
     deps = ['gstreamer-1.0', 'gst-plugins-base-1.0', 'json-glib', 'gst-rtsp-server-1.0']
 
     files_bins = ['gst-validate-1.0', 'gst-validate-transcoding-1.0', 'gst-validate-media-check-1.0',
@@ -26,6 +27,11 @@ class Recipe(custom.GStreamer):
         'GstValidate-1.0'
     ]
 
+    symbolication_patterns = {
+        Symbolication.SKIP: [],
+        Symbolication.MANUAL: ['gst-dots-viewer']
+    }
+
     def prepare(self):
         if self.config.target_platform == Platform.LINUX:
             self.files_libs.append("libgstvalidate-default-overrides-1.0")
@@ -33,6 +39,14 @@ class Recipe(custom.GStreamer):
         if self.config.platform != Platform.WINDOWS:
             # validatedefaultinjection plugin isn't built on Windows
             self.files_gst_validate_plugins = ['%(libdir)s/gstreamer-1.0/validate/libgstvalidatefaultinjection%(mext)s']
+
+        if self.config.variants.rust and self.config.prefix_is_executable():
+            self.meson_options['dots_viewer'] = 'enabled'
+            self.files_bins.append('gst-dots-viewer')
+            if self.config.platform == Platform.DARWIN:
+                self.set_env('RUSTFLAGS', "-C link-args=-Wl,-headerpad_max_install_names -C split-debuginfo=packed")
+        else:
+            self.meson_options['dots_viewer'] = 'disabled'
 
     def post_install(self):
         super().post_install()

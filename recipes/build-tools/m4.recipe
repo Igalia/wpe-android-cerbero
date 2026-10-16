@@ -4,22 +4,32 @@ import shutil
 
 class Recipe(recipe.Recipe):
     name = 'm4'
-    version = '1.4.19'
+    version = '1.4.21'
     licenses = [License.GPLv2Plus]
     stype = SourceType.TARBALL
     url = 'gnu://'
-    tarball_checksum = '63aede5c6d33b6d9b13511cd0be2cac046f2e70fd0a07aa9573a04a82783af96'
+    tarball_checksum = 'f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66'
     files_bins = ['m4']
+    configure_options = ['--disable-gcc-warnings']
+    patches = ['m4/0001-build-disable-documentation-build.patch']
 
     def prepare(self):
-        self.configure_options += " --disable-gcc-warnings"
         self.append_env('CFLAGS', '-Wno-error=cast-align', '-std=gnu17')
+        # configure checks expect this to not be set to be able to work correctly.
+        # See https://savannah.gnu.org/bugs/?67141
+        if self.config.platform == Platform.DARWIN:
+           self.remove_env('CFLAGS', '-Werror=unguarded-availability-new')
+           self.remove_env('CPPFLAGS', '-Werror=unguarded-availability-new')
+           self.remove_env('CXXFLAGS', '-Werror=unguarded-availability-new')
 
     def post_install(self):
         # HACK m4 build fails in Windows gmp build:
         # m4  -DHAVE_CONFIG_H -D__GMP_WITHIN_GMP -DOPERATION_invert_limb_table -DWINVER=0x0600 -D_WIN32_WINNT=0x0600 -DDLL_EXPORT -DPIC invert_limb_table.asm >tmp-invert_limb_table.s
         # m4.exe: write error: Invalid argument
         if self.config.platform == Platform.WINDOWS:
-            shutil.move(os.path.join(self.config.prefix, 'bin', 'm4.exe'),
-                        os.path.join(self.config.prefix, 'bin', 'm4.exe.backup'))
+            shutil.move(
+                os.path.join(self.config.prefix, 'bin', 'm4.exe'),
+                os.path.join(self.config.prefix, 'bin', 'm4.exe.backup'),
+            )
+
         super().post_install()

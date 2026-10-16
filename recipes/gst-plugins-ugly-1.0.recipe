@@ -4,7 +4,7 @@
 class Recipe(custom.GStreamer):
     name = 'gst-plugins-ugly-1.0'
     btype = BuildType.MESON
-    tarball_checksum = '3dfc12bf0b766682b7d6e1e29a404b55e2375ba172d11900179738ae89b7a2d5'
+    tarball_checksum = '51ae53002e3bbe9ed0f2215020c5a248bf0ed41b9d9a2a4e102b8583fedab61c'
     meson_options = {'gpl': 'enabled',
                      # enabled plugins
                      'a52dec': 'enabled',
@@ -14,44 +14,48 @@ class Recipe(custom.GStreamer):
             'libdvdread', 'x264']
 
     files_plugins_codecs_restricted = [
-             '%(libdir)s/gstreamer-1.0/libgsta52dec%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstasf%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstdvdsub%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstdvdlpcmdec%(mext)s',
              '%(libdir)s/gstreamer-1.0/libgstrealmedia%(mext)s',
-             '%(libdir)s/gstreamer-1.0/libgstx264%(mext)s',
     ]
 
     files_plugins_codecs_restricted_devel = [
-             '%(libdir)s/gstreamer-1.0/libgsta52dec.a', '%(libdir)s/gstreamer-1.0/libgsta52dec.la',
              '%(libdir)s/gstreamer-1.0/libgstasf.a', '%(libdir)s/gstreamer-1.0/libgstasf.la',
              '%(libdir)s/gstreamer-1.0/libgstdvdsub.a', '%(libdir)s/gstreamer-1.0/libgstdvdsub.la',
              '%(libdir)s/gstreamer-1.0/libgstdvdlpcmdec.a', '%(libdir)s/gstreamer-1.0/libgstdvdlpcmdec.la',
              '%(libdir)s/gstreamer-1.0/libgstrealmedia.a', '%(libdir)s/gstreamer-1.0/libgstrealmedia.la',
-             '%(libdir)s/gstreamer-1.0/libgstx264.a', '%(libdir)s/gstreamer-1.0/libgstx264.la',
     ]
 
     files_plugins_dvd = [
-             '%(libdir)s/gstreamer-1.0/libgstdvdread%(mext)s',
     ]
 
     files_plugins_dvd_devel = [
+    ]
+
+    files_plugins_codecs_gpl = [
+             '%(libdir)s/gstreamer-1.0/libgsta52dec%(mext)s',
+    ]
+
+    files_plugins_codecs_gpl_devel = [
+             '%(libdir)s/gstreamer-1.0/libgsta52dec.a', '%(libdir)s/gstreamer-1.0/libgsta52dec.la',
+    ]
+
+    files_plugins_dvd_gpl = [
+             '%(libdir)s/gstreamer-1.0/libgstdvdread%(mext)s',
+    ]
+
+    files_plugins_dvd_gpl_devel = [
              '%(libdir)s/gstreamer-1.0/libgstdvdread.a', '%(libdir)s/gstreamer-1.0/libgstdvdread.la',
     ]
 
     files_lang = ['gst-plugins-ugly-1.0']
 
     def prepare(self):
-        if self.config.target_platform in (Platform.ANDROID, Platform.IOS):
-            self.disable_plugin('dvdread', 'dvd', dep='libdvdread')
+        if Platform.is_app_platform(self.config.target_platform):
+            self.disable_plugin('dvdread', 'dvd_gpl', dep='libdvdread')
 
-        # Recipes that need autoreconf hang on the Windows CI
-        if self.config.platform == Platform.WINDOWS:
-            self.disable_plugin('dvdread', 'dvd', dep='libdvdread')
-            self.disable_plugin('a52dec', 'codecs_restricted', dep='a52dec')
-
-        if self.using_uwp():
-            self.disable_plugin('x264', 'codecs_restricted', dep='x264')
+        self.enable_plugin('x264', 'codecs_gpl_restricted', dep='x264')
 
         if self.config.variants.nodebug:
             self.append_env('CFLAGS', '-DGST_LEVEL_MAX=GST_LEVEL_FIXME')

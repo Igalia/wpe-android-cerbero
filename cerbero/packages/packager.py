@@ -25,55 +25,57 @@ from cerbero.utils import messages as m
 _packagers = {}
 
 
-def register_packager(distro, klass, distro_version=None):
+def register_packager(distro, klass):
     if distro not in _packagers:
-        _packagers[distro] = {}
-    _packagers[distro][distro_version] = klass
+        _packagers[distro] = []
+    _packagers[distro].append(klass)
 
 
 class Packager(object):
-    def __new__(klass, config, package, store):
-        d = config.target_distro
-        v = config.target_distro_version
+    def __new__(cls, config, package, store, artifact_type=None):
+        td = config.target_distro
 
-        if d not in _packagers:
-            raise FatalError(_('No packager available for the distro %s' % d))
+        if td not in _packagers:
+            raise FatalError(_('No packager available for the distro %s' % td))
 
-        if v not in _packagers[d]:
-            # Be tolerant with the distro version
-            m.warning(
-                _(
-                    'No specific packager available for the distro '
-                    'version %s, using generic packager for distro %s' % (v, d)
-                )
-            )
-            v = None
-
-        if d == Distro.DEBIAN:
+        if td == Distro.DEBIAN:
             m.warning(
                 'Creation of Debian packages is currently broken, please see '
                 'https://gitlab.freedesktop.org/gstreamer/cerbero/issues/56\n'
                 'Creating tarballs instead...'
             )
-            d = Distro.NONE
-            v = None
+            td = Distro.NONE
 
-        if d == Distro.WINDOWS and config.cross_compiling():
+        if td == Distro.WINDOWS and config.cross_compiling() and artifact_type in ('default', 'msi'):
             try:
                 get_wix_prefix(config)
             except Exception:
-                m.warning('Cross-compiling for Windows and WIX not found, overriding Packager')
-                d = Distro.NONE
+                m.warning('Cross-compiling for Windows and WIX not found, building tarballs')
+                td = Distro.NONE
 
-        return _packagers[d][v](config, package, store)
+        # Return the first packager that matches the artifact type
+        if artifact_type:
+            for p in _packagers[td]:
+                if p.ARTIFACT_TYPE == artifact_type:
+                    return p(config, package, store)
+            raise FatalError(f'No {artifact_type} packager available for the distro {td}')
+
+        # Return the first packager
+        for p in _packagers[td]:
+            return p(config, package, store)
+        raise FatalError(f'No packager available for the distro {td}')
 
 
-from cerbero.packages import wix_packager, rpm, debian, android, disttarball  # noqa: E402
+from cerbero.packages import rpm, debian, android, disttarball  # noqa: E402
+from cerbero.packages.windows import inno_setup, wix_on_ninja  # noqa: E402
 from cerbero.packages.osx import packager as osx_packager  # noqa: E402
+from cerbero.packages.wheel import packager as wheel  # noqa: E402
 
-wix_packager.register()
 osx_packager.register()
 rpm.register()
 debian.register()
 android.register()
+inno_setup.register()
+wix_on_ninja.register()
 disttarball.register()
+wheel.register()

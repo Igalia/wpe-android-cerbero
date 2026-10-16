@@ -17,6 +17,7 @@
 # Boston, MA 02111-1307, USA.
 
 import os
+from pathlib import Path
 import tempfile
 import shutil
 
@@ -30,8 +31,8 @@ from cerbero.packages.osx.distribution import DistributionXML
 from cerbero.packages.osx.bundles import FrameworkBundlePackager, ApplicationBundlePackager
 from cerbero.packages.osx.buildtools import PackageBuild, ProductBuild
 from cerbero.utils import shell, _
-from cerbero.tools import strip
 from cerbero.utils import messages as m
+from cerbero.utils.tar import Tar
 
 
 class FrameworkHeadersMixin(object):
@@ -68,14 +69,13 @@ class FrameworkHeadersMixin(object):
             for p in os.listdir(inc_dir):
                 src = os.path.join(inc_dir, p)
                 dest = os.path.join(headers, p)
-                if not os.path.exists(os.path.dirname(dest)):
-                    os.makedirs(os.path.dirname(dest))
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
                 # include/cairo/cairo.h -> Headers/cairo.h
                 if os.path.isfile(src):
-                    shutil.copy(src, dest)
+                    shutil.copy(src, dest, follow_symlinks=False)
                 # include/gstreamer-0.10/gst -> Headers/gst
                 elif os.path.isdir(src):
-                    shell.copy_dir(src, dest)
+                    shell.copy_dir(src, dest, follow_symlinks=False)
 
     def _copy_unversioned_headers(self, dirname, include, headers, include_dirs):
         if not os.path.exists(dirname):
@@ -88,9 +88,8 @@ class FrameworkHeadersMixin(object):
             if os.path.isfile(path):
                 p = os.path.join(headers, rel_path)
                 d = os.path.dirname(p)
-                if not os.path.exists(d):
-                    os.makedirs(d)
-                shutil.copy(path, p)
+                os.makedirs(d, exist_ok=True)
+                shutil.copy(path, p, follow_symlinks=False)
             # scan sub-directories
             elif os.path.isdir(path):
                 if path in include_dirs:
@@ -136,9 +135,15 @@ class OSXPackage(PackagerBase, FrameworkHeadersMixin):
             if not devel:
                 raise e
             runtime_path = None
+        try:
+            debug_path = self._create_package(PackageType.DEBUG, output_dir, force)
+        except EmptyPackageError as e:
+            if not devel:
+                raise e
+            debug_path = None
 
         if not devel:
-            return [runtime_path, None]
+            return [runtime_path, debug_path, None]
 
         try:
             # create the development package
@@ -148,7 +153,7 @@ class OSXPackage(PackagerBase, FrameworkHeadersMixin):
                 raise e
             devel_path = None
 
-        return [runtime_path, devel_path]
+        return [runtime_path, debug_path, devel_path]
 
     def _get_install_dir(self):
         # if self.config.target_arch != Architecture.UNIVERSAL:
@@ -192,9 +197,11 @@ class OSXPackage(PackagerBase, FrameworkHeadersMixin):
                 continue
             out_path = os.path.join(root, f)
             out_dir = os.path.split(out_path)[0]
-            if not os.path.exists(out_dir):
-                os.makedirs(out_dir)
-            shutil.copy(in_path, out_path)
+            os.makedirs(out_dir, exist_ok=True)
+            if os.path.isdir(in_path):
+                shell.copy_dir(in_path, out_path)
+            else:
+                shutil.copy(in_path, out_path, follow_symlinks=False)
         if package_type == PackageType.DEVEL:
             self._create_framework_headers(self.config.prefix, self.include_dirs, root)
 
@@ -217,13 +224,13 @@ class ProductPackage(PackagerBase):
     """
 
     PKG_EXT = '.pkg'
-    home_folder = False
 
     def __init__(self, config, package, store):
         PackagerBase.__init__(self, config, package, store)
         self.packages = self.store.get_package_deps(package)
         self.packages_paths = {}
         self.empty_packages = {}
+        self.home_folder = True
 
     def pack(self, output_dir, devel=False, force=False, keep_temp=False):
         PackagerBase.pack(self, output_dir, devel, force, keep_temp)
@@ -242,6 +249,9 @@ class ProductPackage(PackagerBase):
             r_path = self._create_product(PackageType.RUNTIME)
             paths.append(r_path)
 
+            r_path = self._create_product(PackageType.DEBUG)
+            paths.append(r_path)
+
             if devel:
                 # create devel package
                 d_path = self._create_product(PackageType.DEVEL)
@@ -250,19 +260,39 @@ class ProductPackage(PackagerBase):
             self.package.set_mode(PackageType.RUNTIME)
             self._create_packages_dmg()
         finally:
-            if not keep_temp:
+            if keep_temp:
+                m.action(f'Temporary build directory is at {self.tmp}')
+            else:
+                # Remove bundle components
+                for _, p in self.packages_paths.items():
+                    for _, f in p.items():
+                        if not f:
+                            continue
+                        os.unlink(f)
                 shutil.rmtree(self.tmp)
 
         return paths
 
     def _prepare_pack(self):
-        self.include_dirs = PkgConfig.list_all_include_dirs(env=self.config.env)
-        self.tmp = tempfile.mkdtemp()
+        env = self.config.env.copy()
+        # python3.xx-embed is a system package
+        if self.config.variants.python:
+            import sysconfig
+
+            env['PKG_CONFIG_PATH'] = f"{env['PKG_CONFIG_PATH']}:{sysconfig.get_config_var('LIBPC')}"
+        self.include_dirs = PkgConfig.list_all_include_dirs(env=env)
+        # Make it recognizable for capturing purposes
+        self.tmp = tempfile.mkdtemp(prefix=self._package_name('-'), dir=self.output_dir)
+        # Calm Git if you're running this interactively
+        with open(os.path.join(self.tmp, '.gitignore'), 'w', encoding='utf-8') as f:
+            f.write('*\n')
+
         self.fw_path = self.tmp
 
-        self.empty_packages = {PackageType.RUNTIME: [], PackageType.DEVEL: []}
-        self.packages_paths = {PackageType.RUNTIME: {}, PackageType.DEVEL: {}}
+        self.empty_packages = {PackageType.RUNTIME: [], PackageType.DEVEL: [], PackageType.DEBUG: []}
+        self.packages_paths = {PackageType.RUNTIME: {}, PackageType.DEVEL: {}, PackageType.DEBUG: {}}
 
+    # FIXME: this has no OS or variant information!
     def _package_name(self, suffix):
         return '%s-%s-%s%s' % (self.package.name, self.package.version, self.config.target_arch, suffix)
 
@@ -286,12 +316,14 @@ class ProductPackage(PackagerBase):
         self.store.add_package(package)
         packages = self.package.packages[:] + [(package.name, True, True)]
         self.package.packages = packages
-        path = packager.pack(self.output_dir, self.fw_path)[0]
-        if self.config.target_platform == Platform.IOS:
-            self.packages_paths[PackageType.DEVEL][package] = path
+        path = packager.pack(self.output_dir, self.fw_path)
+        if Platform.is_apple_app_platform(self.config.target_platform):
+            self.packages_paths[PackageType.DEVEL][package] = path[0]
             self.empty_packages[PackageType.RUNTIME].append(package)
+            self.empty_packages[PackageType.DEBUG].append(package)
         else:
-            self.packages_paths[PackageType.RUNTIME][package] = path
+            self.packages_paths[PackageType.RUNTIME][package] = path[0]
+            self.packages_paths[PackageType.DEBUG][package] = path[1]
             self.empty_packages[PackageType.DEVEL].append(package)
 
     def _create_product(self, package_type):
@@ -332,14 +364,18 @@ class ProductPackage(PackagerBase):
                 )
                 m.action(_('Package created sucessfully'))
             except EmptyPackageError:
-                paths = [None, None]
+                paths = [None, None, None]
 
             if paths[0] is not None:
                 self.packages_paths[PackageType.RUNTIME][p] = paths[0]
             else:
                 self.empty_packages[PackageType.RUNTIME].append(p)
             if paths[1] is not None:
-                self.packages_paths[PackageType.DEVEL][p] = paths[1]
+                self.packages_paths[PackageType.DEBUG][p] = paths[1]
+            else:
+                self.empty_packages[PackageType.DEBUG].append(p)
+            if paths[2] is not None:
+                self.packages_paths[PackageType.DEVEL][p] = paths[2]
             else:
                 self.empty_packages[PackageType.DEVEL].append(p)
 
@@ -353,7 +389,7 @@ class ProductPackage(PackagerBase):
         os.makedirs(workdir)
         try:
             for p in paths:
-                shutil.copy(p, workdir)
+                shutil.copy(p, workdir, follow_symlinks=False)
             # Create Disk Image
             cmd = ['hdiutil', 'create', dmg_file, '-ov', '-srcfolder', workdir]
             shell.new_call(cmd)
@@ -383,7 +419,6 @@ class ApplicationPackage(PackagerBase):
         # bundle will try to create links for the main executable
         self._create_bundle()
         self._create_app_bundle()
-        self._strip_binaries()
         if self.package.osx_create_pkg:
             pkg = self._create_product()
             self._add_applications_link()
@@ -410,21 +445,13 @@ class ApplicationPackage(PackagerBase):
                 continue
             out_path = os.path.join(out_dir, f)
             odir = os.path.split(out_path)[0]
-            if not os.path.exists(odir):
-                os.makedirs(odir)
-            shutil.copy(in_path, out_path)
+            os.makedirs(odir, exist_ok=True)
+            shutil.copy(in_path, out_path, follow_symlinks=False)
 
     def _create_app_bundle(self):
         """Creates the OS X Application bundle in temporary directory"""
         packager = ApplicationBundlePackager(self.package)
         return packager.create_bundle(self.appdir)
-
-    def _strip_binaries(self):
-        if self.package.strip:
-            for f in self.package.strip_dirs:
-                s_dir = os.path.join(self.appdir, 'Contents', 'Home', f)
-                s = strip.Strip(self.config, self.package.strip_excludes)
-                s.strip_dir(s_dir)
 
     def _add_applications_link(self):
         # Create link to /Applications
@@ -501,14 +528,25 @@ class IOSPackage(ProductPackage, FrameworkHeadersMixin):
     The product package will only contain the ios-framework package
     """
 
-    home_folder = True
     user_resources = []
 
-    def pack(self, output_dir, devel=False, force=False, keep_temp=False):
+    def __init__(self, config, package, store, xcframework=False):
+        ProductPackage.__init__(self, config, package, store)
+        self.readable_platform = self.config._get_toolchain_target_platform_arch(readable=True)[0]
+        self.platform_arch = self.config._get_toolchain_target_platform_arch()[0]
+        self.xcframework = xcframework
+        self.home_folder = True
+
+    def pack(self, output_dir, devel=False, force=False, keep_temp=False, install_dir=None):
         PackagerBase.pack(self, output_dir, devel, force, keep_temp)
+        self.install_dir = self.package.get_install_dir()
 
         framework_name = self.package.osx_framework_library[0]
         self._prepare_pack()
+        # Calm Git if you're running this interactively
+        with open(os.path.join(self.tmp, '.gitignore'), 'w', encoding='utf-8') as f:
+            f.write('*\n')
+
         self.fw_path = os.path.join(self.tmp, '%s.framework' % framework_name)
         os.mkdir(self.fw_path)
 
@@ -521,37 +559,54 @@ class IOSPackage(ProductPackage, FrameworkHeadersMixin):
         self._copy_templates(files)
         self._copy_headers(files, version_dir)
         self._create_framework_headers(self.config.prefix, self.include_dirs, version_dir)
+
+        # This step zaps the POSIX compliant folders
         if os.path.exists(os.path.join(version_dir, 'include')):
             shutil.rmtree(os.path.join(version_dir, 'include'))
         if os.path.exists(os.path.join(version_dir, 'lib')):
             shutil.rmtree(os.path.join(version_dir, 'lib'))
         self._create_merged_lib(libname, files)
         self.package.packages = []
-        self.fw_path = self.tmp
-        self._create_framework_bundle_package(packager)
-        self.fw_path = os.path.join(self.tmp, '%s.framework' % framework_name)
-
-        if isinstance(self.package, SDKPackage):
-            pkg_path = self._create_product(PackageType.DEVEL)
-            if self.package.user_resources:
-                pkg_path = self._create_dmg(pkg_path, pkg_path.replace('.pkg', '.dmg'))
+        if not self.xcframework:
+            self.fw_path = self.tmp
+            self._create_framework_bundle_package(packager)
+            self.fw_path = os.path.join(self.tmp, f'{framework_name}.framework')
+            if isinstance(self.package, SDKPackage):
+                pkg_path = self._create_product(PackageType.DEVEL)
+                if self.package.user_resources:
+                    pkg_path = self._create_dmg(pkg_path, pkg_path.replace('.pkg', '.dmg'))
+            else:
+                pkg_path = self._create_dmg(self.fw_path, os.path.join(output_dir, self._package_name('.dmg')))
         else:
-            pkg_path = self._create_dmg(self.fw_path, os.path.join(output_dir, self._package_name('.dmg')))
+            os.mkdir(os.path.join(version_dir, 'lib'))
+            m.action('Setting up symlink for xcframework entrypoint')
+            # Library name must match Framework name
+            src = Path(libname).parent / 'Libraries' / 'libGStreamer.a'
+            src.symlink_to(os.path.join('..', 'GStreamer'))
+            self.fw_path = f'{framework_name}.framework'
+            tar_path = os.path.join(self.output_dir, self._package_name('.xcframework.tar.xz'))
+            m.action('Creating tarball for xcframework ingestion')
+            Tar(tar_path).configure(self.config, self.tmp).pack([self.fw_path], force=True)
 
-        if not keep_temp:
+        if keep_temp:
+            m.action(f'Temporary build directory is at {self.tmp}')
+        else:
             shutil.rmtree(self.tmp)
-        return [pkg_path]
+
+        if self.xcframework:
+            return [tar_path]
+        else:
+            return [pkg_path]
 
     def _copy_files(self, files, root):
         for f in files:
             out_path = f.replace(self.config.prefix, root)
             out_dir = os.path.split(out_path)[0]
-            if not os.path.exists(out_dir):
-                os.makedirs(out_dir)
+            os.makedirs(out_dir, exist_ok=True)
             if os.path.isdir(f):
                 shell.copy_dir(f, out_path)
             else:
-                shutil.copy(f, out_path)
+                shutil.copy(f, out_path, follow_symlinks=False)
 
     def _copy_templates(self, files):
         templates_prefix = 'share/xcode/templates/ios'
@@ -560,8 +615,7 @@ class IOSPackage(ProductPackage, FrameworkHeadersMixin):
             out_path = f.replace(self.config.prefix, os.path.join(self.tmp, 'Templates'))
             out_path = out_path.replace(templates_prefix, '')
             out_dir = os.path.split(out_path)[0]
-            if not os.path.exists(out_dir):
-                os.makedirs(out_dir)
+            os.makedirs(out_dir, exist_ok=True)
             shutil.copy(f, out_path)
 
     def _copy_headers(self, files, version_dir):
@@ -579,9 +633,9 @@ class IOSPackage(ProductPackage, FrameworkHeadersMixin):
         m.action(_('Creating framework package'))
         packager = FrameworkBundlePackager(
             self.package,
-            'ios-framework',
+            '%s-framework' % (self.platform_arch),
             'GStreamer',
-            'GStreamer iOS Framework Bundle Version %s' % (self.package.version),
+            'GStreamer %s Framework Bundle Version %s' % (self.readable_platform, self.package.version),
             '3ffe67c2-3421-411f-8287-e8faa892f853',
         )
         return packager
@@ -608,7 +662,7 @@ class IOSPackage(ProductPackage, FrameworkHeadersMixin):
         return '%s-%s-%s-%s%s' % (
             self.package.name,
             self.package.version,
-            self.config.target_platform,
+            self.platform_arch,
             self.config.target_arch,
             suffix,
         )
@@ -630,8 +684,10 @@ class IOSPackage(ProductPackage, FrameworkHeadersMixin):
 
 
 class Packager(object):
+    ARTIFACT_TYPE = 'pkg'
+
     def __new__(klass, config, package, store):
-        if config.target_platform == Platform.IOS:
+        if Platform.is_apple_app_platform(config.target_platform):
             if not isinstance(package, MetaPackage):
                 raise FatalError('iOS platform only support packages', 'for MetaPackage')
             return IOSPackage(config, package, store)
@@ -643,9 +699,22 @@ class Packager(object):
             return ApplicationPackage(config, package, store)
 
 
+class XCPackager(object):
+    ARTIFACT_TYPE = 'xcframework'
+
+    def __new__(klass, config, package, store):
+        if not Platform.is_apple_app_platform(config.target_platform):
+            raise FatalError('xcframework is only supported for Apple mobile platforms')
+        if not isinstance(package, MetaPackage):
+            raise FatalError('iOS platform only support packages for MetaPackage')
+        return IOSPackage(config, package, store, xcframework=True)
+
+
 def register():
     from cerbero.packages.packager import register_packager
     from cerbero.config import Distro
 
     register_packager(Distro.OS_X, Packager)
     register_packager(Distro.IOS, Packager)
+    register_packager(Distro.IOS, XCPackager)
+    register_packager(Distro.TVOS, XCPackager)

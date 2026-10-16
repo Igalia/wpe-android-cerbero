@@ -3,26 +3,27 @@ from cerbero.tools.libtool import LibtoolLibrary
 
 class Recipe(recipe.Recipe):
     name = 'orc'
-    version = '0.4.38'
+    version = '0.4.42'
 
     stype = SourceType.TARBALL
     # These properties are only used when stype is TARBALL
     url = 'https://gstreamer.freedesktop.org/src/orc/orc-%(version)s.tar.xz'
-    tarball_checksum = 'a55a98d4772567aa3faed8fb84d540c3db77eaba16d3e2e10b044fbc9228668d'
+    tarball_checksum = '7ec912ab59af3cc97874c456a56a8ae1eec520c385ec447e8a102b2bd122c90c'
     # These properties are only used when stype is GIT
     remotes = {'origin': 'https://gitlab.freedesktop.org/gstreamer/orc.git'}
     commit = 'origin/main'
 
-    patches = [
-        # Remove after the iOS Orc situation is resolved
-        # https://gitlab.freedesktop.org/gstreamer/orc/-/merge_requests/175
-        'orc/0001-orccpu-arm-Only-enable-on-Apple-arm64-if-running-on-.patch',
-    ]
+    patches = []
 
     btype = BuildType.MESON
-    licenses = [{License.BSD_like: ['COPYING']}]
-    meson_options = {'benchmarks': 'disabled', 'tests': 'disabled',
-                     'tools': 'enabled', 'orc-test': 'enabled'}
+    licenses = [{License.BSD_3_Clause: ['COPYING']}]
+    meson_options = {
+        'benchmarks': 'disabled',
+        'tests': 'disabled',
+        'tools': 'enabled',
+        'orc-test': 'enabled',
+        'hotdoc': 'disabled',
+    }
 
     files_libs = ['liborc-0.4']
     files_devel = ['include/orc-0.4', '%(libdir)s/pkgconfig/orc-0.4.pc',
@@ -30,7 +31,7 @@ class Recipe(recipe.Recipe):
 
     def prepare(self):
         # Don't build testing helper library on ios
-        if self.config.target_platform != Platform.IOS:
+        if not Platform.is_apple_app_platform(self.config.target_platform):
             self.files_libs.append('liborc-test-0.4')
             self.files_devel.append('bin/orc-bugreport%(bext)s')
         else:
@@ -44,7 +45,7 @@ class Recipe(recipe.Recipe):
         lib = LibtoolLibrary('orc-0.4', None, None, None, self.config.libdir,
                 self.config.target_platform, deps=dependency_libs)
         lib.save()
-        if self.config.target_platform != Platform.IOS:
+        if not Platform.is_apple_app_platform(self.config.target_platform):
             lib = LibtoolLibrary('orc-test-0.4', None, None, None, self.config.libdir,
                     self.config.target_platform, deps=dependency_libs + ['orc-0.4']).save()
         super().post_install()

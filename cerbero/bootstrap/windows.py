@@ -30,15 +30,15 @@ from cerbero.utils import shell, git
 from cerbero.utils import messages as m
 
 # Toolchain
-TOOLCHAIN_BASE_URL = 'https://gstreamer.freedesktop.org/data/cerbero/toolchain/windows/'
+TOOLCHAIN_BASE_URL = 'https://gstreamer.freedesktop.org/data/cerbero/toolchain/mingw/14.2.0/'
 TOOLCHAIN_PLATFORM = {
     Platform.LINUX: (
-        'mingw-6.0.0-gcc-8.2.0-linux-multilib.tar.xz',
-        '396ceb50161720b19971e2c71c87ce08150213b091ed8ffc00782df8759921bf',
+        'mingw-12.0.0-gcc-14.2.0-linux-multilib.tar.xz',
+        'ef3bcdd10716578b9300591da68beb73753002252a46e41f316bb94a577e3c04',
     ),
     Platform.WINDOWS: (
-        'mingw-6.0.0-gcc-8.2.0-windows-multilib.tar.xz',
-        '77fc1319b13894d7340d4994150e3af615e23a63113a9947412d11be95f4d8a9',
+        'mingw-12.0.0-gcc-14.2.0-windows-multilib.tar.xz',
+        '2e9039c6404f68bfce1eecd34172b16715565a15555c76c1652ec26265d5ae89',
     ),
 }
 
@@ -47,10 +47,15 @@ PERL_VERSION = '5.24.0'
 MINGW_PERL_TPL = 'https://sourceforge.net/projects/perl-mingw/files/{0}/perl-{0}-mingw32.zip'
 MINGW_PERL_CHECKSUM = '9d4db40959727d43b4ff4b9884f5aebda20292347978036683684c2608c1397b'
 
-# Khronos wglext.h for Windows GL
-OPENGL_COMMIT = 'a4b0c7d5d10a8fca5866c6d08a608010843a4b36'
-KHRONOS_WGL_TPL = 'https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/{}/api/GL/wglext.h'
-WGL_CHECKSUM = '8961c809d180e3590fca32053341fe3a83394edcb936f7699f0045feadb16115'
+# Khronos headers for Windows GL
+OPENGL_REGISTRY_COMMIT = 'a4b0c7d5d10a8fca5866c6d08a608010843a4b36'
+OPENGL_REGISTRY_TPL = 'https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/{}/api/GL/{}'
+WGLEXT_CHECKSUM = '8961c809d180e3590fca32053341fe3a83394edcb936f7699f0045feadb16115'
+GLEXT_CHECKSUM = 'b4e05eae36b005e17690a4f9a09da2de714c4030193400d65a5b286711fa535e'
+
+EGL_REGISTRY_COMMIT = '3ae2b7c48690d2ce13cc6db3db02dfc0572be65e'
+EGL_REGISTRY_TPL = 'https://raw.githubusercontent.com/KhronosGroup/EGL-Registry/{}/api/KHR/{}'
+KHR_CHECKSUM = '7b1e01aaa7ad8f6fc34b5c7bdf79ebf5189bb09e2c4d2e79fc5d350623d11e83'
 
 # Extra binary dependencies
 XZ_URL = 'https://tukaani.org/xz/xz-5.2.5-windows.zip'
@@ -175,6 +180,7 @@ class MinGWBootstrapper(BootstrapperBase):
         super().__init__(config, offline, 'mingw')
         self.prefix = self.config.toolchain_prefix
         self.arch = self.config.target_arch
+        self.wgl_prefix = self.config.msvc_gl_prefix
         # Register all network resources this bootstrapper needs. They will all
         # be downloaded into self.config.local_sources
         #
@@ -186,12 +192,27 @@ class MinGWBootstrapper(BootstrapperBase):
         # and need to download the mingw package again.
         shutil.rmtree(self.prefix)
         self.extract_steps.append((url, True, self.prefix))
+
         # wglext.h
-        url = KHRONOS_WGL_TPL.format(OPENGL_COMMIT)
-        self.fetch_urls.append((url, None, WGL_CHECKSUM))
+        url = OPENGL_REGISTRY_TPL.format(OPENGL_REGISTRY_COMMIT, 'wglext.h')
+        self.fetch_urls.append((url, None, WGLEXT_CHECKSUM))
         sysroot = os.path.join(self.prefix, 'x86_64-w64-mingw32/sysroot/usr/x86_64-w64-mingw32')
-        gl_inst_path = os.path.join(sysroot, 'include/GL/')
-        self.extract_steps.append((url, False, gl_inst_path))
+        self.extract_steps.append((url, False, os.path.join(sysroot, 'include/GL/')))
+        if config.variants.visualstudio:
+            inst_path = os.path.join(self.wgl_prefix, 'include/GL/')
+            os.makedirs(inst_path, exist_ok=True)
+            self.extract_steps.append((url, False, inst_path))
+
+            url = OPENGL_REGISTRY_TPL.format(OPENGL_REGISTRY_COMMIT, 'glext.h')
+            self.fetch_urls.append((url, None, GLEXT_CHECKSUM))
+            self.extract_steps.append((url, False, inst_path))
+
+            url = EGL_REGISTRY_TPL.format(EGL_REGISTRY_COMMIT, 'khrplatform.h')
+            self.fetch_urls.append((url, None, KHR_CHECKSUM))
+            inst_path = os.path.join(self.wgl_prefix, 'include/KHR/')
+            os.makedirs(inst_path, exist_ok=True)
+            self.extract_steps.append((url, False, inst_path))
+
         # Fix extraction in MSYS2 with tar if the symlink exists
         mingw_sysroot = os.path.join(self.prefix, 'x86_64-w64-mingw32', 'sysroot', 'mingw')
         if os.path.exists(mingw_sysroot):
@@ -209,11 +230,8 @@ class MinGWBootstrapper(BootstrapperBase):
             self.fix_mingw()
 
     def check_dirs(self):
-        if not os.path.exists(self.prefix):
-            os.makedirs(self.prefix)
-        etc_path = os.path.join(self.config.prefix, 'etc')
-        if not os.path.exists(etc_path):
-            os.makedirs(etc_path)
+        os.makedirs(self.prefix, exist_ok=True)
+        os.makedirs(os.path.join(self.config.prefix, 'etc'), exist_ok=True)
 
     def fix_mingw(self):
         # On Windows, if the user is not allowed to create symbolic links or if

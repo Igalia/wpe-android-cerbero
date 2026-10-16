@@ -10,32 +10,35 @@ class Package(custom.GStreamer, package.Package):
     uuid = 'd9626750-e8b7-4e40-944d-98b67ed0c6bf'
     deps = ['base-system-1.0']
 
-    files = ['gstreamer-1.0', 'gst-plugins-base-1.0:bins:libs:core:lang:typelibs',
-            'gst-shell',
-            'gst-plugins-good-1.0:plugins_core:lang',
-            'gst-plugins-bad-1.0:plugins_core:lang:libs:typelibs',
+    files = ['gstreamer-1.0', 'gst-plugins-base-1.0:bins:libs:core:lang',
+            'gst-shell', 'gst-plugins-good-1.0:plugins_core:lang',
+            'gst-plugins-bad-1.0:plugins_core:lang:libs',
+            'gst-rtsp-server-1.0:libs',
             'gst-plugins-ugly-1.0:plugins_core:lang']
     files_devel = ['gstreamer-1.0', 'gst-plugins-base-1.0:plugins_core_devel',
-            'gst-plugins-good-1.0:plugins_core_devel', 'gst-plugins-bad-1.0:plugins_core_devel']
+            'gst-plugins-good-1.0:plugins_core_devel',
+            'gst-plugins-bad-1.0:plugins_core_devel', 'dump-versions']
     platform_files = {
-        Platform.DARWIN: ['gstreamer-1.0-osx-framework', 'pkg-config'],
-        Platform.WINDOWS: [],
+        Platform.DARWIN: ['gstreamer-1.0-osx-framework'],
         Platform.IOS: ['gstreamer-ios-templates'],
+        Platform.TVOS: ['gstreamer-ios-templates'],
         Platform.ANDROID: ['gst-android-1.0'],
         Platform.LINUX: ['bash-completion'],
     }
+    platform_files_devel = {
+        Platform.DARWIN: ['pkg-config:bins:devel'],
+        Platform.WINDOWS: ['pkg-config:bins:devel'],
+        Platform.ANDROID: ['pkg-config-dist:files_devel'],
+    }
 
     def prepare(self):
-        # UWP cannot build pkg-config because it uses Autotools, and even if we
-        # port it to Meson, the UWP toolchain still can't build a usable pkg-config.
-        # On the other hand, UWP also doesn't need pkg-config because people
-        # will likely only use it from inside Visual Studio.
-        if not self.config.variants.uwp:
-            self.platform_files[Platform.WINDOWS].append('pkg-config')
-
         if self.config.variants.unwind:
             self.files.append('libunwind:libs')
 
-        if self.config.variants.rust:
+        if self.config.variants.rust and \
+           (self.config.target_platform != Platform.WINDOWS or \
+            self.config.target_arch != Architecture.ARM64):
+            self.files.append('gst-plugins-rs:libs')
             self.files.append('gst-plugins-rs:plugins_core')
+            self.files_devel.append('gst-plugins-rs:files_devel')
             self.files_devel.append('gst-plugins-rs:plugins_core_devel')

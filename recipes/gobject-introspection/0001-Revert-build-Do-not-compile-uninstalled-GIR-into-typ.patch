@@ -1,0 +1,38 @@
+From d85b81e65efacf2849e5e50d81f38a76a39c0fce Mon Sep 17 00:00:00 2001
+From: "L. E. Segovia" <amy@centricular.com>
+Date: Sat, 21 Jun 2025 14:01:44 -0300
+Subject: [PATCH 1/7] Revert "build: Do not compile uninstalled GIR into
+ typelib"
+
+The revert must only include the tests which will be useless with the
+next commit.
+
+This reverts commit 6a5fe47496336578806c9d74adba02e9f86fbba8.
+---
+ gir/meson.build | 12 ------------
+ 1 file changed, 12 deletions(-)
+
+diff --git a/gir/meson.build b/gir/meson.build
+index e5a7a131..73273715 100644
+--- a/gir/meson.build
++++ b/gir/meson.build
+@@ -569,16 +569,4 @@ if rnc2rng.found()
+       workdir: meson.current_build_dir(),
+     )
+   endforeach
+-
+-  foreach gir: uninstalled_gir_files
+-    gir_name = gir.full_path().split('/')[-1]
+-    test('validate-@0@'.format(gir_name).underscorify(),
+-      python,
+-      args: [
+-        validate_gir.full_path(),
+-        '--schema=@0@'.format(meson.current_source_dir() / '../docs/gir-1.2.rnc'),
+-        gir,
+-      ],
+-    )
+-  endforeach
+ endif
+-- 
+2.47.0.windows.2
+

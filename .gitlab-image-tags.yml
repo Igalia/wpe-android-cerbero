@@ -1,0 +1,20 @@
+variables:
+  ###
+  # IMPORTANT
+  # These are the version tags for the docker images the CI runs against.
+  # If you are hacking on them or need a them to rebuild, its enough
+  # to change any part of the string of the image you want.
+  ###
+  FEDORA_TAG:  '2026-02-21.0'
+
+  CHECKS_FEDORA_TAG: '2026-01-30.0'
+
+  ANDROID_FEDORA_TAG: '2026-02-10.0'
+
+  UBUNTU_TAG: '2026-02-21.0'
+
+  MANYLINUX_TAG: '2026-03-18.0'
+
+  TESTS_UBUNTU_TAG: '2026-01-30.0'
+
+  WINDOWS_IMAGE: 'registry.freedesktop.org/gstreamer/gstreamer/amd64/windows:2026-01-31.0-1.28'

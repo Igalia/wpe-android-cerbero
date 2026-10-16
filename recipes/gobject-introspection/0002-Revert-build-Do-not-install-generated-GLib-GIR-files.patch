@@ -1,0 +1,62 @@
+From 9a40394a35ac291696c3463daf263615ef926ddf Mon Sep 17 00:00:00 2001
+From: "L. E. Segovia" <amy@centricular.com>
+Date: Sat, 21 Jun 2025 14:01:54 -0300
+Subject: [PATCH 2/7] Revert "build: Do not install generated GLib GIR files"
+
+This reverts commit afbe7697e019e95a4267088891adbbb4ddeccc3d.
+---
+ gir/meson.build | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/gir/meson.build b/gir/meson.build
+index 73273715..a23c0a91 100644
+--- a/gir/meson.build
++++ b/gir/meson.build
+@@ -246,6 +246,8 @@ glib_gir = custom_target('gir-glib',
+   output: 'GLib-2.0.gir',
+   depends: [gir_giscanner_pymod, glib_gir_dep, gdump],
+   depend_files: gir_giscanner_built_files,
++  install: true,
++  install_dir: girdir,
+   env: g_ir_scanner_env,
+   command: glib_command + [
+     '--cflags-begin'] + glib_includes + extra_giscanner_cflags + [
+@@ -313,6 +315,8 @@ gobject_gir = custom_target('gir-gobject',
+   output: 'GObject-2.0.gir',
+   depends: [glib_gir, gir_giscanner_pymod, gobject_gir_dep, gdump],
+   depend_files: gir_giscanner_built_files,
++  install: true,
++  install_dir: girdir,
+   env: g_ir_scanner_env,
+   command: gobject_command + [
+     '--include-uninstalled=' + glib_gir.full_path(),
+@@ -365,6 +369,8 @@ uninstalled_gir_files += custom_target('gir-gmodule',
+   output: 'GModule-2.0.gir',
+   depends: [glib_gir, gir_giscanner_pymod, gmodule_gir_dep, gdump],
+   depend_files: gir_giscanner_built_files,
++  install: true,
++  install_dir: girdir,
+   env: g_ir_scanner_env,
+   command: gmodule_command + [
+     '--include-uninstalled=' + glib_gir.full_path(),
+@@ -460,6 +466,8 @@ gio_gir = custom_target('gir-gio',
+   output: 'Gio-2.0.gir',
+   depends: [gobject_gir, gir_giscanner_pymod, gio_gir_dep, gdump],
+   depend_files: gir_giscanner_built_files,
++  install: true,
++  install_dir: girdir,
+   env: g_ir_scanner_env,
+   command: gio_command + [
+     '--include-uninstalled=' + gobject_gir.full_path(),
+@@ -541,6 +549,8 @@ foreach gir: uninstalled_gir_files
+     output: '@BASENAME@.typelib',
+     depends: [gobject_gir, gircompiler, ],
+     command: gircompiler_command,
++    install: true,
++    install_dir: typelibdir,
+   )
+ endforeach
+ 
+-- 
+2.47.0.windows.2
+

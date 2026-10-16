@@ -9,22 +9,32 @@ class Recipe(recipe.Recipe):
     btype = BuildType.MESON
     url = 'https://github.com/%(name)s/%(name)s/releases/download/%(version)s/%(name)s-%(version)s.tar.xz'
     tarball_checksum = '480b6d25014169300669aa1fc39fb356c142d5028324ea52b3a27648b9beaad8'
-    licenses = [{License.BSD_like: ['COPYING']}]
+    licenses = [{License.MIT: ['COPYING']}]
+    # WPE WebKit requires harfbuzz-icu
     deps = ['fontconfig', 'cairo', 'glib', 'icu']
     meson_options = {'icu': 'enabled',
                      'glib': 'enabled',
                      'cairo': 'enabled',  # needed for hb-view
                      'gobject': 'enabled',
                      'icu_builtin': 'false',
+                     'docs': 'disabled',
                      'tests': 'disabled'}
 
     files_bins = ['hb-ot-shape-closure', 'hb-view', 'hb-shape']
-    files_libs = ['libharfbuzz', 'libharfbuzz-icu', 'libharfbuzz-gobject']
+    files_libs = [
+        'libharfbuzz',
+        'libharfbuzz-icu',
+        'libharfbuzz-gobject',
+        'libharfbuzz-cairo',
+        'libharfbuzz-subset',
+    ]
     files_devel = [
         'include/harfbuzz/*.h',
         '%(libdir)s/pkgconfig/harfbuzz.pc',
-        '%(libdir)s/pkgconfig/harfbuzz-icu.pc',
         '%(libdir)s/pkgconfig/harfbuzz-gobject.pc',
+        '%(libdir)s/pkgconfig/harfbuzz-icu.pc',
+        '%(libdir)s/pkgconfig/harfbuzz-cairo.pc',
+        '%(libdir)s/pkgconfig/harfbuzz-subset.pc',
     ]
     files_typelibs = ['HarfBuzz-0.0']
 
@@ -40,4 +50,10 @@ class Recipe(recipe.Recipe):
         LibtoolLibrary('harfbuzz-gobject', None, None, None,
                 self.config.libdir, self.config.target_platform,
                 deps=['gobject-2.0', 'harfbuzz']).save()
+        LibtoolLibrary('harfbuzz-cairo', None, None, None,
+                self.config.libdir, self.config.target_platform,
+                deps=['cairo', 'harfbuzz']).save()
+        LibtoolLibrary('harfbuzz-subset', None, None, None,
+                self.config.libdir, self.config.target_platform,
+                deps=['harfbuzz']).save()
         super().post_install()

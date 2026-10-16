@@ -16,11 +16,13 @@
 # Free Software Foundation, Inc., 59 Temple Place - Suite 330,
 # Boston, MA 02111-1307, USA.
 
+import sys
+
 from cerbero.bootstrap import BootstrapperBase
 from cerbero.bootstrap.bootstrapper import register_system_bootstrapper
 from cerbero.enums import Platform, Architecture, Distro, DistroVersion
-from cerbero.errors import ConfigurationError, CommandError
-from cerbero.utils import user_is_root, shell
+from cerbero.errors import ConfigurationError, CommandError, FatalError
+from cerbero.utils import user_is_root, shell, split_version
 from cerbero.utils import messages as m
 
 
@@ -43,9 +45,20 @@ class UnixBootstrapper(BootstrapperBase):
 
         if self.config.distro_packages_install:
             extra_packages = self.config.extra_bootstrap_packages.get(self.config.platform, None)
+            override_packages = self.config.override_bootstrap_packages.get(self.config.platform, None)
+            if extra_packages and override_packages:
+                raise ConfigurationError(
+                    'You are setting "extra_bootstrap_packages" and "override_bootstrap_packages" '
+                    'on the same CBC. This might cause conflicts.'
+                )
             if extra_packages:
                 self.packages += extra_packages.get(self.config.distro, [])
                 self.packages += extra_packages.get(self.config.distro_version, [])
+            if override_packages:
+                self.packages = []
+                self.packages += override_packages.get(self.config.distro, [])
+                self.packages += override_packages.get(self.config.distro_version, [])
+
             tool = self.tool
             if self.assume_yes:
                 tool += self.yes_arg
@@ -60,48 +73,52 @@ class DebianBootstrapper(UnixBootstrapper):
     command = ['install']
     yes_arg = ['-y']
     packages = [
-        'autotools-dev',
-        'automake',
         'autoconf',
-        'libtool',
-        'g++',
+        'automake',
         'autopoint',
-        'make',
-        'cmake',
-        'ninja-build',
+        'autotools-dev',
+        'binutils',
         'bison',
+        'build-essential',
+        'ccache',
+        'cmake',
+        'curl',
         'flex',
-        'nasm',
-        'pkg-config',
-        'libxv-dev',
+        'g++',
+        'gettext',
+        'git',
+        'gperf',
+        'libasound2-dev',
+        'libclang-dev',
+        'libcurl4-openssl-dev',
+        'libdrm-dev',
+        'libegl1-mesa-dev',
+        'libgl1-mesa-dev',
+        'libglu1-mesa-dev',
+        'libpulse-dev',
+        'libssl-dev',
+        'libtool',
+        'libva-dev',
         'libx11-dev',
         'libx11-xcb-dev',
-        'libpulse-dev',
-        'python3-dev',
-        'gettext',
-        'build-essential',
-        'pkg-config',
-        'libxext-dev',
-        'libxi-dev',
-        'x11proto-record-dev',
-        'libxrender-dev',
-        'libgl1-mesa-dev',
-        'libxfixes-dev',
-        'libxdamage-dev',
         'libxcomposite-dev',
-        'libasound2-dev',
-        'build-essential',
-        'gperf',
-        'wget',
-        'libxtst-dev',
+        'libxdamage-dev',
+        'libxext-dev',
+        'libxfixes-dev',
+        'libxi-dev',
         'libxrandr-dev',
-        'libglu1-mesa-dev',
-        'libegl1-mesa-dev',
-        'git',
-        'xutils-dev',
-        'ccache',
+        'libxrender-dev',
+        'libxtst-dev',
+        'libxv-dev',
+        'make',
+        'nasm',
+        'ninja-build',
+        'pkg-config',
+        'pkg-config',
+        'python3-dev',
         'python3-setuptools',
-        'libssl-dev',
+        'x11proto-record-dev',
+        'xutils-dev',
     ]
 
     def __init__(self, config, offline, assume_yes):
@@ -111,7 +128,7 @@ class DebianBootstrapper(UnixBootstrapper):
                 self.packages.append('libc6:i386')
                 self.checks.append(self.create_debian_arch_check('i386'))
             if self.config.arch in [Architecture.X86_64, Architecture.X86]:
-                self.packages.append('wine')
+                self.packages += ['wine', 'xvfb']
 
     def create_debian_arch_check(self, arch):
         def check_arch():
@@ -138,64 +155,109 @@ class RedHatBootstrapper(UnixBootstrapper):
     command = ['install']
     yes_arg = ['-y']
     packages = [
+        'alsa-lib-devel',
+        'autoconf',
+        'automake',
+        'bison',
+        'clang-devel',
+        'cmake',
+        'curl',
+        'expat-devel',
+        'flex',
         'gcc',
         'gcc-c++',
-        'automake',
-        'autoconf',
-        'libtool',
         'gettext-devel',
-        'make',
-        'cmake',
-        'ninja-build',
-        'bison',
-        'flex',
-        'nasm',
-        'pkgconfig',
-        'curl',
-        'rpm-build',
-        'redhat-rpm-config',
-        'python3-devel',
-        'libXrender-devel',
-        'pulseaudio-libs-devel',
-        'libXv-devel',
-        'mesa-libGL-devel',
-        'libXcomposite-devel',
-        'perl-ExtUtils-MakeMaker',
-        'libXi-devel',
-        'perl-XML-Simple',
-        'gperf',
-        'wget',
-        'libXrandr-devel',
-        'libXtst-devel',
         'git',
-        'xorg-x11-util-macros',
+        'gperf',
+        'libXcomposite-devel',
+        'libXi-devel',
+        'libXrandr-devel',
+        'libXrender-devel',
+        'libXtst-devel',
+        'libXv-devel',
+        'libatomic',
+        'libcurl-devel',
+        'libdrm-devel',
+        'libtool',
+        'libva-devel',
+        'make',
         'mesa-libEGL-devel',
-        'ccache',
+        'mesa-libGL-devel',
+        'nasm',
+        'ninja-build',
         'openssl-devel',
-        'alsa-lib-devel',
-        'perl-FindBin',
+        'perl-ExtUtils-MakeMaker',
+        'perl-IPC-Cmd',
+        'perl-XML-Simple',
+        'pkgconfig',
+        'pulseaudio-libs-devel',
+        'redhat-rpm-config',
+        'rpm-build',
+        'xorg-x11-util-macros',
     ]
 
     def __init__(self, config, offline, assume_yes):
         UnixBootstrapper.__init__(self, config, offline, assume_yes)
 
-        if self.config.distro_version < DistroVersion.FEDORA_23:
+        dn, dv = self.config.distro_version.split('_', 1)
+        dv = split_version(dv)
+
+        if (dn == 'fedora' and dv < (23,)) or (dn == 'redhat' and dv < (8, 3)):
             self.tool = ['yum']
-        elif self.config.distro_version in [DistroVersion.REDHAT_6, DistroVersion.REDHAT_7]:
-            self.tool = ['yum']
-        elif self.config.distro_version == DistroVersion.REDHAT_8:
-            self.tool = ['yum', '--enablerepo=PowerTools']
+
+        if dn == 'redhat' and dv >= (8,):
+            if dv < (8, 3):
+                self.tool += ['--enablerepo=PowerTools']
+            elif dv < (9,):
+                self.tool += ['--enablerepo=powertools']
+            else:
+                self.tool += ['--enablerepo=crb']
+
+        def pkg_available(pkg):
+            return shell.new_call(self.tool + ['list', pkg, '-q'], fail=False) == 0
+
+        def add_pkg(names, required=True):
+            for pkg in names:
+                if pkg_available(pkg):
+                    self.packages.append(pkg)
+                    return True
+            if required:
+                raise FatalError('Required package not found, tried: ' + ', '.join(names))
+            return False
+
+        if not user_is_root():
+            self.tool = ['sudo'] + self.tool
+
+        # In RHEL based distros ccache is only available in the EPEL repo
+        if not add_pkg(['ccache'], required=False):
+            if pkg_available('epel-release'):
+                cmd = self.tool + ['install', 'epel-release'] + (['-y'] if assume_yes else [])
+                self.checks.append(
+                    lambda: shell.new_call(cmd, interactive=True, fail=False) == 0 and self.packages.append('ccache')
+                )
+            else:
+                m.warning('Compilation will not use ccache since it is not available')
+                self.config.use_ccache = False
+
+        # Before RHEL 9 perl-FindBin wasn't a standalone package
+        if dn != 'redhat' or dv >= (9,):
+            add_pkg(['perl-FindBin'])
+        elif dv >= (8,):
+            add_pkg(['perl-interpreter'])
+        else:
+            add_pkg(['perl'])
+
+        # Try to get a better matching python3 library version
+        ver = sys.version_info[1]
+        add_pkg([f'python3{v}-devel' for v in [ver, f'.{ver}', '']])
 
         if self.config.target_platform == Platform.WINDOWS:
             if self.config.arch == Architecture.X86_64:
                 self.packages.append('glibc.i686')
-            if self.config.distro_version in [DistroVersion.FEDORA_24, DistroVersion.FEDORA_25]:
+            if self.config.distro_version in ['fedora_24', 'fedora_25']:
                 self.packages.append('libncurses-compat-libs.i686')
             if self.config.arch in [Architecture.X86_64, Architecture.X86]:
-                self.packages.append('wine')
-        if user_is_root():
-            return
-        self.tool = ['sudo'] + self.tool
+                self.packages += ['wine', 'which', 'xorg-x11-server-Xvfb']
 
 
 class OpenSuseBootstrapper(UnixBootstrapper):
@@ -203,42 +265,48 @@ class OpenSuseBootstrapper(UnixBootstrapper):
     command = ['install']
     yes_arg = ['-y']
     packages = [
-        'gcc',
-        'automake',
+        'Mesa-devel',
+        'Mesa-libGL-devel',
+        'Mesa-libGLESv3-devel',
+        'alsa-devel',
         'autoconf',
-        'gcc-c++',
-        'libtool',
-        'gettext-tools',
-        'make',
-        'cmake',
-        'ninja-build',
+        'automake',
         'bison',
+        'ccache',
+        'clang',
+        'cmake',
+        'curl',
         'flex',
+        'gcc',
+        'gcc-c++',
+        'gettext-tools',
+        'git',
+        'gperf',
+        'libX11-devel',
+        'libXcomposite-devel',
+        'libXi-devel',
+        'libcurl4-openssl-dev',
+        'libdrm-devel',
+        'libexpat-devel',
+        'libpulse-devel',
+        'libtool',
+        'libva-dev',
+        'make',
         'nasm',
+        'ninja-build',
+        'openssl-devel',
         'patterns-openSUSE-devel_rpm_build',
+        'pkg-config',
         'python3-devel',
         'xorg-x11-libXrender-devel',
-        'libpulse-devel',
         'xorg-x11-libXv-devel',
-        'Mesa-libGL-devel',
-        'libXcomposite-devel',
-        'libX11-devel',
-        'alsa-devel',
-        'libXi-devel',
-        'Mesa-devel',
-        'Mesa-libGLESv3-devel',
-        'gperf',
-        'wget',
-        'git',
-        'ccache',
-        'openssl-devel',
     ]
 
     def __init__(self, config, offline, assume_yes):
         UnixBootstrapper.__init__(self, config, offline, assume_yes)
         if self.config.target_platform == Platform.WINDOWS:
             if self.config.arch in [Architecture.X86_64, Architecture.X86]:
-                self.packages.append('wine')
+                self.packages += ['wine', 'xvfb-run']
 
 
 class ArchBootstrapper(UnixBootstrapper):
@@ -246,27 +314,33 @@ class ArchBootstrapper(UnixBootstrapper):
     command = ['-S', '--needed']
     yes_arg = ['--noconfirm']
     packages = [
-        'cmake',
-        'ninja',
-        'libtool',
-        'bison',
-        'flex',
-        'automake',
+        'alsa-lib',
         'autoconf',
-        'make',
+        'automake',
+        'bison',
+        'ccache',
+        'clang',
+        'cmake',
+        'curl',
+        'flex',
         'gettext',
-        'nasm',
+        'git',
         'gperf',
+        'libdrm',
+        'libpulse',
+        'libtool',
+        'libva',
         'libxrender',
         'libxv',
+        'make',
         'mesa',
-        'python3',
-        'wget',
-        'git',
-        'xorg-util-macros',
-        'ccache',
+        'nasm',
+        'ninja',
         'openssl',
-        'alsa-lib',
+        'pkgconf',
+        'python3',
+        'which',
+        'xorg-util-macros',
     ]
 
     def __init__(self, config, offline, assume_yes):
@@ -284,7 +358,7 @@ class ArchBootstrapper(UnixBootstrapper):
             self.packages.append('gcc')
         if self.config.target_platform == Platform.WINDOWS:
             if self.config.arch in [Architecture.X86_64, Architecture.X86]:
-                self.packages.append('wine')
+                self.packages += ['wine', 'xorg-server-xvfb']
 
 
 class GentooBootstrapper(UnixBootstrapper):
@@ -292,24 +366,28 @@ class GentooBootstrapper(UnixBootstrapper):
     command = ['-u']
     yes_arg = []  # Does not seem interactive
     packages = [
-        'dev-util/cmake',
-        'dev-util/ninja',
-        'sys-devel/libtool',
-        'sys-devel/bison',
-        'sys-devel/flex',
-        'sys-devel/automake',
-        'sys-devel/autoconf',
-        'sys-devel/make',
-        'sys-devel/gettext',
-        'media-sound/pulseaudio',
         'dev-lang/nasm',
+        'dev-libs/openssl',
+        'dev-util/cmake',
         'dev-util/gperf',
+        'dev-util/ninja',
+        'dev-util/pkgconf',
+        'media-libs/alsa-lib',
+        'media-libs/mesa',
+        'media-libs/libva',
+        'media-sound/pulseaudio',
+        'net-misc/curl',
+        'sys-devel/autoconf',
+        'sys-devel/automake',
+        'sys-devel/bison',
+        'sys-devel/clang',
+        'sys-devel/flex',
+        'sys-devel/gettext',
+        'sys-devel/libtool',
+        'sys-devel/make',
         'x11-libs/libXrender',
         'x11-libs/libXv',
-        'media-libs/mesa',
-        'net-misc/wget',
-        'dev-libs/openssl',
-        'media-libs/alsa-lib',
+        'x11-libs/libdrm',
     ]
 
     def __init__(self, config, offline, assume_yes):
