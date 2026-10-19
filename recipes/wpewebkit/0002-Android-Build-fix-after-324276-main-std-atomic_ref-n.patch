@@ -1,0 +1,148 @@
+From b482826914e3e0d608260e751907a11aceee8bd0 Mon Sep 17 00:00:00 2001
+From: "Alejandro G. Castro" <alex@igalia.com>
+Date: Wed, 21 Oct 2026 20:47:45 +0200
+Subject: [PATCH] [Android] Build fix after 324276@main: std::atomic_ref needs
+ libc++ 19 https://bugs.webkit.org/show_bug.cgi?id=NEED_BUG_URL
+
+Reviewed by NOBODY (OOPS!).
+
+324276@main made the free standing functions of Atomics.h use
+std::atomic_ref. libc++ has it only since LLVM 19, so with the Android
+NDK's libc++ 18 every file that includes Atomics.h fails:
+
+    Atomics.h:162:17: error: no member named 'atomic_ref' in namespace 'std'
+
+Go through an atomicRef() helper, which returns a std::atomic_ref when
+the library has one and otherwise the std::atomic<T> view of the
+location that these functions used before 324276@main.
+
+* Source/WTF/wtf/Atomics.h:
+(WTF::atomicRef):
+(WTF::atomicLoad):
+(WTF::atomicLoadFullyFenced):
+(WTF::atomicStore):
+(WTF::atomicStoreFullyFenced):
+(WTF::atomicCompareExchangeWeak):
+(WTF::atomicCompareExchangeStrong):
+(WTF::atomicExchangeAdd):
+(WTF::atomicExchangeAnd):
+(WTF::atomicExchangeOr):
+(WTF::atomicExchangeSub):
+(WTF::atomicExchangeXor):
+(WTF::atomicExchange):
+---
+ Source/WTF/wtf/Atomics.h | 39 +++++++++++++++++++++++++++------------
+ 1 file changed, 27 insertions(+), 12 deletions(-)
+
+diff --git a/Source/WTF/wtf/Atomics.h b/Source/WTF/wtf/Atomics.h
+index dae7b3349d4..3f25e7bdf6d 100644
+--- a/Source/WTF/wtf/Atomics.h
++++ b/Source/WTF/wtf/Atomics.h
+@@ -156,35 +156,50 @@ struct Atomic {
+     std::atomic<T> value;
+ };
+ 
++#if defined(__cpp_lib_atomic_ref) && __cpp_lib_atomic_ref >= 201806L
++template<typename T>
++inline std::atomic_ref<T> atomicRef(T* location)
++{
++    return std::atomic_ref<T>(*location);
++}
++#else
++// libc++ has std::atomic_ref only since LLVM 19. std::atomic<T> has the same members.
++template<typename T>
++inline std::atomic<T>& atomicRef(T* location)
++{
++    return *std::bit_cast<std::atomic<T>*>(location);
++}
++#endif
++
+ template<typename T>
+ inline T atomicLoad(T* location, std::memory_order order = std::memory_order_seq_cst)
+ {
+-    return std::atomic_ref<T>(*location).load(order);
++    return atomicRef(location).load(order);
+ }
+ 
+ template<typename T>
+ inline T atomicLoadFullyFenced(T* location)
+ {
+-    return std::atomic_ref<T>(*location).fetch_add(T());
++    return atomicRef(location).fetch_add(T());
+ }
+ 
+ template<typename T>
+ inline void atomicStore(T* location, T newValue, std::memory_order order = std::memory_order_seq_cst)
+ {
+-    std::atomic_ref<T>(*location).store(newValue, order);
++    atomicRef(location).store(newValue, order);
+ }
+ 
+ template<typename T>
+ inline void atomicStoreFullyFenced(T* location, T newValue)
+ {
+-    std::atomic_ref<T>(*location).exchange(newValue);
++    atomicRef(location).exchange(newValue);
+ }
+ 
+ template<typename T>
+ inline bool atomicCompareExchangeWeak(T* location, T expected, T newValue, std::memory_order order = std::memory_order_seq_cst)
+ {
+     T expectedOrActual = expected;
+-    return std::atomic_ref<T>(*location).compare_exchange_weak(expectedOrActual, newValue, order);
++    return atomicRef(location).compare_exchange_weak(expectedOrActual, newValue, order);
+ }
+ 
+ template<typename T>
+@@ -197,44 +212,44 @@ template<typename T>
+ inline T atomicCompareExchangeStrong(T* location, T expected, T newValue, std::memory_order order = std::memory_order_seq_cst)
+ {
+     T expectedOrActual = expected;
+-    std::atomic_ref<T>(*location).compare_exchange_strong(expectedOrActual, newValue, order);
++    atomicRef(location).compare_exchange_strong(expectedOrActual, newValue, order);
+     return expectedOrActual;
+ }
+ 
+ template<typename T, typename U>
+ inline T atomicExchangeAdd(T* location, U operand, std::memory_order order = std::memory_order_seq_cst)
+ {
+-    return std::atomic_ref<T>(*location).fetch_add(operand, order);
++    return atomicRef(location).fetch_add(operand, order);
+ }
+ 
+ template<typename T, typename U>
+ inline T atomicExchangeAnd(T* location, U operand, std::memory_order order = std::memory_order_seq_cst)
+ {
+-    return std::atomic_ref<T>(*location).fetch_and(operand, order);
++    return atomicRef(location).fetch_and(operand, order);
+ }
+ 
+ template<typename T, typename U>
+ inline T atomicExchangeOr(T* location, U operand, std::memory_order order = std::memory_order_seq_cst)
+ {
+-    return std::atomic_ref<T>(*location).fetch_or(operand, order);
++    return atomicRef(location).fetch_or(operand, order);
+ }
+ 
+ template<typename T, typename U>
+ inline T atomicExchangeSub(T* location, U operand, std::memory_order order = std::memory_order_seq_cst)
+ {
+-    return std::atomic_ref<T>(*location).fetch_sub(operand, order);
++    return atomicRef(location).fetch_sub(operand, order);
+ }
+ 
+ template<typename T, typename U>
+ inline T atomicExchangeXor(T* location, U operand, std::memory_order order = std::memory_order_seq_cst)
+ {
+-    return std::atomic_ref<T>(*location).fetch_xor(operand, order);
++    return atomicRef(location).fetch_xor(operand, order);
+ }
+ 
+ template<typename T>
+ inline T atomicExchange(T* location, T newValue, std::memory_order order = std::memory_order_seq_cst)
+ {
+-    return std::atomic_ref<T>(*location).exchange(newValue, order);
++    return atomicRef(location).exchange(newValue, order);
+ }
+ 
+ // Just a compiler fence. Has no effect on the hardware, but tells the compiler
