@@ -23,13 +23,13 @@ from cerbero.bootstrap import BootstrapperBase
 from cerbero.bootstrap.bootstrapper import register_toolchain_bootstrapper
 from cerbero.config import Distro
 
-NDK_VERSION = 'r27'
+NDK_VERSION = 'r29'
 NDK_BASE_URL = 'https://dl.google.com/android/repository/android-ndk-%s-%s.zip'
 NDK_CHECKSUMS = {
-    'android-ndk-r27-linux.zip': '2f17eb8bcbfdc40201c0b36e9a70826fcd2524ab7a2a235e2c71186c302da1dc',
+    'android-ndk-r29-linux.zip': '4abbbcdc842f3d4879206e9695d52709603e52dd68d3c1fff04b3b5e7a308ecf',
     # doesn't ship as a zip file anymore
-    'android-ndk-r27-darwin.dmg': 'fedc21f8ec973e5d41630536b5a5ac1d2888632cafb6e1f2aa79f0db3eaeda75',
-    'android-ndk-r27-windows.zip': '342ceafd7581ae26a0bd650a5e0bbcd0aa2ee15eadfd7508b3dedeb1372d7596',
+    'android-ndk-r29-darwin.dmg': '2d6922da5f95178bea870069f0a463c33d014ddfa364c74320e11c47531db24d',
+    'android-ndk-r29-windows.zip': '4f83a1a87ea0d33ae2b43812ce27b768be949bc78acf90b955134d19e3068f1c',
 }
 
 

@@ -81,11 +81,6 @@ class Recipe(recipe.Recipe):
     build_variant = next(o.split('=', 1)[1] for o in configure_options if o.startswith('-DCMAKE_BUILD_TYPE='))
     cmake_generator = 'ninja'
 
-    patches = [
-        'wpewebkit/0001-Android-Build-fix-after-323956-main-clang-suppress-o.patch',
-        'wpewebkit/0002-Android-Build-fix-after-324276-main-std-atomic_ref-n.patch',
-    ]
-
     files_libs = [
         'libWPEWebKit-2.0',
         'libWPEWebDriver'
