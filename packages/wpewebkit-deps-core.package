@@ -1,0 +1,74 @@
+# -*- Mode: Python -*- vi:si:et:sw=4:sts=4:ts=4:syntax=python
+
+class Package(package.Package):
+    name = 'wpewebkit-deps-core'
+    version = '2.55.0.8'
+    shortdesc = 'Dependencies of WPE WebKit'
+    longdesc = 'The libraries that WPE WebKit depends on, without WPE WebKit itself'
+    vendor = 'Igalia'
+    uuid = '9f17da30-8288-49d1-8160-5e5fc19f2997'
+    strip = True
+    strip_excludes = [
+        'libc.so',
+        'libm.so',
+        'libstdc++.so',
+        '.mo',
+        '.scenario',
+        '.conf',
+        '.py',
+        '.gresource',
+        'gst-env',
+        'gst-shell',
+        'gst-validate-launcher',
+        'README'
+    ]
+
+    files = [
+        'bzip2:libs',
+        'cairo:libs',
+        'expat:libs',
+        'fontconfig:libs',
+        'freetype:libs',
+        'glib:libs',
+        # glib-networking >= 2.80 ships its GIO modules as plugins; WPE-Android only
+        # uses the OpenSSL one (see tools/scripts/bootstrap.py)
+        'glib-networking:plugins',
+        'harfbuzz:libs',
+        'icu:libs',
+        'libepoxy:libs',
+        'libgcrypt:libs',
+        'libffi:libs',
+        'libgpg-error:libs',
+        'libjpeg-turbo:libs',
+        'libpng:libs',
+        'libsoup:libs',
+        'libtasn1:libs',
+        'libwebp:libs',
+        'libxml2:libs',
+        'libxslt:libs',
+        'nghttp2:libs',
+        'orc:libs',
+        'pixman:libs',
+        'proxy-libintl:libs',
+        'libpsl:libs',
+        'openjpeg:libs',
+        'openxr:libs',
+        'sqlite3:libs',
+        'xkbcommon:libs',
+        'zlib:libs'
+    ]
+
+    files_devel = ['glib']
+
+    def prepare(self):
+        # Bionic provides iconv since API 28; GNU libiconv is only needed below that.
+        if self.config.target_platform != Platform.ANDROID or \
+                DistroVersion.get_android_api_version(self.config.target_distro_version) < 28:
+            self.files.append('libiconv:libs')
+
+    platform_files = {
+        Platform.ANDROID: [
+            'vulkan-android:libs',
+            'wpeandroid:libs:stl'
+        ]
+    }
