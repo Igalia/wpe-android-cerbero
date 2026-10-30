@@ -17,7 +17,8 @@ log = logging.getLogger(__name__)
 
 _PKGNAME_REGEX = re.compile(r"""
     \A                              # String start
-    wpewebkit-android               # Package name prefix
+    (?P<name>wpewebkit(?:-deps)?)   # Package name
+    -android                        # Platform
     -(?P<arch>[\w^\d]\w*)           # Architecture
     -(?P<version>\d[\d.]*\d)        # Version
     (?:-(?P<kind>runtime))?         # Is it a runtime package?
@@ -29,6 +30,7 @@ _PKGNAME_REGEX = re.compile(r"""
 
 
 class PackageSpec:
+    name: str
     arch: str
     version: str
     kind: str or None
@@ -50,7 +52,8 @@ class PackageSpec:
         return None if self.date is None else f"{self.date}{self.revision}"
 
     def __eq__(self, other) -> bool:
-        return self.arch == other.arch \
+        return self.name == other.name \
+            and self.arch == other.arch \
             and self.version == other.version \
             and self.kind == other.kind \
             and self.date == other.date \
@@ -58,7 +61,8 @@ class PackageSpec:
 
     def __str__(self) -> str:
         return "-".join(item for item in
-                        ("wpewebkit-android",
+                        (self.name,
+                         "android",
                          self.arch,
                          self.version,
                          self.kind,
@@ -67,6 +71,7 @@ class PackageSpec:
 
     def __repr__(self) -> str:
         return (f"{self.__class__.__name__}("
+                f"name={self.name!r}, "
                 f"arch={self.arch!r}, "
                 f"version={self.version!r}, "
                 f"kind={self.kind!r}, "

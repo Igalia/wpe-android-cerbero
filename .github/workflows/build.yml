@@ -48,18 +48,20 @@ jobs:
         run: |
           ./cerbero-uninstalled -t -c local.cbc -c "${ANDROID_CONFIG}" \
             package -f wpewebkit
+          ./cerbero-uninstalled -t -c local.cbc -c "${ANDROID_CONFIG}" \
+            package -f wpewebkit-deps
       - name: Store packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'pull_request') }}
         with:
           name: wpe-deps-${{ matrix.target }}
-          path: ./wpewebkit-android-${{ matrix.target }}*
+          path: ./wpewebkit*-android-${{ matrix.target }}*
           if-no-files-found: error
       - name: Upload packages to wpewebkit.org
         if: ${{ inputs.upload_packages == 'yes' || inputs.upload_packages == 'dry-run' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && inputs.upload_packages == 'on-merge') }}
         run: |
-          python3 ./.github/workflows/upload.py "./wpewebkit-android-${{ matrix.target }}*" || \
-          echo "**:warning: WARNING :warning:** Cannot upload ./wpewebkit-android-${{ matrix.target }}... files to wpewebkit.org" >> $GITHUB_STEP_SUMMARY
+          python3 ./.github/workflows/upload.py "./wpewebkit*-android-${{ matrix.target }}*" || \
+          echo "**:warning: WARNING :warning:** Cannot upload ./wpewebkit*-android-${{ matrix.target }}... files to wpewebkit.org" >> $GITHUB_STEP_SUMMARY
           exit 0
         env:
           UPLOAD_DRY_RUN: ${{ inputs.upload_packages == 'dry-run' }}
