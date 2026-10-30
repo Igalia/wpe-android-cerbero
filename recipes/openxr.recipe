@@ -18,7 +18,7 @@ class Recipe(recipe.Recipe):
     library_type = LibraryType.SHARED
 
     files_libs = ['libopenxr_loader']
-    files_devel = ['include/openxr', 'lib/pkgconfig/openxr.pc']
+    files_devel = ['include/openxr', 'lib/cmake/openxr', 'lib/pkgconfig/openxr.pc']
 
     configure_options = [
         '-DBUILD_TESTING=OFF',
