@@ -27,7 +27,8 @@ class Recipe(recipe.Recipe):
 
     files_libs = ['libpng16']
     files_devel = ['include/libpng16', 'bin/libpng16-config',
-                   '%(libdir)s/pkgconfig/libpng16.pc', '%(libdir)s/pkgconfig/libpng.pc']
+                   '%(libdir)s/pkgconfig/libpng16.pc', '%(libdir)s/pkgconfig/libpng.pc',
+                   'include/png.h', 'include/pngconf.h', 'include/pnglibconf.h']
 
     def prepare(self):
         self.configure_options.append(f'-DZLIB_ROOT={self.config.prefix}')
