@@ -60,3 +60,4 @@ To bump WebKit:
 1. Change `commit` in `recipes/wpewebkit.recipe`.
 2. Bump `version` in the four package files.
 3. After the packages are uploaded, set `default_version` in wpe-android's `tools/scripts/bootstrap.py` to the new version.
+4. If WebKit's Android build needs the new dependencies, update its pins: see [raise-webkit-dependencies.md](../docs/raise-webkit-dependencies.md).
