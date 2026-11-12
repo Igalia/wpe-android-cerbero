@@ -35,8 +35,8 @@ CI builds for arm64 and x86_64.
 
 WPE WebKit depends on these cerbero recipes:
 icu, freetype, gettext, gstreamer-1.0, gst-plugins-base-1.0, gst-plugins-good-1.0, gst-plugins-bad-1.0,
-harfbuzz, libepoxy, libgcrypt, libjpeg-turbo, libpng, libsoup, libtasn1, libxslt, libwebp, openjpeg,
-openxr and xkbcommon.
+harfbuzz, libepoxy, libjpeg-turbo, libpng, libsoup, libxslt, libwebp, openjpeg, openssl, openxr and
+xkbcommon.
 The `deps` list in `recipes/wpewebkit.recipe` is the full, current list.
 
 ## Building the packages
