@@ -2,7 +2,7 @@
 
 class SDKPackage(package.SDKPackage):
     name = 'wpewebkit-deps'
-    version = '2.55.0.8'
+    version = '2.55.0.9'
     shortdesc = 'Dependencies of WPE WebKit'
     longdesc = 'The libraries that WPE WebKit depends on, without WPE WebKit itself, \
         to build WPE WebKit against them'
