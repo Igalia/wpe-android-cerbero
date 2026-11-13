@@ -1,0 +1,55 @@
+From d98f0564b08019768f83d4bb4125ec0f1619def6 Mon Sep 17 00:00:00 2001
+From: Simon Pena <spena@igalia.com>
+Date: Fri, 13 Nov 2026 14:28:48 +0100
+Subject: [PATCH] gthread: Don't ask for inherited scheduling on Android
+
+On Android, g_thread_new() can abort with:
+
+  GLib-ERROR: error 'Operation not permitted' during 'pthread_create'
+
+It happens when the calling thread uses a real-time policy. Some
+devices run an app's main thread as SCHED_FIFO | SCHED_RESET_ON_FORK
+for a short time while the app starts. A GThread made in that window fails.
+This was seen on a Samsung Galaxy S25 running Android 17.
+
+GLib sets PTHREAD_INHERIT_SCHED on the thread attributes. This is the
+default on glibc, so it changes nothing there. Bionic (Android's C
+library) treats it differently. If the attribute is set and the parent
+policy has SCHED_RESET_ON_FORK, bionic calls sched_setscheduler() on
+the new thread to copy the parent's real-time policy. Apps are not
+allowed to set a real-time policy, so the call fails with EPERM, and on
+64-bit bionic returns that error from pthread_create().
+
+If the attribute is not set, bionic leaves the policy alone, and the
+kernel gives the new thread the normal policy. This is what other
+threads on Android get. So don't set the attribute on Android.
+---
+ glib/gthread-posix.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/glib/gthread-posix.c b/glib/gthread-posix.c
+index 4646ec8..6ac0c8c 100644
+--- a/glib/gthread-posix.c
++++ b/glib/gthread-posix.c
+@@ -751,12 +751,15 @@ g_system_thread_new (GThreadFunc proxy,
+     }
+ #endif /* HAVE_PTHREAD_ATTR_SETSTACKSIZE */
+ 
+-#ifdef HAVE_PTHREAD_ATTR_SETINHERITSCHED
++#if defined(HAVE_PTHREAD_ATTR_SETINHERITSCHED) && !defined(__ANDROID__)
+     {
+-      /* While this is the default, better be explicit about it */
++      /* While this is the default other than on Android, better be explicit
++       * about it. There, if the parent's policy has SCHED_RESET_ON_FORK,
++       * bionic then copies it to the new thread by hand, which might fail
++       * if the policy is real-time. */
+       pthread_attr_setinheritsched (&attr, PTHREAD_INHERIT_SCHED);
+     }
+-#endif /* HAVE_PTHREAD_ATTR_SETINHERITSCHED */
++#endif /* HAVE_PTHREAD_ATTR_SETINHERITSCHED && !__ANDROID__ */
+ 
+   ret = pthread_create (&thread->system_thread, &attr, (void* (*)(void*))proxy, thread);
+ 
+-- 
+2.53.0
+
