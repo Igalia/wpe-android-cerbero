@@ -64,6 +64,8 @@ class Recipe(recipe.Recipe):
         # GLib treats as setuid and then ignores GIO_EXTRA_MODULES/GIO_MODULE_DIR.
         # WPE-Android relies on GIO_EXTRA_MODULES to load the TLS backend.
         'glib/0015-Fix-GIO-module-load-paths.patch',
+        # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5497
+        'glib/0016-gthread-Don-t-ask-for-inherited-scheduling-on-Androi.patch',
     ]
 
     files_libs = [
