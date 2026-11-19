@@ -1,0 +1,121 @@
+From ed3b4fe352b697aaa7df4ff8dd0d57a099b57bfd Mon Sep 17 00:00:00 2001
+From: "Alejandro G. Castro" <alex@igalia.com>
+Date: Thu, 19 Nov 2026 15:25:45 +0100
+Subject: [PATCH] [WPE] media/video-seek-pause.html is slightly flaky
+ https://bugs.webkit.org/show_bug.cgi?id=318887
+
+Reviewed by NOBODY (OOPS!).
+
+changePipelineState() rejects state changes while the pipeline prerolls
+after a seek or a flush (273977@main), and pause() ignored the
+rejection. Once prerolled, the pipeline went back to the state it had
+before, so a pause that came during the preroll was lost: the pipeline
+played again, reported the change to PLAYING, and the media element
+followed it back to playing. That is the failure of
+media/video-seek-pause.html, which pauses 5 ms after a seek. A looping
+element prerolls after every loop, so the pause that hides the media of
+a page that is no longer visible can be lost the same way.
+
+play() already delays a request that comes during a preroll. Do the
+same for pause(): remember it, and pause as soon as the pipeline reaches
+PLAYING after the preroll, without reporting that transition as a
+playback state change. A later play() cancels the pending pause.
+
+Covered by media/video-seek-pause.html, no longer flaky.
+
+* LayoutTests/platform/glib/TestExpectations:
+* Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp:
+(WebCore::MediaPlayerPrivateGStreamer::play):
+(WebCore::MediaPlayerPrivateGStreamer::pause):
+(WebCore::MediaPlayerPrivateGStreamer::updateStates):
+* Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h:
+---
+ LayoutTests/platform/glib/TestExpectations        |  1 -
+ .../gstreamer/MediaPlayerPrivateGStreamer.cpp     | 15 ++++++++++++++-
+ .../gstreamer/MediaPlayerPrivateGStreamer.h       |  2 ++
+ 3 files changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/LayoutTests/platform/glib/TestExpectations b/LayoutTests/platform/glib/TestExpectations
+index bf225a1a9352..9ba44102e720 100644
+--- a/LayoutTests/platform/glib/TestExpectations
++++ b/LayoutTests/platform/glib/TestExpectations
+@@ -5071,7 +5071,6 @@ webkit.org/b/225407 imported/w3c/web-platform-tests/css/css-animations/nested-sc
+ webkit.org/b/315615 media/media-vp8-hiddenframes.html [ ImageOnlyFailure Pass ]
+ webkit.org/b/315615 media/media-vp8-hiddenframes-decoder-in-content-process.html [ ImageOnlyFailure Pass ]
+ webkit.org/b/323781 webrtc/concurrentVideoPlayback2.html [ Failure Pass Timeout ]
+-webkit.org/b/318887 [ Release ] media/video-seek-pause.html [ Pass Failure ]
+ webkit.org/b/313034 [ Release ] http/tests/resourceLoadStatistics/user-interaction-reported-after-website-data-removal.html [ Pass Failure ]
+ webkit.org/b/305514 imported/w3c/web-platform-tests/fullscreen/rendering/fullscreen-root-block-scroll.html [ Failure Pass ]
+ webkit.org/b/326318 imported/w3c/web-platform-tests/fullscreen/api/document-fullscreen-keyboard-lock-escape.window.html [ Pass Failure ]
+diff --git a/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp b/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp
+index 124e2aa56e29..53e2feae8fb3 100644
+--- a/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp
++++ b/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.cpp
+@@ -480,6 +480,7 @@ bool MediaPlayerPrivateGStreamer::isPipelineWaitingPreroll() const
+ void MediaPlayerPrivateGStreamer::play()
+ {
+     GST_DEBUG_OBJECT(pipeline(), "Processing playback request");
++    m_isPauseDeferredUntilPrerolled = false;
+     if (isMediaStreamPlayer()) {
+         m_pausedTime.reset();
+         if (m_startTime.isInvalid())
+@@ -540,6 +541,11 @@ void MediaPlayerPrivateGStreamer::pause()
+ #if ENABLE(MEDIA_TELEMETRY)
+         MediaTelemetryReport::singleton().reportPlaybackState(MediaTelemetryReport::AVPipelineState::Pause);
+ #endif
++    } else if (result == ChangePipelineStateResult::Rejected) {
++        // Once prerolled, the pipeline goes back to the state it had before the seek or flush.
++        GST_DEBUG_OBJECT(pipeline(), "pipeline is waiting preroll (after seek or flush), pausing once it prerolled");
++        m_isPauseDeferredUntilPrerolled = true;
++        m_isPipelinePlaying = false;
+     } else if (result == ChangePipelineStateResult::Failed)
+         loadingFailed(MediaPlayer::NetworkState::Empty);
+ }
+@@ -3126,8 +3132,10 @@ void MediaPlayerPrivateGStreamer::updateStates()
+         }
+ 
+         bool shouldPauseForBuffering = false;
++        bool isPausingAfterPreroll = false;
+         // Sync states where needed.
+         if (m_currentState == GST_STATE_PAUSED) {
++            m_isPauseDeferredUntilPrerolled = false;
+             if (!m_areVolumeAndMuteInitialized) {
+                 notifyPlayerOfVolumeChange();
+                 notifyPlayerOfMute();
+@@ -3140,6 +3148,11 @@ void MediaPlayerPrivateGStreamer::updateStates()
+                 GST_INFO_OBJECT(pipeline(), "[Buffering] Restarting playback (because of buffering or resuming from zero playback rate)");
+                 changePipelineState(GST_STATE_PLAYING);
+             }
++        } else if (m_currentState == GST_STATE_PLAYING && m_isPauseDeferredUntilPrerolled) {
++            m_isPauseDeferredUntilPrerolled = false;
++            isPausingAfterPreroll = true;
++            GST_INFO_OBJECT(pipeline(), "Pausing now that the pipeline prerolled");
++            changePipelineState(GST_STATE_PAUSED);
+         } else if (m_currentState == GST_STATE_PLAYING) {
+             m_isPaused = false;
+ 
+@@ -3172,7 +3185,7 @@ void MediaPlayerPrivateGStreamer::updateStates()
+         // Emitting this notification in more cases triggers unwanted code paths
+         // and test timeouts.
+         if (stateReallyChanged && (m_oldState != m_currentState) && (m_oldState == GST_STATE_PAUSED && m_currentState == GST_STATE_PLAYING) && !shouldPauseForBuffering
+-            && !m_isSeeking) {
++            && !isPausingAfterPreroll && !m_isSeeking) {
+             GST_INFO_OBJECT(pipeline(), "Playback state changed from %s to %s. Notifying the media player client", gst_state_get_name(m_oldState), gst_state_get_name(m_currentState));
+             shouldUpdatePlaybackState = true;
+         }
+diff --git a/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h b/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h
+index f3ca7857814d..5f7fadec5aa8 100644
+--- a/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h
++++ b/Source/WebCore/platform/graphics/gstreamer/MediaPlayerPrivateGStreamer.h
+@@ -422,6 +422,8 @@ protected:
+     bool m_isPaused { true };
+     float m_playbackRate { 1 };
+     PlaybackRatePausedState m_playbackRatePausedState { PlaybackRatePausedState::InitiallyPaused };
++    // A pause() that came while the pipeline prerolled, which rejects state changes.
++    bool m_isPauseDeferredUntilPrerolled { false };
+     GstState m_currentState { GST_STATE_NULL };
+     GstState m_oldState { GST_STATE_NULL };
+     GstState m_requestedState { GST_STATE_VOID_PENDING };
+-- 
+2.53.0
+

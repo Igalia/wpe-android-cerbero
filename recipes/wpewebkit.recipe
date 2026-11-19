@@ -80,6 +80,10 @@ class Recipe(recipe.Recipe):
     build_variant = next(o.split('=', 1)[1] for o in configure_options if o.startswith('-DCMAKE_BUILD_TYPE='))
     cmake_generator = 'ninja'
 
+    patches = [
+        'wpewebkit/0001-WPE-media-video-seek-pause.html-is-slightly-flaky.patch',
+    ]
+
     files_libs = [
         'libWPEWebKit-2.0',
         'libWPEWebDriver'
