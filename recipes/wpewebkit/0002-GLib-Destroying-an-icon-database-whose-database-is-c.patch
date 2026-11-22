@@ -1,0 +1,62 @@
+From d091c57f846703f45d1717727bec87fc8de091bd Mon Sep 17 00:00:00 2001
+From: "Juan J. Sanchez" <jjsanchez@igalia.com>
+Date: Sun, 22 Nov 2026 19:25:50 +0100
+Subject: [PATCH] [GLib] Destroying an icon database whose database is closed
+ aborts Need the bug URL (OOPS!).
+
+Reviewed by NOBODY (OOPS!).
+
+IconDatabase::~IconDatabase() destroyed the prune timer on the work
+queue only while the database was open. clear() runs
+createTablesIfNeeded(), which closes the database when it cannot make
+the tables, for example when another session that uses the same file
+clears it at that moment, and the prune timer, started earlier, stays
+active. When the last reference to the icon database then went away on
+the main thread, the timer was destroyed there, and a run loop timer
+aborts when it is destroyed while active out of its own run loop.
+Before that, the timer could also fire on the closed database, where
+pruneTimerFired() only asserted that it was open.
+
+The prune timer is now destroyed on the work queue whether the database
+is open or not, and pruneTimerFired() returns when the database is
+closed, as the other tasks on the work queue do.
+
+No new tests (OOPS!).
+
+* Source/WebKit/UIProcess/API/glib/IconDatabase.cpp:
+(WebKit::IconDatabase::~IconDatabase):
+(WebKit::IconDatabase::pruneTimerFired):
+---
+ Source/WebKit/UIProcess/API/glib/IconDatabase.cpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebKit/UIProcess/API/glib/IconDatabase.cpp b/Source/WebKit/UIProcess/API/glib/IconDatabase.cpp
+index 1bfc0260a8..191718b416 100644
+--- a/Source/WebKit/UIProcess/API/glib/IconDatabase.cpp
++++ b/Source/WebKit/UIProcess/API/glib/IconDatabase.cpp
+@@ -110,8 +110,9 @@ IconDatabase::~IconDatabase()
+     ASSERT(isMainRunLoop());
+ 
+     m_workQueue->dispatchSync([&] {
++        // The prune timer belongs to the work queue's run loop, so destroy it here even if the database is closed.
++        m_pruneTimer = nullptr;
+         if (m_db->isOpen()) {
+-            m_pruneTimer = nullptr;
+             clearStatements();
+             m_db->close();
+         }
+@@ -228,7 +229,10 @@ void IconDatabase::clearStatements()
+ void IconDatabase::pruneTimerFired()
+ {
+     ASSERT(!isMainRunLoop());
+-    ASSERT(m_db->isOpen());
++
++    // clear() closes the database if it fails to create the tables again.
++    if (!m_db->isOpen())
++        return;
+ 
+     if (!m_pruneIconsStatement) {
+         m_pruneIconsStatement = m_db->prepareStatement("DELETE FROM IconInfo WHERE stamp <= (?);"_s);
+-- 
+2.53.0
+

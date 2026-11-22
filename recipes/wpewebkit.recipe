@@ -82,6 +82,7 @@ class Recipe(recipe.Recipe):
 
     patches = [
         'wpewebkit/0001-WPE-media-video-seek-pause.html-is-slightly-flaky.patch',
+        'wpewebkit/0002-GLib-Destroying-an-icon-database-whose-database-is-c.patch',
     ]
 
     files_libs = [
