@@ -123,6 +123,9 @@ class DebianBootstrapper(UnixBootstrapper):
 
     def __init__(self, config, offline, assume_yes):
         UnixBootstrapper.__init__(self, config, offline, assume_yes)
+        # gst-plugins-bad builds its curl plugin only for non-app platforms
+        if Platform.is_app_platform(self.config.target_platform):
+            self.packages = [p for p in self.packages if p != 'libcurl4-openssl-dev']
         if self.config.target_platform == Platform.WINDOWS:
             if self.config.arch == Architecture.X86_64:
                 self.packages.append('libc6:i386')
@@ -198,6 +201,9 @@ class RedHatBootstrapper(UnixBootstrapper):
 
     def __init__(self, config, offline, assume_yes):
         UnixBootstrapper.__init__(self, config, offline, assume_yes)
+        # gst-plugins-bad builds its curl plugin only for non-app platforms
+        if Platform.is_app_platform(self.config.target_platform):
+            self.packages = [p for p in self.packages if p != 'libcurl-devel']
 
         dn, dv = self.config.distro_version.split('_', 1)
         dv = split_version(dv)
@@ -304,6 +310,9 @@ class OpenSuseBootstrapper(UnixBootstrapper):
 
     def __init__(self, config, offline, assume_yes):
         UnixBootstrapper.__init__(self, config, offline, assume_yes)
+        # gst-plugins-bad builds its curl plugin only for non-app platforms
+        if Platform.is_app_platform(self.config.target_platform):
+            self.packages = [p for p in self.packages if p != 'libcurl4-openssl-dev']
         if self.config.target_platform == Platform.WINDOWS:
             if self.config.arch in [Architecture.X86_64, Architecture.X86]:
                 self.packages += ['wine', 'xvfb-run']
