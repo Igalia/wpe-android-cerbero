@@ -1,4 +1,4 @@
-From 6dd1a14332c836cdf20568baa2612c5541f7d984 Mon Sep 17 00:00:00 2001
+From 8ea027e9ed90bf8fcfc643655a370adf863c50c6 Mon Sep 17 00:00:00 2001
 From: "Juan J. Sanchez" <jjsanchez@igalia.com>
 Date: Fri, 20 Nov 2026 12:39:02 +0100
 Subject: [PATCH] [WPE][Android] Apply the throttle state of auxiliary
@@ -98,12 +98,12 @@ No new tests (OOPS!).
  19 files changed, 173 insertions(+), 30 deletions(-)
 
 diff --git a/Source/WTF/wtf/PlatformHave.h b/Source/WTF/wtf/PlatformHave.h
-index 5440fc867f..1deaa71d43 100644
+index 4c02d44953..cbbd4dcc3b 100644
 --- a/Source/WTF/wtf/PlatformHave.h
 +++ b/Source/WTF/wtf/PlatformHave.h
-@@ -2086,3 +2086,9 @@
-     || (PLATFORM(VISION) && __VISION_OS_VERSION_MIN_REQUIRED >= 270200))
- #define HAVE_FIX_FOR_RADAR_190563103 1
+@@ -2090,3 +2090,9 @@
+ #if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 280000
+ #define HAVE_NSKEYBOARDSHORTCUT_MODIFIER_FLAGS 1
  #endif
 +
 +/* On WPE for Android, the system freezes the processes of an app only together with the app, so a suspended auxiliary
@@ -129,7 +129,7 @@ index 9f5aece395..faa2a0b996 100644
  #define USE_NSPRESENTATIONSTATE 1
  #endif
 diff --git a/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp b/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
-index 6519782680..ace31b2bf5 100644
+index 337d238a94..2bcf252d61 100644
 --- a/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
 +++ b/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
 @@ -180,7 +180,7 @@ NetworkConnectionToWebProcess::NetworkConnectionToWebProcess(WebCore::ProcessIde
@@ -180,7 +180,7 @@ index f30f65a73c..e26714a143 100644
      // in increased memory usage. To avoid this, we allow the process to stay alive for 1 second after draining
      // its message queue.
 diff --git a/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h b/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h
-index 08dcca48af..e00a5db948 100644
+index 11d90a806a..11251b24bc 100644
 --- a/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h
 +++ b/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h
 @@ -230,7 +230,7 @@ public:
@@ -193,10 +193,10 @@ index 08dcca48af..e00a5db948 100644
  #endif
  
 diff --git a/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp b/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp
-index 6af1f422de..279c5db2bd 100644
+index 983c2d0c28..8cdaf65815 100644
 --- a/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp
 +++ b/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp
-@@ -288,7 +288,7 @@ NetworkProcessProxy::NetworkProcessProxy()
+@@ -290,7 +290,7 @@ NetworkProcessProxy::NetworkProcessProxy()
  #else
      , m_customProtocolManagerClient(makeUniqueRef<API::CustomProtocolManagerClient>())
  #endif
@@ -205,7 +205,7 @@ index 6af1f422de..279c5db2bd 100644
      , m_backgroundActivityToPreventSuspension(protect(throttler())->backgroundActivity("Prevent suspension"_s))
  #endif
  {
-@@ -2236,7 +2236,7 @@ void NetworkProcessProxy::didPerformEvictionForDomains(PAL::SessionID sessionID,
+@@ -2238,7 +2238,7 @@ void NetworkProcessProxy::didPerformEvictionForDomains(PAL::SessionID sessionID,
          store->client().didEvictDataForDomains(domains);
  }
  
@@ -521,7 +521,7 @@ index 384004471b..cb069bb6d5 100644
      const bool m_shouldTakeUIBackgroundAssertion { false };
      bool m_shouldTakeNearSuspendedAssertion { true };
 diff --git a/Source/WebKit/UIProcess/ProvisionalPageProxy.cpp b/Source/WebKit/UIProcess/ProvisionalPageProxy.cpp
-index ff1cbbf3fc..a3e2a121e3 100644
+index b0420e6924..c81584d69c 100644
 --- a/Source/WebKit/UIProcess/ProvisionalPageProxy.cpp
 +++ b/Source/WebKit/UIProcess/ProvisionalPageProxy.cpp
 @@ -97,7 +97,7 @@ ProvisionalPageProxy::ProvisionalPageProxy(WebPageProxy& page, Ref<FrameProcess>
@@ -534,7 +534,7 @@ index ff1cbbf3fc..a3e2a121e3 100644
  #endif
  #if HAVE(VISIBILITY_PROPAGATION_VIEW)
 diff --git a/Source/WebKit/UIProcess/ProvisionalPageProxy.h b/Source/WebKit/UIProcess/ProvisionalPageProxy.h
-index abea5fab42..633d2db582 100644
+index da80334593..75ed88f200 100644
 --- a/Source/WebKit/UIProcess/ProvisionalPageProxy.h
 +++ b/Source/WebKit/UIProcess/ProvisionalPageProxy.h
 @@ -261,7 +261,7 @@ private:
@@ -569,7 +569,7 @@ index 975f452c8e..9295b0ca22 100644
  #endif
  
 diff --git a/Source/WebKit/UIProcess/SuspendedPageProxy.h b/Source/WebKit/UIProcess/SuspendedPageProxy.h
-index 0a0b60c1d5..283862efda 100644
+index e4f6d28391..d8bc86975c 100644
 --- a/Source/WebKit/UIProcess/SuspendedPageProxy.h
 +++ b/Source/WebKit/UIProcess/SuspendedPageProxy.h
 @@ -142,7 +142,7 @@ private:
@@ -582,10 +582,10 @@ index 0a0b60c1d5..283862efda 100644
  #endif
  #if HAVE(VISIBILITY_PROPAGATION_VIEW)
 diff --git a/Source/WebKit/UIProcess/WebPageProxy.cpp b/Source/WebKit/UIProcess/WebPageProxy.cpp
-index c0c6dfe04e..b37209b950 100644
+index db35c0936a..45e94db65d 100644
 --- a/Source/WebKit/UIProcess/WebPageProxy.cpp
 +++ b/Source/WebKit/UIProcess/WebPageProxy.cpp
-@@ -590,7 +590,7 @@ static bool shouldUseEnhancedSecurityHeuristics(const Ref<WebPreferences>& prefe
+@@ -594,7 +594,7 @@ static bool shouldUseEnhancedSecurityHeuristics(const Ref<WebPreferences>& prefe
          && !preferences->enhancedSecurityForceDisabled();
  }
  
@@ -594,7 +594,7 @@ index c0c6dfe04e..b37209b950 100644
  static constexpr Seconds audibleActivityClearDelay = 10_s;
  #endif
  
-@@ -4145,7 +4145,7 @@ void WebPageProxy::updateThrottleState()
+@@ -4165,7 +4165,7 @@ void WebPageProxy::updateThrottleState()
      else if (!internals().pageIsUserObservableCount)
          internals().pageIsUserObservableCount = processPool->userObservablePageCount();
  
@@ -603,7 +603,7 @@ index c0c6dfe04e..b37209b950 100644
      if (isViewVisible()) {
          if (!hasValidVisibleActivity()) {
              WEBPAGEPROXY_RELEASE_LOG(ProcessSuspension, "updateThrottleState: UIProcess is taking a foreground assertion because the view is visible");
-@@ -4225,10 +4225,10 @@ void WebPageProxy::waitForDidUpdateActivityState(ActivityStateChangeID activityS
+@@ -4245,10 +4245,10 @@ void WebPageProxy::waitForDidUpdateActivityState(ActivityStateChangeID activityS
      if (m_waitingForDidUpdateActivityState)
          return;
  
@@ -616,7 +616,7 @@ index c0c6dfe04e..b37209b950 100644
          ASSERT_NOT_REACHED();
          return;
      }
-@@ -8988,6 +8988,8 @@ void WebPageProxy::runJavaScriptInFrameInScriptWorld(RunJavaScriptParameters&& p
+@@ -9025,6 +9025,8 @@ void WebPageProxy::runJavaScriptInFrameInScriptWorld(RunJavaScriptParameters&& p
  #if USE(RUNNINGBOARD)
      if (RefPtr pageClient = this->pageClient(); pageClient && pageClient->canTakeForegroundAssertions())
          activity = protect(processContainingFrame(frameID)->throttler())->foregroundActivity("WebPageProxy::runJavaScriptInFrameInScriptWorld"_s);
@@ -626,7 +626,7 @@ index c0c6dfe04e..b37209b950 100644
  
      sendWithAsyncReplyToProcessContainingFrame(frameID, Messages::WebPage::RunJavaScriptInFrameInScriptWorld(parameters, frameID, world.worldDataForProcess(processContainingFrame(frameID)), wantsResult), [activity = WTF::move(activity), loggingIdentifier, callbackFunction = WTF::move(callbackFunction)] (auto&& result) mutable {
 diff --git a/Source/WebKit/UIProcess/WebProcessProxy.cpp b/Source/WebKit/UIProcess/WebProcessProxy.cpp
-index 379c0b4c95..18b08ec3e5 100644
+index 620238b3c1..d4c4cee310 100644
 --- a/Source/WebKit/UIProcess/WebProcessProxy.cpp
 +++ b/Source/WebKit/UIProcess/WebProcessProxy.cpp
 @@ -1126,7 +1126,7 @@ Ref<WebPageProxy> WebProcessProxy::createWebPage(PageClient& pageClient, Ref<API
@@ -656,7 +656,7 @@ index 379c0b4c95..18b08ec3e5 100644
      if (isStandaloneServiceWorkerProcess()) {
          WEBPROCESSPROXY_RELEASE_LOG(ProcessSuspension, "didChangeThrottleState: Release all assertions for network process because this is a service worker process without page");
 diff --git a/Source/WebKit/UIProcess/WebProcessProxy.h b/Source/WebKit/UIProcess/WebProcessProxy.h
-index e08e939b48..e6ca562cee 100644
+index 507c68c8e6..64478813e8 100644
 --- a/Source/WebKit/UIProcess/WebProcessProxy.h
 +++ b/Source/WebKit/UIProcess/WebProcessProxy.h
 @@ -913,7 +913,9 @@ private:

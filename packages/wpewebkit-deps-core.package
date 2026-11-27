@@ -2,7 +2,7 @@
 
 class Package(package.Package):
     name = 'wpewebkit-deps-core'
-    version = '2.55.0.10'
+    version = '2.55.0.11'
     shortdesc = 'Dependencies of WPE WebKit'
     longdesc = 'The libraries that WPE WebKit depends on, without WPE WebKit itself'
     vendor = 'Igalia'
