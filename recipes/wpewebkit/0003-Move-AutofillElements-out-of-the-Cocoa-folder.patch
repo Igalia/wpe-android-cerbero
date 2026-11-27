@@ -1,0 +1,101 @@
+From 0fd878e374703a30bfa845c47201ebe98b7f06f4 Mon Sep 17 00:00:00 2001
+From: "Juan J. Sanchez" <jjsanchez@igalia.com>
+Date: Thu, 26 Nov 2026 09:15:47 +0100
+Subject: [PATCH] Move AutofillElements out of the Cocoa folder Need the bug
+ URL (OOPS!).
+
+Reviewed by NOBODY (OOPS!).
+
+GLib ports need a way to autofill login forms that does not rely on a
+web process extension and fits site isolation. This change prepares for
+that by moving AutofillElements, which Cocoa uses to find the user name
+and password fields of a login form and fill them, out of the Cocoa
+folder, so that every port builds it. Nothing in it is Cocoa specific.
+A following change adds the GLib API on top of it.
+
+* Source/WebCore/Headers.cmake:
+* Source/WebCore/Sources.txt:
+* Source/WebCore/SourcesCocoa.txt:
+* Source/WebCore/WebCore.xcodeproj/project.pbxproj:
+* Source/WebCore/editing/AutofillElements.cpp: Renamed from Source/WebCore/editing/cocoa/AutofillElements.cpp.
+* Source/WebCore/editing/AutofillElements.h: Renamed from Source/WebCore/editing/cocoa/AutofillElements.h.
+---
+ Source/WebCore/Headers.cmake                            | 1 +
+ Source/WebCore/Sources.txt                              | 1 +
+ Source/WebCore/SourcesCocoa.txt                         | 1 -
+ Source/WebCore/WebCore.xcodeproj/project.pbxproj        | 4 ++--
+ Source/WebCore/editing/{cocoa => }/AutofillElements.cpp | 0
+ Source/WebCore/editing/{cocoa => }/AutofillElements.h   | 0
+ 6 files changed, 4 insertions(+), 3 deletions(-)
+ rename Source/WebCore/editing/{cocoa => }/AutofillElements.cpp (100%)
+ rename Source/WebCore/editing/{cocoa => }/AutofillElements.h (100%)
+
+diff --git a/Source/WebCore/Headers.cmake b/Source/WebCore/Headers.cmake
+index 6f6fc3b358..18e8d87e9e 100644
+--- a/Source/WebCore/Headers.cmake
++++ b/Source/WebCore/Headers.cmake
+@@ -1379,6 +1379,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
+     dom/messageports/MessageWithMessagePorts.h
+     dom/messageports/TransferredMessagePort.h
+ 
++    editing/AutofillElements.h
+     editing/CachedMatchFinder.h
+     editing/CharacterRange.h
+     editing/ClipboardAccessPolicy.h
+diff --git a/Source/WebCore/Sources.txt b/Source/WebCore/Sources.txt
+index f056554608..79a92b7dcb 100644
+--- a/Source/WebCore/Sources.txt
++++ b/Source/WebCore/Sources.txt
+@@ -1563,6 +1563,7 @@ editing/AppendNodeCommand.cpp
+ editing/ApplyBlockElementCommand.cpp @header:RenderStyleGetters
+ editing/ApplyBlockPresentationIntentCommand.cpp
+ editing/ApplyStyleCommand.cpp @header:RenderStyleGetters
++editing/AutofillElements.cpp
+ editing/BreakBlockquoteCommand.cpp
+ editing/CachedMatchFinder.cpp
+ editing/ChangeListTypeCommand.cpp
+diff --git a/Source/WebCore/SourcesCocoa.txt b/Source/WebCore/SourcesCocoa.txt
+index 2e861f5b2a..f85a74c317 100644
+--- a/Source/WebCore/SourcesCocoa.txt
++++ b/Source/WebCore/SourcesCocoa.txt
+@@ -188,7 +188,6 @@ editing/SmartReplaceCF.cpp
+ editing/cocoa/AlternativeTextContextController.mm @nonARC
+ editing/cocoa/AlternativeTextUIController.mm @nonARC
+ editing/cocoa/AttributedString.mm @nonARC
+-editing/cocoa/AutofillElements.cpp
+ editing/cocoa/DataDetection.mm @nonARC
+ editing/cocoa/DictionaryLookup.mm @nonARC
+ editing/cocoa/EditorCocoa.mm @nonARC
+diff --git a/Source/WebCore/WebCore.xcodeproj/project.pbxproj b/Source/WebCore/WebCore.xcodeproj/project.pbxproj
+index 8723a696c3..0d5921bd87 100644
+--- a/Source/WebCore/WebCore.xcodeproj/project.pbxproj
++++ b/Source/WebCore/WebCore.xcodeproj/project.pbxproj
+@@ -32758,8 +32758,6 @@
+ 				CE7B2DB01586ABAD0098B3FA /* AlternativeTextUIController.mm */,
+ 				93E5B2632455E96F005C52D0 /* AttributedString.h */,
+ 				5C14D63329CA456A005A94D0 /* AttributedString.mm */,
+-				5CCC270722D53B6900964FA0 /* AutofillElements.cpp */,
+-				5CCC270622D53B6800964FA0 /* AutofillElements.h */,
+ 				C5227DEF1C3C6DD700F5ED54 /* DataDetection.h */,
+ 				C5227DF01C3C6DD700F5ED54 /* DataDetection.mm */,
+ 				BC4A533425605A560028C592 /* DataDetectorType.h */,
+@@ -33138,6 +33136,8 @@
+ 				B54B04BF98566AE8E19EE0F5 /* ApplyBlockPresentationIntentCommand.h */,
+ 				93309D89099E64910056E581 /* ApplyStyleCommand.cpp */,
+ 				93309D8A099E64910056E581 /* ApplyStyleCommand.h */,
++				5CCC270722D53B6900964FA0 /* AutofillElements.cpp */,
++				5CCC270622D53B6800964FA0 /* AutofillElements.h */,
+ 				93309D8B099E64910056E581 /* BreakBlockquoteCommand.cpp */,
+ 				93309D8C099E64910056E581 /* BreakBlockquoteCommand.h */,
+ 				D6E082662F5A3ADE009B51B0 /* CachedMatchFinder.cpp */,
+diff --git a/Source/WebCore/editing/cocoa/AutofillElements.cpp b/Source/WebCore/editing/AutofillElements.cpp
+similarity index 100%
+rename from Source/WebCore/editing/cocoa/AutofillElements.cpp
+rename to Source/WebCore/editing/AutofillElements.cpp
+diff --git a/Source/WebCore/editing/cocoa/AutofillElements.h b/Source/WebCore/editing/AutofillElements.h
+similarity index 100%
+rename from Source/WebCore/editing/cocoa/AutofillElements.h
+rename to Source/WebCore/editing/AutofillElements.h
+-- 
+2.53.0
+
