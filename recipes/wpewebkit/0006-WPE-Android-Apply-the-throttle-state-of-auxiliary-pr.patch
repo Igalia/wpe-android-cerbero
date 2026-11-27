@@ -1,0 +1,674 @@
+From 6dd1a14332c836cdf20568baa2612c5541f7d984 Mon Sep 17 00:00:00 2001
+From: "Juan J. Sanchez" <jjsanchez@igalia.com>
+Date: Fri, 20 Nov 2026 12:39:02 +0100
+Subject: [PATCH] [WPE][Android] Apply the throttle state of auxiliary
+ processes Need the bug URL (OOPS!).
+
+Reviewed by NOBODY (OOPS!).
+
+Before this change, the process throttler followed what each auxiliary process
+was doing, such as showing a page, playing sound or loading, but only
+RunningBoard acted on the state it chose. On WPE the throttlers of the web and
+network processes were never connected and stayed in the foreground state: the
+processes of hidden pages ran at the priority of the app, and were never asked
+to free memory before going idle.
+
+This change makes USE(PROCESS_ASSERTIONS) cover WPE on Android as well as
+RunningBoard. On Android an assertion on an auxiliary process now holds a
+priority through the default process manager, idle web processes take near
+suspended assertions as with RunningBoard, and the throttlers of the web and
+network processes are connected to their process when that manager ranks
+processes. With a manager that does not, the throttlers stay unconnected, as
+before. Nothing changes with RunningBoard.
+
+Unlike RunningBoard, Android does not freeze the processes of an app apart from
+the app itself, so a suspended process there keeps running.
+HAVE(RUNNING_SUSPENDED_PROCESSES) says so. Where it is set, the network process
+is not told when a web process is suspended, as it is with RunningBoard, so it
+keeps serving the IndexedDB transactions of that process, and the network
+process itself is never suspended, as on macOS, so storage keeps working.
+
+No new tests (OOPS!).
+
+* Source/WTF/wtf/PlatformHave.h:
+* Source/WTF/wtf/PlatformUse.h:
+* Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp:
+(WebKit::NetworkConnectionToWebProcess::NetworkConnectionToWebProcess):
+* Source/WebKit/UIProcess/AuxiliaryProcessProxy.cpp:
+(WebKit::AuxiliaryProcessProxy::didFinishLaunching):
+(WebKit::AuxiliaryProcessProxy::outgoingMessageQueueIsGrowingLarge):
+(WebKit::AuxiliaryProcessProxy::wakeUpTemporarilyForIPC):
+* Source/WebKit/UIProcess/AuxiliaryProcessProxy.h:
+* Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp:
+(WebKit::NetworkProcessProxy::NetworkProcessProxy):
+(WebKit::NetworkProcessProxy::wakeUpWebProcessForIPC):
+* Source/WebKit/UIProcess/Network/NetworkProcessProxy.h:
+* Source/WebKit/UIProcess/Network/NetworkProcessProxy.messages.in:
+* Source/WebKit/UIProcess/ProcessAssertion.cpp:
+(WebKit::ProcessAssertion::create):
+(WebKit::ProcessAndUIAssertion::create):
+(WebKit::ProcessAssertion::isSupported):
+(WebKit::processPriority):
+(WebKit::ProcessAssertion::~ProcessAssertion):
+(WebKit::ProcessAssertion::acquireSync):
+(WebKit::ProcessAssertion::acquireAsync):
+(WebKit::ProcessAssertion::remainingRunTimeInSeconds):
+* Source/WebKit/UIProcess/ProcessAssertion.h:
+(WebKit::ProcessAssertion::setIsOnAuxiliaryProcess):
+* Source/WebKit/UIProcess/ProcessThrottler.cpp:
+(WebKit::ProcessThrottler::ProcessThrottler):
+(WebKit::ProcessThrottler::appliesThrottleStates):
+(WebKit::ProcessThrottler::setThrottleState):
+* Source/WebKit/UIProcess/ProcessThrottler.h:
+* Source/WebKit/UIProcess/ProvisionalPageProxy.cpp:
+(WebKit::ProvisionalPageProxy::ProvisionalPageProxy):
+* Source/WebKit/UIProcess/ProvisionalPageProxy.h:
+* Source/WebKit/UIProcess/SuspendedPageProxy.cpp:
+(WebKit::SuspendedPageProxy::SuspendedPageProxy):
+(WebKit::SuspendedPageProxy::didProcessRequestToSuspend):
+* Source/WebKit/UIProcess/SuspendedPageProxy.h:
+* Source/WebKit/UIProcess/WebPageProxy.cpp:
+(WebKit::WebPageProxy::updateThrottleState):
+(WebKit::WebPageProxy::waitForDidUpdateActivityState):
+(WebKit::WebPageProxy::runJavaScriptInFrameInScriptWorld):
+* Source/WebKit/UIProcess/WebProcessProxy.cpp:
+(WebKit::WebProcessProxy::shouldTakeNearSuspendedAssertion const):
+(WebKit::WebProcessProxy::didChangeThrottleState):
+* Source/WebKit/UIProcess/WebProcessProxy.h:
+---
+ Source/WTF/wtf/PlatformHave.h                 |  6 ++
+ Source/WTF/wtf/PlatformUse.h                  |  6 ++
+ .../NetworkConnectionToWebProcess.cpp         |  2 +-
+ .../UIProcess/AuxiliaryProcessProxy.cpp       | 13 ++-
+ .../WebKit/UIProcess/AuxiliaryProcessProxy.h  |  2 +-
+ .../UIProcess/Network/NetworkProcessProxy.cpp |  4 +-
+ .../UIProcess/Network/NetworkProcessProxy.h   |  6 +-
+ .../Network/NetworkProcessProxy.messages.in   |  2 +-
+ Source/WebKit/UIProcess/ProcessAssertion.cpp  | 89 ++++++++++++++++++-
+ Source/WebKit/UIProcess/ProcessAssertion.h    | 21 +++++
+ Source/WebKit/UIProcess/ProcessThrottler.cpp  | 15 +++-
+ Source/WebKit/UIProcess/ProcessThrottler.h    | 10 +--
+ .../WebKit/UIProcess/ProvisionalPageProxy.cpp |  2 +-
+ .../WebKit/UIProcess/ProvisionalPageProxy.h   |  2 +-
+ .../WebKit/UIProcess/SuspendedPageProxy.cpp   |  4 +-
+ Source/WebKit/UIProcess/SuspendedPageProxy.h  |  2 +-
+ Source/WebKit/UIProcess/WebPageProxy.cpp      | 10 ++-
+ Source/WebKit/UIProcess/WebProcessProxy.cpp   |  5 +-
+ Source/WebKit/UIProcess/WebProcessProxy.h     |  2 +
+ 19 files changed, 173 insertions(+), 30 deletions(-)
+
+diff --git a/Source/WTF/wtf/PlatformHave.h b/Source/WTF/wtf/PlatformHave.h
+index 5440fc867f..1deaa71d43 100644
+--- a/Source/WTF/wtf/PlatformHave.h
++++ b/Source/WTF/wtf/PlatformHave.h
+@@ -2086,3 +2086,9 @@
+     || (PLATFORM(VISION) && __VISION_OS_VERSION_MIN_REQUIRED >= 270200))
+ #define HAVE_FIX_FOR_RADAR_190563103 1
+ #endif
++
++/* On WPE for Android, the system freezes the processes of an app only together with the app, so a suspended auxiliary
++   process keeps running while the app runs: suspension only ranks it lower and has it free memory. */
++#if PLATFORM(WPE) && OS(ANDROID)
++#define HAVE_RUNNING_SUSPENDED_PROCESSES 1
++#endif
+diff --git a/Source/WTF/wtf/PlatformUse.h b/Source/WTF/wtf/PlatformUse.h
+index 9f5aece395..faa2a0b996 100644
+--- a/Source/WTF/wtf/PlatformUse.h
++++ b/Source/WTF/wtf/PlatformUse.h
+@@ -336,6 +336,12 @@
+ #define USE_RUNNINGBOARD 1
+ #endif
+ 
++/* The system ranks auxiliary processes by the assertions the UI process takes on them, and may suspend or end the
++   ones that do not need to run. On WPE for Android, the embedder's process manager applies them. */
++#if USE(RUNNINGBOARD) || (PLATFORM(WPE) && OS(ANDROID))
++#define USE_PROCESS_ASSERTIONS 1
++#endif
++
+ #if PLATFORM(MAC)
+ #define USE_NSPRESENTATIONSTATE 1
+ #endif
+diff --git a/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp b/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
+index 6519782680..ace31b2bf5 100644
+--- a/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
++++ b/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
+@@ -180,7 +180,7 @@ NetworkConnectionToWebProcess::NetworkConnectionToWebProcess(WebCore::ProcessIde
+     Ref protectedConnection = m_connection;
+     protectedConnection->setOnlySendMessagesAsDispatchWhenWaitingForSyncReplyWhenProcessingSuchAMessage(true);
+     protectedConnection->open(*this);
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     protectedConnection->setOutgoingMessageQueueIsGrowingLargeCallback([weakThis = WeakPtr { *this }] {
+         ensureOnMainRunLoop([weakThis] {
+             if (weakThis)
+diff --git a/Source/WebKit/UIProcess/AuxiliaryProcessProxy.cpp b/Source/WebKit/UIProcess/AuxiliaryProcessProxy.cpp
+index f30f65a73c..e26714a143 100644
+--- a/Source/WebKit/UIProcess/AuxiliaryProcessProxy.cpp
++++ b/Source/WebKit/UIProcess/AuxiliaryProcessProxy.cpp
+@@ -464,8 +464,11 @@ void AuxiliaryProcessProxy::didFinishLaunching(ProcessLauncher* launcher, IPC::C
+ 
+     drainPendingMessages(*connection);
+ 
++#if USE(PROCESS_ASSERTIONS)
++    if (ProcessThrottler::appliesThrottleStates())
++        protect(throttler())->didConnectToProcess(*this);
++#endif
+ #if USE(RUNNINGBOARD)
+-    protect(throttler())->didConnectToProcess(*this);
+ #if PLATFORM(MAC)
+     updateJetsamBoostAssertion();
+ #endif
+@@ -479,14 +482,18 @@ void AuxiliaryProcessProxy::didFinishLaunching(ProcessLauncher* launcher, IPC::C
+ 
+ void AuxiliaryProcessProxy::outgoingMessageQueueIsGrowingLarge()
+ {
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     wakeUpTemporarilyForIPC();
+ #endif
+ }
+ 
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+ void AuxiliaryProcessProxy::wakeUpTemporarilyForIPC()
+ {
++    // A process can only be suspended when its throttler applies its states.
++    if (!ProcessThrottler::appliesThrottleStates())
++        return;
++
+     // If we keep trying to send IPC to a suspended process, the outgoing message queue may grow large and result
+     // in increased memory usage. To avoid this, we allow the process to stay alive for 1 second after draining
+     // its message queue.
+diff --git a/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h b/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h
+index 08dcca48af..e00a5db948 100644
+--- a/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h
++++ b/Source/WebKit/UIProcess/AuxiliaryProcessProxy.h
+@@ -230,7 +230,7 @@ public:
+ 
+     std::optional<SandboxExtensionHandle> createMobileGestaltSandboxExtensionIfNeeded() const;
+ 
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     void wakeUpTemporarilyForIPC();
+ #endif
+ 
+diff --git a/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp b/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp
+index 6af1f422de..279c5db2bd 100644
+--- a/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp
++++ b/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp
+@@ -288,7 +288,7 @@ NetworkProcessProxy::NetworkProcessProxy()
+ #else
+     , m_customProtocolManagerClient(makeUniqueRef<API::CustomProtocolManagerClient>())
+ #endif
+-#if PLATFORM(MAC)
++#if PLATFORM(MAC) || HAVE(RUNNING_SUSPENDED_PROCESSES)
+     , m_backgroundActivityToPreventSuspension(protect(throttler())->backgroundActivity("Prevent suspension"_s))
+ #endif
+ {
+@@ -2236,7 +2236,7 @@ void NetworkProcessProxy::didPerformEvictionForDomains(PAL::SessionID sessionID,
+         store->client().didEvictDataForDomains(domains);
+ }
+ 
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+ void NetworkProcessProxy::wakeUpWebProcessForIPC(WebCore::ProcessIdentifier processIdentifier)
+ {
+     auto webProcess = WebProcessProxy::processForIdentifier(processIdentifier);
+diff --git a/Source/WebKit/UIProcess/Network/NetworkProcessProxy.h b/Source/WebKit/UIProcess/Network/NetworkProcessProxy.h
+index 688ebb204b..daece1d06d 100644
+--- a/Source/WebKit/UIProcess/Network/NetworkProcessProxy.h
++++ b/Source/WebKit/UIProcess/Network/NetworkProcessProxy.h
+@@ -451,7 +451,7 @@ private:
+     static void platformObserveTrackingPreventionContentRuleListUpdates();
+ #endif
+ 
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     void wakeUpWebProcessForIPC(WebCore::ProcessIdentifier);
+ #endif
+ 
+@@ -532,12 +532,14 @@ private:
+     WeakHashMap<WebProcessProxy, HashSet<WebPageProxyIdentifier>> m_allowedWebPageProxyIdentifiers;
+     WeakHashMap<WebProcessProxy, HashSet<String>> m_allowedFilePathsByProcess;
+     HashMap<DataTaskIdentifier, Ref<API::DataTask>> m_dataTasks;
+-#if PLATFORM(MAC)
++#if PLATFORM(MAC) || HAVE(RUNNING_SUSPENDED_PROCESSES)
+     // On macOS, we prevent suspension of the NetworkProcess to avoid kills when holding
+     // locked database files. The WebSQLiteDatabaseTracker is not functional on macOS
+     // because the network process is not allowed to talk to talk to runningboardd due
+     // to sandboxing. See rdar://112406083 & rdar://112086186 for potential long-term
+     // fixes.
++    // Where suspended processes keep running, the web processes of hidden pages keep using
++    // storage, which the network process stops when it suspends.
+     const Ref<ProcessThrottlerActivity> m_backgroundActivityToPreventSuspension;
+ #endif
+ 
+diff --git a/Source/WebKit/UIProcess/Network/NetworkProcessProxy.messages.in b/Source/WebKit/UIProcess/Network/NetworkProcessProxy.messages.in
+index b84b85dc82..b73c88a739 100644
+--- a/Source/WebKit/UIProcess/Network/NetworkProcessProxy.messages.in
++++ b/Source/WebKit/UIProcess/Network/NetworkProcessProxy.messages.in
+@@ -114,7 +114,7 @@ messages -> NetworkProcessProxy WantsDispatchMessage {
+ 
+     DidPerformEvictionForDomains(PAL::SessionID sessionID, Vector<WebCore::RegistrableDomain> domains)
+ 
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     WakeUpWebProcessForIPC(WebCore::ProcessIdentifier processIdentifier)
+ #endif
+ 
+diff --git a/Source/WebKit/UIProcess/ProcessAssertion.cpp b/Source/WebKit/UIProcess/ProcessAssertion.cpp
+index 910dd274e1..70389fbe98 100644
+--- a/Source/WebKit/UIProcess/ProcessAssertion.cpp
++++ b/Source/WebKit/UIProcess/ProcessAssertion.cpp
+@@ -31,6 +31,11 @@
+ #include <wtf/RunLoop.h>
+ #include <wtf/TZoneMallocInlines.h>
+ 
++#if USE(PROCESS_ASSERTIONS) && OS(ANDROID)
++#include <wpe/wpe-platform.h>
++#include <wtf/MainThread.h>
++#endif
++
+ namespace WebKit {
+ 
+ ASCIILiteral processAssertionTypeDescription(ProcessAssertionType type)
+@@ -84,6 +89,9 @@ Ref<ProcessAssertion> ProcessAssertion::create(ProcessID processID, const String
+ Ref<ProcessAssertion> ProcessAssertion::create(AuxiliaryProcessProxy& process, const String& reason, ProcessAssertionType type, Mode mode, CompletionHandler<void()>&& acquisisionHandler)
+ {
+     auto assertion = adoptRef(*new ProcessAssertion(process.processID(), reason, type, process.environmentIdentifier()));
++#if USE(PROCESS_ASSERTIONS) && OS(ANDROID)
++    assertion->setIsOnAuxiliaryProcess();
++#endif
+     assertion->acquireAssertion(mode, WTF::move(acquisisionHandler));
+     return assertion;
+ }
+@@ -91,6 +99,9 @@ Ref<ProcessAssertion> ProcessAssertion::create(AuxiliaryProcessProxy& process, c
+ Ref<ProcessAndUIAssertion> ProcessAndUIAssertion::create(AuxiliaryProcessProxy& process, const String& reason, ProcessAssertionType type, Mode mode, CompletionHandler<void()>&& acquisisionHandler)
+ {
+     auto assertion = adoptRef(*new ProcessAndUIAssertion(process.processID(), reason, type, process.environmentIdentifier()));
++#if USE(PROCESS_ASSERTIONS) && OS(ANDROID)
++    assertion->setIsOnAuxiliaryProcess();
++#endif
+     assertion->acquireAssertion(mode, WTF::move(acquisisionHandler));
+     return assertion;
+ }
+@@ -134,6 +145,13 @@ Ref<ProcessAndUIAssertion> ProcessAndUIAssertion::create(ProcessID processID, co
+ 
+ #endif
+ 
++#if USE(RUNNINGBOARD)
++bool ProcessAssertion::isSupported()
++{
++    return true;
++}
++#endif
++
+ #if !PLATFORM(COCOA) || !USE(RUNNINGBOARD)
+ 
+ ProcessAssertion::ProcessAssertion(ProcessID pid, const String& reason, ProcessAssertionType assertionType, const String&)
+@@ -143,21 +161,86 @@ ProcessAssertion::ProcessAssertion(ProcessID pid, const String& reason, ProcessA
+ {
+ }
+ 
++#if USE(PROCESS_ASSERTIONS) && OS(ANDROID)
++
++// On Android, the embedder's WPE process manager turns each assertion into a priority hold, which it applies to the
++// service backing the process. A near suspended assertion takes no hold: the process does not need to run.
++static std::optional<WPEProcessPriority> processPriority(ProcessAssertionType type)
++{
++    switch (type) {
++    case ProcessAssertionType::NearSuspended:
++        return std::nullopt;
++    case ProcessAssertionType::Background:
++    case ProcessAssertionType::BackgroundIdleJetsam:
++    case ProcessAssertionType::UnboundedNetworking:
++    case ProcessAssertionType::FinishTaskCanSleep:
++    case ProcessAssertionType::FinishTaskInterruptable:
++    case ProcessAssertionType::BoostedJetsam:
++        return WPE_PROCESS_PRIORITY_BACKGROUND;
++    case ProcessAssertionType::Foreground:
++    case ProcessAssertionType::MediaPlayback:
++        return WPE_PROCESS_PRIORITY_FOREGROUND;
++    }
++    RELEASE_ASSERT_NOT_REACHED();
++}
++
++bool ProcessAssertion::isSupported()
++{
++    auto* processManager = wpe_process_manager_get_default();
++    return processManager && wpe_process_manager_ranks_processes(processManager);
++}
++
++ProcessAssertion::~ProcessAssertion()
++{
++    if (!m_priorityID)
++        return;
++
++    // The hold is released by the manager that took it, even if another one is the default now.
++    ensureOnMainRunLoop([processManager = WTF::move(m_processManager), priorityID = m_priorityID] {
++        wpe_process_manager_release_priority(processManager.get(), priorityID);
++    });
++}
++
++void ProcessAssertion::acquireSync()
++{
++    ASSERT(isMainRunLoop());
++    ASSERT(!m_priorityID);
++
++    auto priority = processPriority(m_assertionType);
++    if (!priority || !m_isOnAuxiliaryProcess || m_pid <= 0)
++        return;
++
++    auto* processManager = wpe_process_manager_get_default();
++    if (!processManager)
++        return;
++
++    m_priorityID = wpe_process_manager_acquire_priority(processManager, m_pid, *priority);
++    if (m_priorityID)
++        m_processManager = processManager;
++}
++
++#else
++
+ ProcessAssertion::~ProcessAssertion() = default;
+ 
+-double ProcessAssertion::remainingRunTimeInSeconds(ProcessID)
++void ProcessAssertion::acquireSync()
+ {
+-    return 0;
+ }
+ 
++#endif
++
+ void ProcessAssertion::acquireAsync(CompletionHandler<void()>&& completionHandler)
+ {
++    // Taking the assertion does not block, so it is taken right away. A previous assertion of the throttler, kept alive
++    // by the completion handler, is released only after this one is in place.
++    acquireSync();
+     if (completionHandler)
+         RunLoop::mainSingleton().dispatch(WTF::move(completionHandler));
+ }
+ 
+-void ProcessAssertion::acquireSync()
++double ProcessAssertion::remainingRunTimeInSeconds(ProcessID)
+ {
++    return 0;
+ }
+ 
+ ProcessAndUIAssertion::ProcessAndUIAssertion(ProcessID pid, const String& reason, ProcessAssertionType assertionType, const String& environmentIdentifier)
+diff --git a/Source/WebKit/UIProcess/ProcessAssertion.h b/Source/WebKit/UIProcess/ProcessAssertion.h
+index f8e2a2349b..0bd947b903 100644
+--- a/Source/WebKit/UIProcess/ProcessAssertion.h
++++ b/Source/WebKit/UIProcess/ProcessAssertion.h
+@@ -51,6 +51,12 @@ OBJC_CLASS RBSAssertion;
+ OBJC_CLASS WKRBSAssertionDelegate;
+ #endif // USE(RUNNINGBOARD)
+ 
++#if USE(PROCESS_ASSERTIONS) && OS(ANDROID)
++#include <wtf/glib/GRefPtr.h>
++
++typedef struct _WPEProcessManager WPEProcessManager;
++#endif
++
+ #if USE(EXTENSIONKIT)
+ OBJC_CLASS BEWebContentProcess;
+ OBJC_CLASS BENetworkingProcess;
+@@ -84,6 +90,10 @@ public:
+     static Ref<ProcessAssertion> create(AuxiliaryProcessProxy&, const String& reason, ProcessAssertionType, Mode = Mode::Async, CompletionHandler<void()>&& acquisisionHandler = nullptr);
+ 
+     static double remainingRunTimeInSeconds(ProcessID);
++#if USE(PROCESS_ASSERTIONS)
++    // Whether the system applies assertions. On WPE for Android, only when the process manager ranks processes.
++    static bool isSupported();
++#endif
+     virtual ~ProcessAssertion();
+ 
+     void setPrepareForInvalidationHandler(Function<void()>&& handler) { m_prepareForInvalidationHandler = WTF::move(handler); }
+@@ -112,6 +122,10 @@ protected:
+     void acquireAsync(CompletionHandler<void()>&&);
+     void acquireSync();
+ 
++#if USE(PROCESS_ASSERTIONS) && OS(ANDROID)
++    void setIsOnAuxiliaryProcess() { m_isOnAuxiliaryProcess = true; }
++#endif
++
+ #if USE(RUNNINGBOARD)
+     void processAssertionWillBeInvalidated();
+     virtual void processAssertionWasInvalidated();
+@@ -125,6 +139,13 @@ private:
+     const RetainPtr<RBSAssertion> m_rbsAssertion;
+     RetainPtr<WKRBSAssertionDelegate> m_delegate;
+     bool m_wasInvalidated { false };
++#endif
++#if USE(PROCESS_ASSERTIONS) && OS(ANDROID)
++    // Only assertions on auxiliary processes hold a priority: the process manager knows only the processes it launched.
++    bool m_isOnAuxiliaryProcess { false };
++    // The priority this assertion holds, or 0, and the WPE process manager that holds it.
++    uint64_t m_priorityID { 0 };
++    GRefPtr<WPEProcessManager> m_processManager;
+ #endif
+     Function<void()> m_prepareForInvalidationHandler;
+     Function<void()> m_invalidationHandler;
+diff --git a/Source/WebKit/UIProcess/ProcessThrottler.cpp b/Source/WebKit/UIProcess/ProcessThrottler.cpp
+index 99d1bed791..1158193c32 100644
+--- a/Source/WebKit/UIProcess/ProcessThrottler.cpp
++++ b/Source/WebKit/UIProcess/ProcessThrottler.cpp
+@@ -144,10 +144,20 @@ ProcessThrottler::ProcessThrottler(AuxiliaryProcessProxy& process, bool shouldTa
+     , m_prepareToSuspendTimeoutTimer(RunLoop::mainSingleton(), "ProcessThrottler::PrepareToSuspendTimeoutTimer"_s, this, &ProcessThrottler::prepareToSuspendTimeoutTimerFired)
+     , m_dropNearSuspendedAssertionTimer(RunLoop::mainSingleton(), "ProcessThrottler::DropNearSuspendedAssertionTimer"_s, this, &ProcessThrottler::dropNearSuspendedAssertionTimerFired)
+     , m_prepareToDropLastAssertionTimeoutTimer(RunLoop::mainSingleton(), "ProcessThrottler::PrepareToDropLastAssertionTimeoutTimer"_s, this, &ProcessThrottler::prepareToDropLastAssertionTimeoutTimerFired)
++    , m_state(appliesThrottleStates() ? ProcessThrottleState::Suspended : ProcessThrottleState::Foreground)
+     , m_shouldTakeUIBackgroundAssertion(shouldTakeUIBackgroundAssertion)
+ {
+ }
+ 
++bool ProcessThrottler::appliesThrottleStates()
++{
++#if USE(PROCESS_ASSERTIONS)
++    return ProcessAssertion::isSupported();
++#else
++    return false;
++#endif
++}
++
+ ProcessThrottler::~ProcessThrottler()
+ {
+     invalidateAllActivities();
+@@ -294,14 +304,15 @@ ProcessAssertionType ProcessThrottler::assertionTypeForState(ProcessThrottleStat
+     RELEASE_ASSERT_NOT_REACHED();
+ }
+ 
+-#if !USE(RUNNINGBOARD)
++#if !USE(PROCESS_ASSERTIONS)
+ NO_RETURN_DUE_TO_ASSERT
+ #endif
+ void ProcessThrottler::setThrottleState(ProcessThrottleState newState)
+ {
+-#if !USE(RUNNINGBOARD)
++#if !USE(PROCESS_ASSERTIONS)
+     ASSERT_NOT_REACHED();
+ #endif
++    ASSERT(appliesThrottleStates());
+ 
+     assertIfCalledFromBackgroundThread();
+ 
+diff --git a/Source/WebKit/UIProcess/ProcessThrottler.h b/Source/WebKit/UIProcess/ProcessThrottler.h
+index 384004471b..cb069bb6d5 100644
+--- a/Source/WebKit/UIProcess/ProcessThrottler.h
++++ b/Source/WebKit/UIProcess/ProcessThrottler.h
+@@ -135,6 +135,10 @@ public:
+ 
+     using TimedActivity = ProcessThrottlerTimedActivity;
+ 
++    // Whether the system applies the state of each process. Otherwise processes always run, and the throttler is
++    // never connected to them.
++    static bool appliesThrottleStates();
++
+     void didConnectToProcess(AuxiliaryProcessProxy&);
+     void didDisconnectFromProcess();
+     bool shouldBeRunnable() const { return !m_foregroundActivities.computeIsEmpty() || !m_backgroundActivities.computeIsEmpty(); }
+@@ -190,11 +194,7 @@ private:
+     WeakHashSet<Activity> m_foregroundActivities;
+     WeakHashSet<Activity> m_backgroundActivities;
+     std::optional<uint64_t> m_pendingRequestToSuspendID;
+-#if USE(RUNNINGBOARD)
+-    ProcessThrottleState m_state { ProcessThrottleState::Suspended };
+-#else
+-    ProcessThrottleState m_state { ProcessThrottleState::Foreground };
+-#endif
++    ProcessThrottleState m_state;
+     bool m_shouldDropNearSuspendedAssertionAfterDelay { false };
+     const bool m_shouldTakeUIBackgroundAssertion { false };
+     bool m_shouldTakeNearSuspendedAssertion { true };
+diff --git a/Source/WebKit/UIProcess/ProvisionalPageProxy.cpp b/Source/WebKit/UIProcess/ProvisionalPageProxy.cpp
+index ff1cbbf3fc..a3e2a121e3 100644
+--- a/Source/WebKit/UIProcess/ProvisionalPageProxy.cpp
++++ b/Source/WebKit/UIProcess/ProvisionalPageProxy.cpp
+@@ -97,7 +97,7 @@ ProvisionalPageProxy::ProvisionalPageProxy(WebPageProxy& page, Ref<FrameProcess>
+     , m_isProcessSwappingOnNavigationResponse(isProcessSwappingOnNavigationResponse)
+     , m_shouldReuseMainFrame(page.shouldReuseMainFrameOnProcessSwap(m_browsingContextGroup))
+     , m_provisionalLoadURL(isProcessSwappingOnNavigationResponse ? request.url() : URL())
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     , m_provisionalLoadActivity(protect(m_frameProcess->process().throttler())->foregroundActivity("Provisional Load"_s))
+ #endif
+ #if HAVE(VISIBILITY_PROPAGATION_VIEW)
+diff --git a/Source/WebKit/UIProcess/ProvisionalPageProxy.h b/Source/WebKit/UIProcess/ProvisionalPageProxy.h
+index abea5fab42..633d2db582 100644
+--- a/Source/WebKit/UIProcess/ProvisionalPageProxy.h
++++ b/Source/WebKit/UIProcess/ProvisionalPageProxy.h
+@@ -261,7 +261,7 @@ private:
+     String m_accessibilityPlugID;
+     CompletionHandler<void(String&&)> m_accessibilityBindCompletionHandler;
+ #endif
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     const Ref<ProcessThrottler::ForegroundActivity> m_provisionalLoadActivity;
+ #endif
+ #if HAVE(VISIBILITY_PROPAGATION_VIEW)
+diff --git a/Source/WebKit/UIProcess/SuspendedPageProxy.cpp b/Source/WebKit/UIProcess/SuspendedPageProxy.cpp
+index 975f452c8e..9295b0ca22 100644
+--- a/Source/WebKit/UIProcess/SuspendedPageProxy.cpp
++++ b/Source/WebKit/UIProcess/SuspendedPageProxy.cpp
+@@ -147,7 +147,7 @@ SuspendedPageProxy::SuspendedPageProxy(WebPageProxy& page, Ref<WebProcessProxy>&
+     , m_mainFrame(WTF::move(mainFrame))
+     , m_browsingContextGroup(WTF::move(browsingContextGroup))
+     , m_suspensionTimeoutTimer(RunLoop::mainSingleton(), "SuspendedPageProxy::SuspensionTimeoutTimer"_s, this, &SuspendedPageProxy::suspensionTimedOut)
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     , m_suspensionActivity(protect(m_process->throttler())->backgroundActivity("Page suspension for back/forward cache"_s))
+ #endif
+ #if HAVE(VISIBILITY_PROPAGATION_VIEW)
+@@ -341,7 +341,7 @@ void SuspendedPageProxy::didProcessRequestToSuspend(SuspensionState newSuspensio
+     if (m_suspensionState != SuspensionState::Suspending)
+         return;
+ 
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     m_suspensionActivity = nullptr;
+ #endif
+ 
+diff --git a/Source/WebKit/UIProcess/SuspendedPageProxy.h b/Source/WebKit/UIProcess/SuspendedPageProxy.h
+index 0a0b60c1d5..283862efda 100644
+--- a/Source/WebKit/UIProcess/SuspendedPageProxy.h
++++ b/Source/WebKit/UIProcess/SuspendedPageProxy.h
+@@ -142,7 +142,7 @@ private:
+     RunLoop::Timer m_suspensionTimeoutTimer;
+     bool m_mainFrameSuspended { false };
+     bool m_allSubframesSuspended { false };
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     RefPtr<ProcessThrottler::BackgroundActivity> m_suspensionActivity;
+ #endif
+ #if HAVE(VISIBILITY_PROPAGATION_VIEW)
+diff --git a/Source/WebKit/UIProcess/WebPageProxy.cpp b/Source/WebKit/UIProcess/WebPageProxy.cpp
+index c0c6dfe04e..b37209b950 100644
+--- a/Source/WebKit/UIProcess/WebPageProxy.cpp
++++ b/Source/WebKit/UIProcess/WebPageProxy.cpp
+@@ -590,7 +590,7 @@ static bool shouldUseEnhancedSecurityHeuristics(const Ref<WebPreferences>& prefe
+         && !preferences->enhancedSecurityForceDisabled();
+ }
+ 
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+ static constexpr Seconds audibleActivityClearDelay = 10_s;
+ #endif
+ 
+@@ -4145,7 +4145,7 @@ void WebPageProxy::updateThrottleState()
+     else if (!internals().pageIsUserObservableCount)
+         internals().pageIsUserObservableCount = processPool->userObservablePageCount();
+ 
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     if (isViewVisible()) {
+         if (!hasValidVisibleActivity()) {
+             WEBPAGEPROXY_RELEASE_LOG(ProcessSuspension, "updateThrottleState: UIProcess is taking a foreground assertion because the view is visible");
+@@ -4225,10 +4225,10 @@ void WebPageProxy::waitForDidUpdateActivityState(ActivityStateChangeID activityS
+     if (m_waitingForDidUpdateActivityState)
+         return;
+ 
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     // Hail Mary check. Should not be possible (dispatchActivityStateChange should force async if not visible,
+     // and if visible we should be holding an assertion) - but we should never block on a suspended process.
+-    if (!hasValidVisibleActivity()) {
++    if (ProcessThrottler::appliesThrottleStates() && !hasValidVisibleActivity()) {
+         ASSERT_NOT_REACHED();
+         return;
+     }
+@@ -8988,6 +8988,8 @@ void WebPageProxy::runJavaScriptInFrameInScriptWorld(RunJavaScriptParameters&& p
+ #if USE(RUNNINGBOARD)
+     if (RefPtr pageClient = this->pageClient(); pageClient && pageClient->canTakeForegroundAssertions())
+         activity = protect(processContainingFrame(frameID)->throttler())->foregroundActivity("WebPageProxy::runJavaScriptInFrameInScriptWorld"_s);
++#elif USE(PROCESS_ASSERTIONS)
++    activity = protect(processContainingFrame(frameID)->throttler())->foregroundActivity("WebPageProxy::runJavaScriptInFrameInScriptWorld"_s);
+ #endif
+ 
+     sendWithAsyncReplyToProcessContainingFrame(frameID, Messages::WebPage::RunJavaScriptInFrameInScriptWorld(parameters, frameID, world.worldDataForProcess(processContainingFrame(frameID)), wantsResult), [activity = WTF::move(activity), loggingIdentifier, callbackFunction = WTF::move(callbackFunction)] (auto&& result) mutable {
+diff --git a/Source/WebKit/UIProcess/WebProcessProxy.cpp b/Source/WebKit/UIProcess/WebProcessProxy.cpp
+index 379c0b4c95..18b08ec3e5 100644
+--- a/Source/WebKit/UIProcess/WebProcessProxy.cpp
++++ b/Source/WebKit/UIProcess/WebProcessProxy.cpp
+@@ -1126,7 +1126,7 @@ Ref<WebPageProxy> WebProcessProxy::createWebPage(PageClient& pageClient, Ref<API
+ 
+ bool WebProcessProxy::shouldTakeNearSuspendedAssertion() const
+ {
+-#if USE(RUNNINGBOARD)
++#if USE(PROCESS_ASSERTIONS)
+     if (m_pageMap.isEmpty()) {
+         // The setting come from pages but this process has no page, we thus use the default
+         // setting value.
+@@ -2593,6 +2593,8 @@ void WebProcessProxy::didChangeThrottleState(ProcessThrottleState type)
+         return;
+     WEBPROCESSPROXY_RELEASE_LOG(ProcessSuspension, "didChangeThrottleState: type=%u", (unsigned)type);
+ 
++    // A suspended process that keeps running makes progress on its IndexedDB transactions by itself.
++#if !HAVE(RUNNING_SUSPENDED_PROCESSES)
+     bool isNowSuspended = type == ProcessThrottleState::Suspended;
+     if (m_lastNotifiedNetworkProcessSuspended != isNowSuspended) {
+         m_lastNotifiedNetworkProcessSuspended = isNowSuspended;
+@@ -2604,6 +2606,7 @@ void WebProcessProxy::didChangeThrottleState(ProcessThrottleState type)
+                 networkProcess->send(Messages::NetworkProcess::SetWebProcessSuspended(coreProcessIdentifier(), isNowSuspended), 0);
+         }
+     }
++#endif
+ 
+     if (isStandaloneServiceWorkerProcess()) {
+         WEBPROCESSPROXY_RELEASE_LOG(ProcessSuspension, "didChangeThrottleState: Release all assertions for network process because this is a service worker process without page");
+diff --git a/Source/WebKit/UIProcess/WebProcessProxy.h b/Source/WebKit/UIProcess/WebProcessProxy.h
+index e08e939b48..e6ca562cee 100644
+--- a/Source/WebKit/UIProcess/WebProcessProxy.h
++++ b/Source/WebKit/UIProcess/WebProcessProxy.h
+@@ -913,7 +913,9 @@ private:
+     ForegroundWebProcessToken m_foregroundToken;
+     BackgroundWebProcessToken m_backgroundToken;
+     bool m_areThrottleStateChangesEnabled { true };
++#if !HAVE(RUNNING_SUSPENDED_PROCESSES)
+     bool m_lastNotifiedNetworkProcessSuspended { false };
++#endif
+ 
+ #if HAVE(DISPLAY_LINK)
+     const UniqueRef<DisplayLinkProcessProxyClient> m_displayLinkClient;
+-- 
+2.53.0
+

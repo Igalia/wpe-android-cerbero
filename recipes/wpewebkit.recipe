@@ -83,6 +83,9 @@ class Recipe(recipe.Recipe):
     patches = [
         'wpewebkit/0001-WPE-media-video-seek-pause.html-is-slightly-flaky.patch',
         'wpewebkit/0002-GLib-Destroying-an-icon-database-whose-database-is-c.patch',
+        'wpewebkit/0005-WPE-Android-Let-the-process-manager-hold-processes-a.patch',
+        'wpewebkit/0006-WPE-Android-Apply-the-throttle-state-of-auxiliary-pr.patch',
+        'wpewebkit/0007-WPE-Android-Let-hidden-pages-that-change-their-title.patch',
     ]
 
     files_libs = [

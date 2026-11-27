@@ -1,0 +1,48 @@
+From a2c38b1ed2c118251a1874912befb86abb2e91b3 Mon Sep 17 00:00:00 2001
+From: "Juan J. Sanchez" <jjsanchez@igalia.com>
+Date: Fri, 20 Nov 2026 19:07:38 +0100
+Subject: [PATCH] [WPE][Android] Let hidden pages that change their title go
+ idle Need the bug URL (OOPS!).
+
+Reviewed by NOBODY (OOPS!).
+
+Before this change, on every platform but iPhone, a page that changed its title
+without user action got a background activity, so that its process kept running
+while the page was hidden. Where suspended processes keep running (WPE on
+Android), the page went on updating its title without it, and the activity only
+ranked its process above hidden pages and the processes of other apps, which
+Android then ended first when memory ran low.
+
+This change no longer takes the activity where suspended processes keep
+running, as it is not taken on iPhone either.
+
+No new tests (OOPS!).
+
+* Source/WebKit/UIProcess/WebPageProxy.cpp:
+(WebKit::WebPageProxy::didReceiveTitleForFrame):
+---
+ Source/WebKit/UIProcess/WebPageProxy.cpp | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebKit/UIProcess/WebPageProxy.cpp b/Source/WebKit/UIProcess/WebPageProxy.cpp
+index b37209b950..7e2490b26d 100644
+--- a/Source/WebKit/UIProcess/WebPageProxy.cpp
++++ b/Source/WebKit/UIProcess/WebPageProxy.cpp
+@@ -11751,7 +11751,13 @@ void WebPageProxy::didReceiveTitleForFrame(IPC::Connection& connection, FrameIde
+ #if PLATFORM(IOS_FAMILY)
+         deviceClassIsSmallScreen = PAL::deviceClassIsSmallScreen();
+ #endif
+-        if (!deviceClassIsSmallScreen) {
++        // Where suspended processes keep running, a hidden page goes on updating its title anyway, and the activity
++        // would only make the system end other processes first.
++        bool suspendedProcessesKeepRunning = false;
++#if HAVE(RUNNING_SUSPENDED_PROCESSES)
++        suspendedProcessesKeepRunning = true;
++#endif
++        if (!deviceClassIsSmallScreen && !suspendedProcessesKeepRunning) {
+             bool isTitleChangeLikelyDueToUserAction = false;
+ 
+ #if !PLATFORM(IOS_FAMILY)
+-- 
+2.53.0
+
